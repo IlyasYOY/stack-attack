@@ -11,6 +11,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Download the pinned official Godot binary
         shell: bash
         run: |
@@ -23,3 +25,68 @@ jobs:
         env:
           GODOT_BIN: ${{ runner.temp }}/godot/Godot_v4.6.3-stable_linux.x86_64
         run: bash scripts/check.sh
+      - name: Export private technical builds
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GODOT_BIN: ${{ runner.temp }}/godot/Godot_v4.6.3-stable_linux.x86_64
+          XDG_DATA_HOME: ${{ runner.temp }}/stack-attack-data
+          XDG_CONFIG_HOME: ${{ runner.temp }}/stack-attack-config
+          XDG_CACHE_HOME: ${{ runner.temp }}/stack-attack-cache
+        run: |
+          set -euo pipefail
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          java -version
+          test -f "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -x "$ANDROID_HOME/build-tools/36.1.0/apksigner"
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/templates.tpz" https://github.com/godotengine/godot-builds/releases/download/4.6.3-stable/Godot_v4.6.3-stable_export_templates.tpz
+          echo "da606b61c10157844f8300172df374472665f95015495cb1a7cd132c40ede404faa96cc1016a4b9662db9909ddea69632c4948b2cd11163438dad4808881fb68  $RUNNER_TEMP/templates.tpz" | sha512sum --check
+          mkdir -p "$XDG_DATA_HOME/godot/export_templates/4.6.3.stable" "$XDG_CONFIG_HOME/godot"
+          unzip -j -q "$RUNNER_TEMP/templates.tpz" templates/android_debug.apk templates/android_release.apk templates/web_nothreads_debug.zip templates/web_nothreads_release.zip templates/icudt_godot.dat templates/version.txt -d "$XDG_DATA_HOME/godot/export_templates/4.6.3.stable"
+          python3 scripts/create_debug_key.py "$RUNNER_TEMP/stack-attack-debug-signing"
+          source "$RUNNER_TEMP/stack-attack-debug-signing/debug-signing.env"
+          echo "::add-mask::$GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          settings = Path(os.environ['XDG_CONFIG_HOME']) / 'godot/editor_settings-4.6.tres'
+          values = {
+              'export/android/java_sdk_path': os.environ['JAVA_HOME'],
+              'export/android/android_sdk_path': os.environ['ANDROID_HOME'],
+              'export/android/debug_keystore': os.environ['GODOT_ANDROID_KEYSTORE_DEBUG_PATH'],
+          }
+          settings.write_text('[gd_resource type="EditorSettings" format=3]\n\n[resource]\n' +
+              ''.join(f'{key} = {json.dumps(value)}\n' for key, value in values.items()) +
+              'export/android/shutdown_adb_on_exit = false\n')
+          PY
+          bash scripts/export.sh all
+          mkdir -p build/delivery
+          cp build/android/stack-attack-tech-debug.apk build/delivery/
+          cp build/logs/android-signature.log build/logs/android-metadata.log build/delivery/
+          python3 - <<'PY'
+          from pathlib import Path
+          import zipfile
+          with zipfile.ZipFile('build/delivery/stack-attack-tech-web.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              for path in sorted(Path('build/web').iterdir()):
+                  if path.is_file():
+                      archive.write(path, 'web/' + path.name)
+              archive.writestr('README.txt', 'Extract, then: python3 -m http.server 8765 --directory web\nOpen http://127.0.0.1:8765 (not file://). Requires WebGL 2.\n')
+          PY
+          git rev-parse HEAD > build/delivery/source-commit.txt
+          (cd build/delivery && sha256sum stack-attack-tech-debug.apk stack-attack-tech-web.zip > SHA256SUMS.txt)
+          cat > build/delivery/TEST-ONLY.txt <<'TXT'
+          Technical test only; no gameplay or final art. Phone execution has not been verified.
+          This CI run uses a NEW ephemeral debug key. A later run will use a different key.
+          Uninstall an older test before installing a build signed by another key.
+          The signing key and password are NOT included. No release has been published.
+          TXT
+      - name: Upload private technical builds
+        if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: stack-attack-technical-test-${{ github.event.pull_request.head.sha || github.sha }}
+          path: build/delivery/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
