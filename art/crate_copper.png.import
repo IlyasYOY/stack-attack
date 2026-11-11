@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://h8l8golnpiea"
-path="res://.godot/imported/technical_icon.svg-6ba0912bc20745a5c596220690431a2d.ctex"
+uid="uid://dahtjxu1baqbu"
+path="res://.godot/imported/crate_copper.png-32320f0a3d31c97077ab7bb9006aa0f5.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/technical_icon.svg"
-dest_files=["res://.godot/imported/technical_icon.svg-6ba0912bc20745a5c596220690431a2d.ctex"]
+source_file="res://art/crate_copper.png"
+dest_files=["res://.godot/imported/crate_copper.png-32320f0a3d31c97077ab7bb9006aa0f5.ctex"]
 
 [params]
 
@@ -38,6 +38,3 @@ process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
 detect_3d/compress_to=1
-svg/scale=1.0
-editor/scale_with_editor_scale=false
-editor/convert_colors_with_editor_theme=false

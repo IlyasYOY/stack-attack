@@ -21,11 +21,11 @@ if [[ "$target" == all || "$target" == web ]]; then
 fi
 if [[ "$target" == all || "$target" == android ]]; then
   mkdir -p build/android
-  run_godot export-android --headless --path "$PROJECT_ROOT" --export-debug Android "$PROJECT_ROOT/build/android/stack-attack-tech-debug.apk"
+  run_godot export-android --headless --path "$PROJECT_ROOT" --export-debug Android "$PROJECT_ROOT/build/android/stack-attack-prototype-debug.apk"
   tools="$ANDROID_HOME/build-tools/36.1.0"
-  "$tools/apksigner" verify --verbose --print-certs build/android/stack-attack-tech-debug.apk > build/logs/android-signature.log
-  "$tools/aapt" dump badging build/android/stack-attack-tech-debug.apk > build/logs/android-metadata.log
-  "$tools/zipalign" -c -P 16 4 build/android/stack-attack-tech-debug.apk
+  "$tools/apksigner" verify --verbose --print-certs build/android/stack-attack-prototype-debug.apk > build/logs/android-signature.log
+  "$tools/aapt" dump badging build/android/stack-attack-prototype-debug.apk > build/logs/android-metadata.log
+  "$tools/zipalign" -c -P 16 4 build/android/stack-attack-prototype-debug.apk
   echo 'Android debug export, signature and 16 KiB alignment: PASS'
   python3 scripts/record_build.py android
 fi

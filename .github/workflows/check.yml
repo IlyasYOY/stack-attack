@@ -62,21 +62,21 @@ jobs:
           PY
           bash scripts/export.sh all
           mkdir -p build/delivery
-          cp build/android/stack-attack-tech-debug.apk build/delivery/
+          cp build/android/stack-attack-prototype-debug.apk build/delivery/
           cp build/logs/android-signature.log build/logs/android-metadata.log build/delivery/
           python3 - <<'PY'
           from pathlib import Path
           import zipfile
-          with zipfile.ZipFile('build/delivery/stack-attack-tech-web.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+          with zipfile.ZipFile('build/delivery/stack-attack-prototype-web.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
               for path in sorted(Path('build/web').iterdir()):
                   if path.is_file():
                       archive.write(path, 'web/' + path.name)
               archive.writestr('README.txt', 'Extract, then: python3 -m http.server 8765 --directory web\nOpen http://127.0.0.1:8765 (not file://). Requires WebGL 2.\n')
           PY
           git rev-parse HEAD > build/delivery/source-commit.txt
-          (cd build/delivery && sha256sum stack-attack-tech-debug.apk stack-attack-tech-web.zip > SHA256SUMS.txt)
+          (cd build/delivery && sha256sum stack-attack-prototype-debug.apk stack-attack-prototype-web.zip > SHA256SUMS.txt)
           cat > build/delivery/TEST-ONLY.txt <<'TXT'
-          Technical test only; no gameplay or final art. Phone execution has not been verified.
+          First playable prototype. Phone execution and artwork acceptance are pending.
           This CI run uses a NEW ephemeral debug key. A later run will use a different key.
           Uninstall an older test before installing a build signed by another key.
           The signing key and password are NOT included. No release has been published.
@@ -85,7 +85,7 @@ jobs:
         if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: stack-attack-technical-test-${{ github.event.pull_request.head.sha || github.sha }}
+          name: stack-attack-prototype-${{ github.event.pull_request.head.sha || github.sha }}
           path: build/delivery/
           if-no-files-found: error
           retention-days: 14
