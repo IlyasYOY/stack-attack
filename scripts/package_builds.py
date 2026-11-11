@@ -55,7 +55,7 @@ with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
 manifest = {
     "commit": commit,
     "godot": (root / ".godot-version").read_text().strip(),
-    "android": {"package": "org.ilyasyoy.stackattack.techtest", "version_code": 2,
+    "android": {"package": "org.ilyasyoy.stackattack.techtest", "version_code": 3,
                 "min_sdk": 24, "target_sdk": 36, "abi": "arm64-v8a", "signing": "test debug"},
     "phone_run": "prototype not tested; earlier technical APK accepted by owner",
     "web_check": web_check,

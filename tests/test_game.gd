@@ -35,6 +35,7 @@ func advance(game: StackSimulation, duration: float, axis: float = 0.0) -> void:
 func run() -> void:
 	movement_and_jump()
 	pushing_and_danger()
+	diagonal_crate_collisions()
 	clearing()
 	loss_and_drops()
 	storage()
@@ -107,6 +108,67 @@ func pushing_and_danger() -> void:
 	blocked.add_crate(5, 10)
 	advance(blocked, .4, 1)
 	check(absf(float(lower.x) - 4) < .001, "One push must not move an entire horizontal chain")
+
+
+func crates_separate(game: StackSimulation) -> bool:
+	for a in game.crates:
+		for b in game.crates:
+			if int(a.id) >= int(b.id):
+				continue
+			var width := minf(float(a.x) + 1, float(b.x) + 1) - maxf(float(a.x), float(b.x))
+			var height := minf(float(a.y) + 1, float(b.y) + 1) - maxf(float(a.y), float(b.y))
+			if width > 0.000001 and height > 0.000001:
+				return false
+	return true
+
+
+func diagonal_crate_collisions() -> void:
+	for direction in [1, -1]:
+		# The review's end-to-end repro, plus a small initial vertical gap.
+		for start_y in [8.0, 7.97]:
+			var game := empty()
+			var ax := 4.0 if direction == 1 else 5.0
+			var bx := 5.0 if direction == 1 else 4.0
+			var support_x := 3.0 if direction == 1 else 6.0
+			var moving := game.add_crate(ax, start_y, 6)
+			game.add_crate(bx, 9)
+			game.add_crate(bx, 10)
+			game.add_crate(support_x, 9)
+			game.add_crate(support_x, 10)
+			game.player = Vector2(ax - game.tuning.player_width if direction == 1 else ax + 1,
+				9 - game.tuning.player_height)
+			check(crates_separate(game), "Diagonal fixture must start without penetration")
+			for tick in range(120):
+				game.advance(StackSimulation.STEP, direction)
+				var separate := crates_separate(game)
+				check(separate, "Diagonal push dir=%d y=%.2f penetrated at tick %d" % [direction, start_y, tick + 1])
+				if not separate:
+					break
+				if tick == 0:
+					check(absf(float(moving.y) - 8) < .000001 and absf(float(moving.x) - ax) > .01,
+						"A falling push must land on the neighbour's top instead of entering its corner")
+		# A command is already active, but gravity has moved its body below the
+		# neighbour's top. Vertical support alone cannot resolve this contact.
+		for speed in [3.1, 240.0]:
+			var side := empty()
+			side.tuning.push_speed = speed
+			var ax := 4.0 if direction == 1 else 5.0
+			var bx := 5.0 if direction == 1 else 4.0
+			var moving := side.add_crate(ax, 8.15, 6)
+			moving.target_x = ax + direction
+			side.add_crate(bx, 9)
+			side.add_crate(bx, 10)
+			check(crates_separate(side), "Side-contact fixture must start without penetration")
+			for tick in range(120):
+				side.advance(StackSimulation.STEP, 0)
+				var separate := crates_separate(side)
+				check(separate, "Active push dir=%d speed=%.1f penetrated at tick %d" % [direction, speed, tick + 1])
+				if not separate:
+					break
+			check(absf(float(moving.x) - ax) < .000001 and absf(float(moving.target_x) - ax) < .000001,
+				"A blocked push must stop at the side, including a large horizontal step")
+			check(absf(float(moving.y) - 10) < .000001,
+				"Side contact must preserve ordinary falling alongside the obstacle")
 
 
 func clearing() -> void:

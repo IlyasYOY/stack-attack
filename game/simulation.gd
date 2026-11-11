@@ -187,11 +187,32 @@ func _try_push(crate: Dictionary, direction: int) -> bool:
 	return true
 
 
+func _move_crate_horizontally(crate: Dictionary) -> void:
+	# Revalidate the entire horizontal step at the CURRENT height. A push can
+	# start above a neighbour, then descend into its side before it finishes.
+	var old_x := float(crate.x)
+	var desired := move_toward(old_x, float(crate.target_x), tuning.push_speed * STEP)
+	var resolved := clampf(desired, 0.0, tuning.columns - 1.0)
+	for other in crates:
+		if other.id == crate.id or not _overlap(float(crate.y), 1.0, float(other.y), 1.0, 0.0):
+			continue
+		if desired > old_x and old_x + 1.0 <= float(other.x) + EPS:
+			if resolved + 1.0 > float(other.x):
+				resolved = minf(resolved, float(other.x) - 1.0)
+		elif desired < old_x and old_x >= float(other.x) + 1.0 - EPS:
+			if resolved < float(other.x) + 1.0:
+				resolved = maxf(resolved, float(other.x) + 1.0)
+	crate.x = resolved
+	if resolved != desired:
+		# Stop at contact instead of keeping a stale command inside the wall.
+		crate.target_x = resolved
+
+
 func _move_crates() -> void:
 	crates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return float(a.y) > float(b.y) if not is_equal_approx(float(a.y), float(b.y)) else int(a.id) < int(b.id))
 	for crate in crates:
-		crate.x = move_toward(float(crate.x), float(crate.target_x), tuning.push_speed * STEP)
+		_move_crate_horizontally(crate)
 		var old_bottom := float(crate.y) + 1.0
 		crate.vy = minf(float(crate.vy) + tuning.crate_gravity * STEP, tuning.crate_fall_speed)
 		var new_y := float(crate.y) + float(crate.vy) * STEP
@@ -199,8 +220,10 @@ func _move_crates() -> void:
 		for other in crates:
 			if other.id == crate.id:
 				continue
-			if _overlap(float(crate.x), 1.0, float(other.x), 1.0, 0.055):
-				if old_bottom <= float(other.y) + 0.003:
+			# Solid crates cannot use the character's forgiving edge margin:
+			# even a narrow new overlap must catch a diagonal corner this tick.
+			if _overlap(float(crate.x), 1.0, float(other.x), 1.0, 0.0):
+				if old_bottom <= float(other.y) + EPS:
 					support = minf(support, float(other.y))
 		if new_y + 1.0 >= support:
 			new_y = support - 1.0
