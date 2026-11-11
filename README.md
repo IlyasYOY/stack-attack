@@ -46,7 +46,7 @@ python3 -m http.server 8765 --bind 127.0.0.1 --directory build/web
 
 ## Автоматизация и доставка
 
-GitHub Actions запускает импорт, GDScript-тест и headless-запуск на PR, включая draft. Android/Web-экспорт и Chromium-проверка выполняются локально указанными скриптами; CI не выдаётся за проверку телефона.
+GitHub Actions запускает импорт, GDScript-тест и headless-запуск на PR, включая draft, и при push в main или codex/**. Android/Web-экспорт и Chromium-проверка выполняются локально указанными скриптами; CI не выдаётся за проверку телефона.
 
 После коммита и повторных проверок команда `python3 scripts/package_builds.py` создаёт APK, Web ZIP и манифест с точным commit и SHA-256 в `build/deliverables/`. Web ZIP нужно распаковать и обслуживать по HTTP. Сборки передаются через Library, без публичного hosting и релиза.
 
