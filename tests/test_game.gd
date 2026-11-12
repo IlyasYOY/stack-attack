@@ -260,6 +260,30 @@ func app_flow() -> void:
 	await process_frame
 	check(app.sound.music_player.stream.loop_mode == AudioStreamWAV.LOOP_FORWARD and app.sound.music_player.stream.loop_end > 300000, "Music must loop over decoded frames on every platform")
 	check(app.screen == "menu" and app.buttons.has("play") and app.buttons.has("settings"), "Main menu must offer the agreed screens")
+	var saved_records: Array = app.profile.records.duplicate(true)
+	app.profile.records.clear()
+	for index in range(10):
+		app.profile.records.append({"score": 1000000 - index * 100, "date": "12.11.2026"})
+	for dimensions in [Vector2i(320, 568), Vector2i(568, 320), Vector2i(390, 844), Vector2i(844, 390),
+			Vector2i(344, 882), Vector2i(882, 344), Vector2i(768, 1004), Vector2i(1004, 768), Vector2i(360, 360)]:
+		root.size = dimensions
+		for menu in ["menu", "settings", "records", "paused", "over"]:
+			app._show_screen(menu)
+			if menu == "settings" and not OS.has_feature("android"):
+				# Include the real Android-only row when checking the smallest layouts.
+				app._vibration_option(app.panel.get_child(0))
+			for frame in range(4):
+				await process_frame
+			var viewport := Rect2(Vector2.ZERO, app.size)
+			check(viewport.encloses(app.panel.get_global_rect()), "%s panel must fit %s without scrolling" % [menu, dimensions])
+			check(app.panel.find_children("*", "ScrollContainer", true, false).is_empty(), "Menus must not contain a ScrollContainer")
+			for control in app.panel.find_children("*", "Control", true, false):
+				if control is Label or control.focus_mode == Control.FOCUS_ALL:
+					check(viewport.encloses(control.get_global_rect()), "%s content must remain visible at %s: %s" % [menu, dimensions, control.name])
+			var focused := root.gui_get_focus_owner()
+			check(focused != null and app.panel.is_ancestor_of(focused), "Focus must start inside each menu panel")
+	app.profile.records = saved_records
+	app._show_screen("menu")
 	app._start_game()
 	app._pause()
 	var paused_ticks: int = app.model.ticks

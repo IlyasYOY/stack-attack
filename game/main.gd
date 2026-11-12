@@ -9,7 +9,6 @@ var screen := "menu"
 var buttons := {}
 var sliders := {}
 var panel: PanelContainer
-var panel_height := 400.0
 var score_label: Label
 var pointers := {}
 var jump_pending := false
@@ -66,8 +65,9 @@ func _make_theme() -> Theme:
 	result.set_stylebox("hover", "Button", _make_style(Color("35565a"), MINT, padding))
 	result.set_stylebox("pressed", "Button", _make_style(Color("456963"), GOLD, padding))
 	result.set_stylebox("focus", "Button", _make_style(Color(0, 0, 0, 0), GOLD, 2))
-	result.set_stylebox("panel", "PanelContainer", _make_style(Color(0.055, 0.12, 0.17, 0.97), Color("a88660"), 18))
-	result.set_constant("separation", "VBoxContainer", 10)
+	result.set_stylebox("panel", "PanelContainer", _make_style(Color(0.055, 0.12, 0.17, 0.97), Color("a88660"), 12 if _compact_panel() else 18))
+	result.set_constant("separation", "VBoxContainer", 4 if _compact_panel() else 10)
+	result.set_constant("separation", "HBoxContainer", 16)
 	result.set_font_size("font_size", "Button", 18)
 	var rail := _make_style(Color("243d4a"), Color("617b7b"), 3)
 	result.set_stylebox("slider", "HSlider", rail)
@@ -75,10 +75,22 @@ func _make_theme() -> Theme:
 	result.set_stylebox("grabber_area_highlight", "HSlider", _make_style(MINT, GOLD, 3))
 	result.set_icon("grabber", "HSlider", preload("res://art/slider_knob.png"))
 	result.set_icon("grabber_highlight", "HSlider", preload("res://art/slider_knob.png"))
-	result.set_stylebox("scroll", "VScrollBar", _make_style(Color("192d37"), Color("192d37"), 2))
-	result.set_stylebox("grabber", "VScrollBar", _make_style(Color("537573"), Color("537573"), 2))
-	result.set_stylebox("grabber_highlight", "VScrollBar", _make_style(MINT, MINT, 2))
 	return result
+
+
+func _compact_panel() -> bool:
+	return size.y < 620
+
+
+func _wide_panel() -> bool:
+	return size.x > size.y * 1.25
+
+
+func _column(parent: Control) -> VBoxContainer:
+	var column := VBoxContainer.new()
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(column)
+	return column
 
 
 func _clear_ui() -> void:
@@ -93,6 +105,8 @@ func _clear_ui() -> void:
 
 
 func _show_screen(value: String) -> void:
+	var previous_focus := get_viewport().gui_get_focus_owner()
+	var focus_name := str(previous_focus.name) if previous_focus != null else ""
 	screen = value
 	theme = _make_theme()
 	_release_controls()
@@ -106,55 +120,79 @@ func _show_screen(value: String) -> void:
 	var content := _make_panel()
 	match screen:
 		"menu":
-			panel_height = 460 if size.y >= 440 else 420
-			_heading(content, "STACK ATTACK", "НОЧНАЯ СМЕНА", 32)
-			_text(content, "Сдвигай ящики. Собирай нижний ряд.\nБереги голову.", 14 if size.y < 440 else 16)
-			_button(content, "Играть", "play", _start_game)
-			_button(content, "Рекорды", "records", func(): _show_screen("records"))
-			_button(content, "Настройки", "settings", func(): _show_screen("settings"))
-			if size.y >= 440:
-				_text(content, "Стрелки: движение · Пробел: прыжок\nНа телефоне: экранные кнопки", 12, Color("9eafa5"))
+			var intro := content
+			var actions := content
+			if _wide_panel():
+				var row := HBoxContainer.new()
+				content.add_child(row)
+				intro = _column(row)
+				actions = _column(row)
+			_heading(intro, "STACK ATTACK", "НОЧНАЯ СМЕНА", 32)
+			_text(intro, "Сдвигай ящики. Собирай нижний ряд.\nБереги голову.", 14 if _compact_panel() else 16)
+			_button(actions, "Играть", "play", _start_game)
+			_button(actions, "Рекорды", "records", func(): _show_screen("records"))
+			_button(actions, "Настройки", "settings", func(): _show_screen("settings"))
+			_text(intro, "Стрелки: движение · Пробел: прыжок\nНа телефоне: экранные кнопки", 12, Color("9eafa5"))
 		"paused":
-			panel_height = 300
 			_heading(content, "Пауза", "ВЫДОХНИ. СКЛАД ПОДОЖДЁТ.")
 			_button(content, "Продолжить", "resume", func(): _show_screen("playing"))
 			_button(content, "Начать заново", "restart", _start_game)
 			_button(content, "Главное меню", "home", func(): _show_screen("menu"))
 		"over":
-			panel_height = 370
 			_heading(content, "Смена окончена", "СКЛАД ЗАПОЛНЕН" if model.loss_reason == "overflow" else "ОСТОРОЖНО, ЯЩИКИ!")
-			_text(content, str(model.score), 44, GOLD)
+			_text(content, str(model.score), 32 if _compact_panel() else 44, GOLD)
 			_text(content, "Очищено рядов: %d" % model.lines, 16)
-			_button(content, "Играть снова", "again", _start_game)
-			_button(content, "Главное меню", "home", func(): _show_screen("menu"))
+			var actions: Control = content
+			if _compact_panel():
+				actions = HBoxContainer.new()
+				content.add_child(actions)
+			_button(actions, "Играть снова", "again", _start_game)
+			_button(actions, "Главное меню", "home", func(): _show_screen("menu"))
 			if not profile.last_error.is_empty():
 				_text(content, profile.last_error, 12)
 		"records":
-			panel_height = 490
 			_heading(content, "Рекорды", "ЛУЧШАЯ ДЕСЯТКА · НА ЭТОМ УСТРОЙСТВЕ")
 			if profile.records.is_empty():
 				_text(content, "Пока пусто. Первый ряд уже ждёт.", 16)
+			var entries: Control = content
+			if _compact_panel() and not profile.records.is_empty():
+				var grid := GridContainer.new()
+				grid.columns = 2
+				grid.add_theme_constant_override("h_separation", 16)
+				grid.add_theme_constant_override("v_separation", 6)
+				content.add_child(grid)
+				entries = grid
 			for index in range(profile.records.size()):
 				var entry: Dictionary = profile.records[index]
-				_text(content, "%02d   %s   ·   %d" % [index + 1, entry.date, entry.score], 16,
-					GOLD if index == 0 else CREAM)
+				if _compact_panel():
+					var item := _column(entries)
+					item.add_theme_constant_override("separation", 0)
+					_text(item, "%02d   %d" % [index + 1, entry.score], 14, GOLD if index == 0 else CREAM)
+					_text(item, str(entry.date), 10, MINT)
+				else:
+					_text(entries, "%02d   %s   ·   %d" % [index + 1, entry.date, entry.score], 16,
+						GOLD if index == 0 else CREAM)
 			_button(content, "Назад", "back", func(): _show_screen("menu"))
 		"settings":
-			panel_height = 430
 			_heading(content, "Настройки", "ЗВУК НОЧНОГО СКЛАДА")
-			_slider(content, "Музыка", "music", profile.music)
-			_slider(content, "Звуки", "effects", profile.effects)
+			if _compact_panel():
+				var row := HBoxContainer.new()
+				content.add_child(row)
+				_slider(_column(row), "Музыка", "music", profile.music)
+				_slider(_column(row), "Звуки", "effects", profile.effects)
+			else:
+				_slider(content, "Музыка", "music", profile.music)
+				_slider(content, "Звуки", "effects", profile.effects)
 			if OS.has_feature("android"):
-				var vibration := CheckButton.new()
-				vibration.text = "Виброотклик"
-				vibration.button_pressed = profile.vibration
-				vibration.toggled.connect(func(enabled: bool):
-					profile.vibration = enabled
-					profile.save_profile())
-				content.add_child(vibration)
-			_button(content, "Проверить звук", "sound_test", func(): sound.effect("line"))
-			_button(content, "Назад", "back", func(): _show_screen("menu"))
+				_vibration_option(content)
+			var actions: Control = content
+			if _compact_panel():
+				actions = HBoxContainer.new()
+				content.add_child(actions)
+			_button(actions, "Проверить звук", "sound_test", func(): sound.effect("line"))
+			_button(actions, "Назад", "back", func(): _show_screen("menu"))
 	_position_panel()
+	_focus_panel.call_deferred(panel, focus_name)
 
 
 func _make_panel() -> VBoxContainer:
@@ -164,26 +202,47 @@ func _make_panel() -> VBoxContainer:
 	ui.add_child(shade)
 	panel = PanelContainer.new()
 	ui.add_child(panel)
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	panel.add_child(scroll)
+	panel.resized.connect(_center_panel)
+	panel.minimum_size_changed.connect(_position_panel)
 	var content := VBoxContainer.new()
-	if size.y < 440:
-		content.add_theme_constant_override("separation", 7)
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(content)
+	panel.add_child(content)
 	return content
 
 
 func _position_panel() -> void:
 	if panel != null:
-		panel.size = Vector2(minf(410, size.x - 32), minf(panel_height, size.y - 32))
+		panel.size = Vector2(minf(720 if _wide_panel() else 440, size.x - 32), panel.get_combined_minimum_size().y)
+		_center_panel()
+
+
+func _center_panel() -> void:
+	if panel != null:
 		panel.position = ((size - panel.size) * 0.5).floor()
+
+
+func _focus_panel(expected_panel: PanelContainer, preferred: String) -> void:
+	if panel != expected_panel or not is_instance_valid(expected_panel):
+		return
+	var controls: Array[Control] = []
+	for control in panel.find_children("*", "Control", true, false):
+		if control.focus_mode == Control.FOCUS_ALL:
+			controls.append(control)
+	for index in range(controls.size()):
+		var control := controls[index]
+		control.focus_next = control.get_path_to(controls[(index + 1) % controls.size()])
+		control.focus_previous = control.get_path_to(controls[(index - 1 + controls.size()) % controls.size()])
+	if not controls.is_empty():
+		var target := controls[0]
+		for control in controls:
+			if str(control.name) == preferred:
+				target = control
+		target.grab_focus()
 
 
 func _heading(parent: Control, title: String, subtitle: String, text_size: int = 28) -> void:
 	_text(parent, subtitle, 11, MINT)
-	_text(parent, title, mini(25, text_size) if size.y < 440 else text_size, GOLD)
+	_text(parent, title, mini(22, text_size) if _compact_panel() else text_size, GOLD)
 	var separator := HSeparator.new()
 	separator.modulate = Color("9a7d5e")
 	parent.add_child(separator)
@@ -201,6 +260,8 @@ func _text(parent: Control, value: String, text_size: int = 17, color: Color = C
 
 func _button(parent: Control, title: String, id: String, action: Callable) -> Button:
 	var button := Button.new()
+	button.name = id
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.text = title
 	button.custom_minimum_size.y = 48
 	button.pressed.connect(func():
@@ -215,6 +276,7 @@ func _button(parent: Control, title: String, id: String, action: Callable) -> Bu
 func _slider(parent: Control, title: String, id: String, value: float) -> void:
 	var label := _text(parent, "%s · %d%%" % [title, roundi(value * 100)], 16)
 	var slider := HSlider.new()
+	slider.name = id
 	slider.min_value = 0
 	slider.max_value = 1
 	slider.step = 0.05
@@ -230,6 +292,17 @@ func _slider(parent: Control, title: String, id: String, value: float) -> void:
 		profile.save_profile())
 	parent.add_child(slider)
 	sliders[id] = slider
+
+
+func _vibration_option(parent: Control) -> void:
+	var vibration := CheckButton.new()
+	vibration.name = "vibration"
+	vibration.text = "Виброотклик"
+	vibration.button_pressed = profile.vibration
+	vibration.toggled.connect(func(enabled: bool):
+		profile.vibration = enabled
+		profile.save_profile())
+	parent.add_child(vibration)
 
 
 func _build_hud() -> void:
@@ -403,6 +476,7 @@ func _publish_qa() -> void:
 		"field": [world.field.position.x, world.field.position.y, world.field.size.x, world.field.size.y],
 		"buttons": rects, "sliders": slider_rects, "controls": input_rects,
 		"missing_menu_glyphs": _missing_menu_glyphs(),
+		"panel": _panel_snapshot(),
 		"profile": {"music": profile.music, "effects": profile.effects,
 			"records": profile.records, "vibration_visible": OS.has_feature("android")},
 		"audio": {"music_playing": sound.music_player.playing, "music_position": sound.music_player.get_playback_position(), "stream_format": sound.music_player.stream.format, "loop_end": sound.music_player.stream.loop_end, "unlocked": sound.unlocked,
@@ -422,6 +496,22 @@ func _missing_menu_glyphs() -> String:
 	return missing
 
 
+func _panel_snapshot() -> Dictionary:
+	if panel == null:
+		return {}
+	var rect := panel.get_global_rect()
+	var items := []
+	for control in panel.find_children("*", "Control", true, false):
+		if control is Label or control.focus_mode == Control.FOCUS_ALL:
+			var bounds: Rect2 = control.get_global_rect()
+			items.append({"name": str(control.name), "kind": control.get_class(), "rect": [bounds.position.x, bounds.position.y, bounds.size.x, bounds.size.y],
+				"focusable": control.focus_mode == Control.FOCUS_ALL})
+	var focused := get_viewport().gui_get_focus_owner()
+	return {"rect": [rect.position.x, rect.position.y, rect.size.x, rect.size.y], "items": items,
+		"scroll_containers": panel.find_children("*", "ScrollContainer", true, false).size(),
+		"focus": str(focused.name) if focused != null else ""}
+
+
 func _qa_command() -> void:
 	# Deliberate opt-in on debug Web exports only. No gameplay UI exposes fixtures.
 	var raw: Variant = JavaScriptBridge.eval("JSON.stringify(window.stackAttackQARequest || null)")
@@ -429,7 +519,15 @@ func _qa_command() -> void:
 		return
 	JavaScriptBridge.eval("window.stackAttackQARequest = null")
 	var request: Variant = JSON.parse_string(str(raw))
-	if not request is Dictionary or screen != "playing":
+	if not request is Dictionary:
+		return
+	if str(request.get("scenario", "")) == "records_menu" and screen in ["menu", "records"]:
+		profile.records.clear()
+		for index in range(10):
+			profile.records.append({"score": 1000000 - index * 100, "date": "12.11.2026"})
+		_show_screen("records")
+		return
+	if screen != "playing":
 		return
 	if str(request.get("scenario", "")) not in ["line", "chain", "crush", "overflow", "push", "showcase"]:
 		return
