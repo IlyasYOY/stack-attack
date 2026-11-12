@@ -1,6 +1,7 @@
 extends Control
 const TUNING: StackTuning = preload("res://game/prototype.tres")
 var model: StackSimulation
+var demo: StackDemo
 var profile: StackProfile
 var sound: StackSound
 var world: StackWorldView
@@ -17,6 +18,8 @@ var result_saved := false
 var qa_enabled := false
 var qa_timer := 0.0
 var qa_hero_pose := false
+var qa_android_settings := false
+var qa_freeze_demo := false
 const CREAM := Color("f4e3ba")
 const MINT := Color("8dc6ac")
 const GOLD := Color("d7a45a")
@@ -26,12 +29,15 @@ func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	profile = StackProfile.new()
 	model = StackSimulation.new(TUNING, 1)
+	demo = StackDemo.new(TUNING)
 	sound = StackSound.new()
 	add_child(sound)
 	sound.setup(profile)
+	if OS.has_feature("android"):
+		sound.unlock()
 	theme = _make_theme()
 	world = StackWorldView.new()
-	world.model = model
+	world.model = demo.model
 	world.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(world)
 	ui = Control.new()
@@ -62,11 +68,21 @@ func _make_theme() -> Theme:
 	result.set_color("font_color", "Button", CREAM)
 	result.set_color("font_hover_color", "Button", Color.WHITE)
 	var padding := 8 if size.y < 440 else 12
-	result.set_stylebox("normal", "Button", _make_style(Color("28414c"), Color("7e8170"), padding))
-	result.set_stylebox("hover", "Button", _make_style(Color("35565a"), MINT, padding))
-	result.set_stylebox("pressed", "Button", _make_style(Color("456963"), GOLD, padding))
-	result.set_stylebox("focus", "Button", _make_style(Color(0, 0, 0, 0), GOLD, 2))
-	result.set_stylebox("panel", "PanelContainer", _make_style(Color(0.055, 0.12, 0.17, 0.97), Color("a88660"), 12 if _compact_panel() else 18))
+	for state in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
+		var style := _make_style(Color.TRANSPARENT, Color.TRANSPARENT, padding)
+		style.set_border_width_all(0)
+		if state in ["hover", "pressed", "hover_pressed", "focus"]:
+			style.border_color = MINT if state == "hover" else GOLD
+			style.border_width_bottom = 2
+		result.set_stylebox(state, "Button", style)
+	result.set_color("font_pressed_color", "Button", GOLD)
+	result.set_color("font_hover_pressed_color", "Button", GOLD)
+	for kind in ["Label", "Button"]:
+		result.set_color("font_outline_color", kind, Color("10202b"))
+		result.set_constant("outline_size", kind, 3)
+	var panel_style := _make_style(Color.TRANSPARENT, Color.TRANSPARENT, 12 if _compact_panel() else 18)
+	panel_style.set_border_width_all(0)
+	result.set_stylebox("panel", "PanelContainer", panel_style)
 	result.set_constant("separation", "VBoxContainer", 4 if _compact_panel() else 10)
 	result.set_constant("separation", "HBoxContainer", 16)
 	result.set_font_size("font_size", "Button", 18)
@@ -113,6 +129,8 @@ func _show_screen(value: String) -> void:
 	_release_controls()
 	_clear_ui()
 	world.active = screen in ["playing", "paused"]
+	world.model = demo.model if _background_demo() else model
+	world._layout()
 	sound.music_player.volume_db = -5.0 if screen == "paused" else 0.0
 	if screen in ["playing", "paused"]:
 		_build_hud()
@@ -121,27 +139,19 @@ func _show_screen(value: String) -> void:
 	var content := _make_panel()
 	match screen:
 		"menu":
-			var intro := content
-			var actions := content
-			if _wide_panel():
-				var row := HBoxContainer.new()
-				content.add_child(row)
-				intro = _column(row)
-				actions = _column(row)
-			_heading(intro, "STACK ATTACK", "НОЧНАЯ СМЕНА", 32)
-			_text(intro, "Сдвигай ящики. Собирай нижний ряд.\nБереги голову.", 14 if _compact_panel() else 16)
-			_button(actions, "Играть", "play", _start_game)
-			_button(actions, "Рекорды", "records", func(): _show_screen("records"))
-			_button(actions, "Настройки", "settings", func(): _show_screen("settings"))
-			_text(intro, "Стрелки: движение · Пробел: прыжок\nНа телефоне: экранные кнопки", 12, Color("9eafa5"))
+			_heading(content, "Stack Attack", 32)
+			_button(content, "Играть", "play", _start_game)
+			_button(content, "Рекорды", "records", func(): _show_screen("records"))
+			_button(content, "Настройки", "settings", func(): _show_screen("settings"))
 		"paused":
-			_heading(content, "Пауза", "ВЫДОХНИ. СКЛАД ПОДОЖДЁТ.")
+			_heading(content, "Пауза")
 			_button(content, "Продолжить", "resume", func(): _show_screen("playing"))
 			_button(content, "Начать заново", "restart", _start_game)
 			_button(content, "Главное меню", "home", func(): _show_screen("menu"))
 		"over":
-			_heading(content, "Смена окончена", "СКЛАД ЗАПОЛНЕН" if model.loss_reason == "overflow" else "ОСТОРОЖНО, ЯЩИКИ!")
-			_text(content, str(model.score), 32 if _compact_panel() else 44, GOLD)
+			_heading(content, "Смена окончена")
+			_text(content, "СКЛАД ЗАПОЛНЕН" if model.loss_reason == "overflow" else "ОСТОРОЖНО, ЯЩИКИ!", 14, MINT)
+			_text(content, "Счёт: %d" % model.score, 32 if _compact_panel() else 44, GOLD)
 			_text(content, "Очищено рядов: %d" % model.lines, 16)
 			var actions: Control = content
 			if _compact_panel():
@@ -152,9 +162,9 @@ func _show_screen(value: String) -> void:
 			if not profile.last_error.is_empty():
 				_text(content, profile.last_error, 12)
 		"records":
-			_heading(content, "Рекорды", "ЛУЧШАЯ ДЕСЯТКА · НА ЭТОМ УСТРОЙСТВЕ")
+			_heading(content, "Рекорды")
 			if profile.records.is_empty():
-				_text(content, "Пока пусто. Первый ряд уже ждёт.", 16)
+				_text(content, "Рекордов пока нет", 16)
 			var entries: Control = content
 			if _compact_panel() and not profile.records.is_empty():
 				var grid := GridContainer.new()
@@ -175,7 +185,7 @@ func _show_screen(value: String) -> void:
 						GOLD if index == 0 else CREAM)
 			_button(content, "Назад", "back", func(): _show_screen("menu"))
 		"settings":
-			_heading(content, "Настройки", "ЗВУК НОЧНОГО СКЛАДА")
+			_heading(content, "Настройки")
 			if _compact_panel():
 				var row := HBoxContainer.new()
 				content.add_child(row)
@@ -184,21 +194,16 @@ func _show_screen(value: String) -> void:
 			else:
 				_slider(content, "Музыка", "music", profile.music)
 				_slider(content, "Звуки", "effects", profile.effects)
-			if OS.has_feature("android"):
+			if OS.has_feature("android") or (qa_enabled and qa_android_settings):
 				_vibration_option(content)
-			var actions: Control = content
-			if _compact_panel():
-				actions = HBoxContainer.new()
-				content.add_child(actions)
-			_button(actions, "Проверить звук", "sound_test", func(): sound.effect("line"))
-			_button(actions, "Назад", "back", func(): _show_screen("menu"))
+			_button(content, "Назад", "back", func(): _show_screen("menu"))
 	_position_panel()
 	_focus_panel.call_deferred(panel, focus_name)
 
 
 func _make_panel() -> VBoxContainer:
 	var shade := ColorRect.new()
-	shade.color = Color(0.02, 0.06, 0.09, 0.43)
+	shade.color = Color(0.02, 0.06, 0.09, 0.38)
 	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	ui.add_child(shade)
 	panel = PanelContainer.new()
@@ -213,7 +218,7 @@ func _make_panel() -> VBoxContainer:
 
 func _position_panel() -> void:
 	if panel != null:
-		panel.size = Vector2(minf(720 if _wide_panel() else 440, size.x - 32), panel.get_combined_minimum_size().y)
+		panel.size = Vector2(minf(720 if _wide_panel() and screen != "menu" else 440, size.x - 32), panel.get_combined_minimum_size().y)
 		_center_panel()
 
 
@@ -241,13 +246,9 @@ func _focus_panel(expected_panel: PanelContainer, preferred: String) -> void:
 		target.grab_focus()
 
 
-func _heading(parent: Control, title: String, subtitle: String, text_size: int = 28) -> void:
-	_text(parent, subtitle, 11, MINT)
-	_text(parent, title, mini(22, text_size) if _compact_panel() else text_size, GOLD)
-	var separator := HSeparator.new()
-	separator.modulate = Color("9a7d5e")
-	parent.add_child(separator)
-
+func _heading(parent: Control, title: String, text_size: int = 28) -> void:
+	var label := _text(parent, title, mini(26, text_size) if _compact_panel() else text_size, GOLD)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 
 func _text(parent: Control, value: String, text_size: int = 17, color: Color = CREAM) -> Label:
 	var label := Label.new()
@@ -296,15 +297,20 @@ func _slider(parent: Control, title: String, id: String, value: float) -> void:
 
 
 func _vibration_option(parent: Control) -> void:
-	var vibration := CheckButton.new()
+	var vibration := Button.new()
 	vibration.name = "vibration"
-	vibration.text = "Виброотклик"
-	vibration.button_pressed = profile.vibration
+	vibration.toggle_mode = true
+	vibration.custom_minimum_size.y = 48
+	vibration.set_pressed_no_signal(profile.vibration)
+	vibration.text = "Виброотклик: Вкл" if profile.vibration else "Виброотклик: Выкл"
 	vibration.toggled.connect(func(enabled: bool):
 		profile.vibration = enabled
-		profile.save_profile())
+		vibration.text = "Виброотклик: Вкл" if enabled else "Виброотклик: Выкл"
+		profile.save_profile()
+		if enabled:
+			sound.preview_vibration())
 	parent.add_child(vibration)
-
+	buttons["vibration"] = vibration
 
 func _build_hud() -> void:
 	score_label = Label.new()
@@ -438,12 +444,31 @@ func _advance_game(delta: float) -> void:
 		score_label.text = "%06d" % model.score
 
 
+func _background_demo() -> bool:
+	return screen in ["menu", "settings", "records"]
+
+
+func _advance_demo(delta: float) -> void:
+	if not _background_demo() or qa_freeze_demo:
+		return
+	demo.advance(delta)
+	world.model = demo.model
+	world.axis = demo.axis
+	for event in demo.events:
+		match event.type:
+			"jump", "land", "over": sound.effect(str(event.type), false)
+			"line":
+				sound.effect("line", false)
+				world.line_effect(int(event.chain))
+
+
 func _process(delta: float) -> void:
 	if world == null:
 		return
+	_advance_demo(delta)
 	if not (qa_enabled and qa_hero_pose):
 		_advance_game(delta)
-	world.animate(delta if screen != "paused" and not (qa_enabled and qa_hero_pose) else 0.0)
+	world.animate(delta if screen != "paused" and not (qa_enabled and (qa_hero_pose or qa_freeze_demo)) else 0.0)
 	if qa_enabled:
 		qa_timer += delta
 		if qa_timer >= 0.08:
@@ -458,6 +483,10 @@ func _notification(what: int) -> void:
 
 
 func _publish_qa() -> void:
+	var vibration_styles := {}
+	if buttons.has("vibration"):
+		for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
+			vibration_styles[state] = buttons.vibration.get_theme_stylebox(state).bg_color.a
 	var rects := {}
 	for id in buttons:
 		if is_instance_valid(buttons[id]):
@@ -482,8 +511,13 @@ func _publish_qa() -> void:
 		"buttons": rects, "sliders": slider_rects, "controls": input_rects,
 		"missing_menu_glyphs": _missing_menu_glyphs(),
 		"panel": _panel_snapshot(),
+		"vibration_styles": vibration_styles,
+		"demo": {"active": _background_demo(), "rounds": demo.rounds, "ticks": demo.total_ticks,
+			"jumps": demo.jumps, "drops": demo.drops, "lines": demo.lines, "losses": demo.losses,
+			"player": [demo.model.player.x, demo.model.player.y], "state": demo.model.state,
+			"separate_model": demo.model != model},
 		"profile": {"music": profile.music, "effects": profile.effects,
-			"records": profile.records, "vibration_visible": OS.has_feature("android")},
+			"records": profile.records, "vibration": profile.vibration, "vibration_visible": buttons.has("vibration")},
 		"audio": {"music_playing": sound.music_player.playing, "music_position": sound.music_player.get_playback_position(), "stream_format": sound.music_player.stream.format, "loop_end": sound.music_player.stream.loop_end, "unlocked": sound.unlocked,
 			"music_muted": AudioServer.is_bus_mute(AudioServer.get_bus_index("Music")),
 			"effects_muted": AudioServer.is_bus_mute(AudioServer.get_bus_index("Effects"))}}
@@ -510,6 +544,7 @@ func _panel_snapshot() -> Dictionary:
 		if control is Label or control.focus_mode == Control.FOCUS_ALL:
 			var bounds: Rect2 = control.get_global_rect()
 			items.append({"name": str(control.name), "kind": control.get_class(), "rect": [bounds.position.x, bounds.position.y, bounds.size.x, bounds.size.y],
+				"text": str(control.text) if control is Label or control is Button else "",
 				"focusable": control.focus_mode == Control.FOCUS_ALL})
 	var focused := get_viewport().gui_get_focus_owner()
 	return {"rect": [rect.position.x, rect.position.y, rect.size.x, rect.size.y], "items": items,
@@ -525,6 +560,16 @@ func _qa_command() -> void:
 	JavaScriptBridge.eval("window.stackAttackQARequest = null")
 	var request: Variant = JSON.parse_string(str(raw))
 	if not request is Dictionary:
+		return
+	if str(request.get("scenario", "")) == "android_settings" and _background_demo():
+		qa_android_settings = true
+		qa_freeze_demo = true
+		_show_screen("settings")
+		return
+	if str(request.get("scenario", "")) == "demo_crush" and _background_demo():
+		demo.model.state = "playing"
+		demo.model.crates.clear()
+		demo.model.add_crate(floorf(demo.model.player.x), demo.model.player.y - 1.01, 6.0)
 		return
 	if str(request.get("scenario", "")) == "records_menu" and screen in ["menu", "records"]:
 		profile.records.clear()

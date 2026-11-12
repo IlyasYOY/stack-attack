@@ -5,6 +5,15 @@ const Config = preload("res://game/tuning.gd")
 const Simulation = preload("res://game/simulation.gd")
 const Profile = preload("res://game/profile.gd")
 
+class HapticProbe extends StackSound:
+	var pulses: Array[int] = []
+	func _play_effect(_name: String) -> void:
+		pass
+	func _supports_haptics() -> bool:
+		return true
+	func _vibrate(duration: int) -> void:
+		pulses.append(duration)
+
 
 func _initialize() -> void:
 	call_deferred("run")
@@ -40,7 +49,9 @@ func run() -> void:
 	loss_and_drops()
 	storage()
 	random_sessions()
+	demo_games()
 	await app_flow()
+	await vibration_toggle()
 	if not failures.is_empty():
 		for failure in failures:
 			printerr("GAME_TEST_FAILED: " + failure)
@@ -254,12 +265,74 @@ func storage() -> void:
 	DirAccess.remove_absolute(path)
 
 
+func demo_games() -> void:
+	var personal := Simulation.new(Config.new(), 74)
+	var rng_state: int = personal._rng.state
+	var demo := StackDemo.new(Config.new(), 7481)
+	for tick in range(120 * 120):
+		demo.advance(1.0 / 120.0)
+	check(demo.model != personal, "Demo and personal game must be different simulations")
+	check(personal.ticks == 0 and personal.score == 0 and personal._rng.state == rng_state, "AI demo must not consume personal time, score or randomness")
+	check(demo.jumps > 0 and demo.drops > 0, "Demo must jump and receive real crane drops")
+	check(demo.lines > 0, "Reactive AI must be able to clear a real bottom line")
+	check(demo.losses > 0 and demo.rounds > 1, "Demo must restart real lost games without inventing victory rules")
+	print("DEMO_PASS: %d jumps, %d drops, %d lines, %d losses, %d rounds" % [demo.jumps, demo.drops, demo.lines, demo.losses, demo.rounds])
+
+
+func vibration_toggle() -> void:
+	var path := "user://test-vibration-profile.json"
+	var app = load("res://game/main.tscn").instantiate()
+	root.add_child(app)
+	await process_frame
+	app.profile = Profile.new(path)
+	app.profile.vibration = false
+	app.sound.queue_free()
+	var probe := HapticProbe.new()
+	app.add_child(probe)
+	probe.setup(app.profile)
+	app.sound = probe
+	app._show_screen("settings")
+	app._vibration_option(app.panel.get_child(0))
+	await process_frame
+	var toggle: Button = app.buttons.vibration
+	toggle.grab_focus()
+	toggle.button_pressed = true
+	check(app.profile.vibration and toggle.text.ends_with("Вкл") and toggle.button_pressed, "Enabled vibration must immediately show a clear on state")
+	check(probe.pulses == [60], "Enabling vibration must request one short preview pulse")
+	for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
+		var style: StyleBoxFlat = toggle.get_theme_stylebox(state)
+		check(is_zero_approx(style.bg_color.a), "Focused/pressed vibration controls must not fall back to an opaque black background: " + state)
+	toggle.button_pressed = false
+	check(not app.profile.vibration and toggle.text.ends_with("Выкл") and probe.pulses == [60], "Disabling vibration must update the state without a pulse")
+	app.profile.vibration = true
+	probe.unlocked = true
+	probe.effect("jump", false)
+	check(probe.pulses == [60], "Background game effects must never vibrate the phone")
+	probe.effect("jump")
+	check(probe.pulses == [60, 12], "Personal game haptics must remain enabled by the saved setting")
+	app.profile.vibration = false
+	probe.preview_vibration()
+	check(probe.pulses == [60, 12], "A disabled vibration setting must suppress preview requests")
+	app.queue_free()
+	await process_frame
+	DirAccess.remove_absolute(path)
+
+
 func app_flow() -> void:
 	var app = load("res://game/main.tscn").instantiate()
 	root.add_child(app)
 	await process_frame
 	check(app.sound.music_player.stream.loop_mode == AudioStreamWAV.LOOP_FORWARD and app.sound.music_player.stream.loop_end > 300000, "Music must loop over decoded frames on every platform")
 	check(app.screen == "menu" and app.buttons.has("play") and app.buttons.has("settings"), "Main menu must offer the agreed screens")
+	var initial_records: Array = app.profile.records.duplicate(true)
+	var personal = app.model
+	var random_before: int = personal._rng.state
+	var path_exists := FileAccess.file_exists(app.profile.path)
+	var file_before := FileAccess.get_file_as_string(app.profile.path) if path_exists else ""
+	app._advance_demo(5.0)
+	check(app.model == personal and personal.ticks == 0 and personal._rng.state == random_before, "Menu demo must not advance or replace the personal game")
+	check(app.session == 0 and app.profile.records == initial_records, "Demo cannot create personal sessions or records")
+	check(FileAccess.file_exists(app.profile.path) == path_exists and (not path_exists or FileAccess.get_file_as_string(app.profile.path) == file_before), "Demo must not write the profile file")
 	var saved_records: Array = app.profile.records.duplicate(true)
 	app.profile.records.clear()
 	for index in range(10):
@@ -278,6 +351,8 @@ func app_flow() -> void:
 			check(viewport.encloses(app.panel.get_global_rect()), "%s panel must fit %s without scrolling" % [menu, dimensions])
 			check(app.panel.find_children("*", "ScrollContainer", true, false).is_empty(), "Menus must not contain a ScrollContainer")
 			for control in app.panel.find_children("*", "Control", true, false):
+				if control is Button:
+					check(is_zero_approx(control.get_theme_stylebox("normal").bg_color.a), "Menu buttons must remain over the live background without backplates")
 				if control is Label or control.focus_mode == Control.FOCUS_ALL:
 					check(viewport.encloses(control.get_global_rect()), "%s content must remain visible at %s: %s" % [menu, dimensions, control.name])
 			var focused := root.gui_get_focus_owner()
@@ -287,6 +362,11 @@ func app_flow() -> void:
 	app._start_game()
 	app._pause()
 	var paused_ticks: int = app.model.ticks
+	var paused_player: Vector2 = app.model.player
+	app._show_screen("menu")
+	app._advance_demo(5.0)
+	check(app.model.ticks == paused_ticks and app.model.player == paused_player and app.session == 1, "Visiting a demo menu must preserve a paused personal game")
+	app._show_screen("paused")
 	for index in range(4):
 		await process_frame
 	check(app.model.ticks == paused_ticks, "Pause must freeze the entire simulation")

@@ -15,7 +15,9 @@ from playwright.sync_api import sync_playwright
 from PIL import Image
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--sprites-only', action='store_true', help='Run only frozen-pose rendered sprite regressions')
+group = parser.add_mutually_exclusive_group()
+group.add_argument('--sprites-only', action='store_true', help='Run only frozen-pose rendered sprite regressions')
+group.add_argument('--ui-only', action='store_true', help='Run demo isolation and vibration UI regressions only')
 args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -265,6 +267,94 @@ def sprite_poses(browser):
     return checks
 
 
+def ui_batch_checks(browser):
+    context = browser.new_context(viewport={'width':390,'height':844}, has_touch=True, device_scale_factor=1)
+    page = context.new_page()
+    errors = []
+    page.on('pageerror', lambda value: errors.append(str(value)))
+    page.goto(URL)
+    wait_screen(page, 'menu')
+    first = state(page)
+    labels = [item['text'] for item in first['panel']['items'] if item['kind'] == 'Label']
+    assert labels == ['Stack Attack'], ('Unexpected menu description/subtitle', labels)
+    assert first['demo']['active'] and first['demo']['separate_model']
+    records = first['profile']['records']
+    positions = []
+    for _ in range(16):
+        page.wait_for_timeout(250)
+        positions.append(state(page)['demo']['player'][0])
+    moving = state(page)
+    assert max(positions)-min(positions) > .5 and moving['demo']['jumps'] > 0 and moving['demo']['drops'] > 0
+    assert moving['ticks'] == first['ticks'] == 0 and moving['session'] == 0 and moving['score'] == 0
+    assert moving['profile']['records'] == records
+    menu_shot = screenshot(page, 'live-menu-390x844.png')
+    for _ in range(3):
+        button(page, 'settings', True)
+        wait_screen(page, 'settings')
+        assert 'sound_test' not in state(page)['buttons']
+        assert not state(page)['profile']['vibration_visible']
+        button(page, 'back', True)
+        wait_screen(page, 'menu')
+    before_loss = state(page)
+    scenario(page, 'demo_crush')
+    page.wait_for_function('value => window.stackAttackState.demo.losses > value', arg=before_loss['demo']['losses'])
+    page.wait_for_function('value => window.stackAttackState.demo.rounds > value', arg=before_loss['demo']['rounds'])
+    after_loss = state(page)
+    assert after_loss['session'] == 0 and after_loss['ticks'] == 0 and after_loss['profile']['records'] == records
+    button(page, 'play', True)
+    wait_screen(page, 'playing')
+    stopped_demo = state(page)['demo']['ticks']
+    page.wait_for_timeout(350)
+    assert state(page)['ticks'] > 0 and state(page)['demo']['ticks'] == stopped_demo
+    button(page, 'pause', True)
+    wait_screen(page, 'paused')
+    paused = state(page)
+    button(page, 'home', True)
+    wait_screen(page, 'menu')
+    page.wait_for_timeout(350)
+    assert state(page)['ticks'] == paused['ticks'] and state(page)['player'] == paused['player']
+    assert state(page)['demo']['ticks'] > stopped_demo and state(page)['profile']['records'] == records
+    # Exercise the exact Android-only control in an explicit Web QA fixture.
+    # This verifies pixels/input, not Android hardware or haptic strength.
+    scenario(page, 'android_settings')
+    wait_screen(page, 'settings')
+    assert state(page)['profile']['vibration_visible']
+    fixed_panel(page)
+    button(page, 'vibration', True)
+    page.wait_for_timeout(150)
+    assert not state(page)['profile']['vibration']
+    off = page.screenshot()
+    button(page, 'vibration', True)
+    page.wait_for_timeout(150)
+    enabled = state(page)
+    assert enabled['profile']['vibration']
+    assert all(value == 0 for value in enabled['vibration_styles'].values())
+    toggle = next(item for item in enabled['panel']['items'] if item['name'] == 'vibration')
+    assert toggle['text'] == 'Виброотклик: Вкл'
+    on = page.screenshot()
+    x,y,w,h = enabled['buttons']['vibration']
+    a,b = point(page,[x+2,y+8,1,1]),point(page,[x+6,y+h-8,1,1])
+    bounds = (round(a[0]),round(a[1]),round(b[0]),round(b[1]))
+    # The clear padding must keep the same background immediately after toggling,
+    # while the control still owns focus/hover; black pressed fallbacks fail here.
+    assert Image.open(io.BytesIO(off)).crop(bounds).tobytes() == Image.open(io.BytesIO(on)).crop(bounds).tobytes()
+    toggle_shot = screenshot(page, 'android-vibration-on-web-qa-390x844.png')
+    page.keyboard.press('Tab')
+    page.wait_for_timeout(150)
+    blurred = page.screenshot()
+    assert Image.open(io.BytesIO(on)).crop(bounds).tobytes() == Image.open(io.BytesIO(blurred)).crop(bounds).tobytes()
+    page.reload()
+    wait_screen(page, 'menu')
+    assert state(page)['profile']['records'] == records and state(page)['profile']['vibration']
+    assert not errors, errors
+    context.close()
+    result = {'demo_motion':'PASS','real_loss_restart':'PASS','personal_game_and_records_isolation':'PASS',
+              'repeated_settings':'PASS','vibration_pixels_and_focus':'PASS','web_vibration_hidden':'PASS',
+              'screenshots':[menu_shot,toggle_shot]}
+    print('UI_BATCH',json.dumps(result),flush=True)
+    return result
+
+
 def menu_layouts(browser):
     context = browser.new_context(viewport={'width':390, 'height':844}, has_touch=True, device_scale_factor=1)
     page = context.new_page()
@@ -324,6 +414,12 @@ try:
         browser = p.chromium.launch(executable_path=os.environ.get('CHROMIUM_BIN', '/usr/bin/chromium'),
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
+        ui_batch = ui_batch_checks(browser) if not args.sprites_only else {}
+        if args.ui_only:
+            (BUILD/'ui-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'checks':ui_batch,
+                'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest()},indent=2)+'\n')
+            browser.close()
+            raise SystemExit(0)
         sprites = sprite_poses(browser)
         if args.sprites_only:
             (BUILD/'sprite-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'renderer':'SwiftShader',
@@ -436,7 +532,6 @@ try:
             page.wait_for_timeout(650)
             silent_rms = rms(page)
             slider(page, 'music', .5)
-            button(page, 'sound_test', touch)
             samples = []
             for _ in range(6):
                 page.wait_for_timeout(120)
@@ -449,11 +544,12 @@ try:
             assert audible_rms > .001, ('No actual audio samples detected', samples)
             slider(page, 'music', 0)
             slider(page, 'effects', .5)
-            button(page, 'sound_test', touch)
             effect_samples = []
-            for _ in range(4):
-                page.wait_for_timeout(60)
+            for _ in range(60):
+                page.wait_for_timeout(100)
                 effect_samples.append(rms(page))
+                if effect_samples[-1] > .001:
+                    break
             assert max(effect_samples) > .001, ('Effects bus is silent', effect_samples)
             slider(page, 'music', .2)
             slider(page, 'effects', .3)
@@ -476,7 +572,7 @@ try:
             results.append(result)
             print(json.dumps(result), flush=True)
             context.close()
-        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'menu_layouts':menus, 'sprite_poses':sprites,
+        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch,
                   'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
                   'page_errors':all_errors,'failed_requests':all_failed_requests,'checks':results}
         (BUILD/'web-check.json').write_text(json.dumps(report,indent=2)+'\n')

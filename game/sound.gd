@@ -43,18 +43,43 @@ func apply_volumes() -> void:
 	AudioServer.set_bus_mute(AudioServer.get_bus_index("Effects"), profile.effects <= 0.0)
 
 
-func effect(name: String) -> void:
+func effect(name: String, haptics: bool = true) -> void:
 	if not sounds.has(name) or not unlocked:
 		return
+	_play_effect(name)
+	if haptics and _supports_haptics() and profile.vibration:
+		if name == "line":
+			_vibrate(40)
+		elif name == "over":
+			_vibrate(90)
+		elif name == "jump":
+			_vibrate(12)
+
+
+func _play_effect(name: String) -> void:
 	for player in effects_players:
 		if not player.playing:
 			player.stream = sounds[name]
 			player.play()
 			break
-	if OS.has_feature("android") and profile.vibration:
-		if name == "line":
-			Input.vibrate_handheld(40)
-		elif name == "over":
-			Input.vibrate_handheld(90)
-		elif name == "jump":
-			Input.vibrate_handheld(12)
+
+
+func _supports_haptics() -> bool:
+	return OS.has_feature("android")
+
+
+func _vibrate(duration: int) -> void:
+	Input.vibrate_handheld(duration)
+
+
+func preview_vibration() -> void:
+	if _supports_haptics() and profile.vibration:
+		_vibrate(60)
+
+
+func _exit_tree() -> void:
+	if is_instance_valid(music_player):
+		music_player.stop()
+	for player in effects_players:
+		if is_instance_valid(player):
+			player.stop()
