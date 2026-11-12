@@ -116,6 +116,13 @@ def rms(page):
     }''')
 
 
+def tab(page, backwards=False):
+    previous = state(page)['panel']['focus']
+    page.keyboard.press('Shift+Tab' if backwards else 'Tab')
+    page.wait_for_function('previous => window.stackAttackState?.panel?.focus !== previous', arg=previous, timeout=5000)
+    return state(page)['panel']['focus']
+
+
 def fixed_panel(page, touch=True):
     snapshot = state(page)
     panel = snapshot['panel']
@@ -158,13 +165,16 @@ def fixed_panel(page, touch=True):
     visited = set()
     start = after['panel']['focus']
     for _ in focusable:
-        page.keyboard.press('Tab')
-        page.wait_for_timeout(100)
+        if len(focusable) == 1:
+            page.keyboard.press('Tab')
+            page.wait_for_timeout(180)
+        else:
+            tab(page)
         visited.add(state(page)['panel']['focus'])
     assert visited == names and state(page)['panel']['focus'] == start, ('Broken focus cycle', visited, names)
-    page.keyboard.press('Shift+Tab')
-    page.keyboard.press('Tab')
-    page.wait_for_timeout(120)
+    if len(focusable) > 1:
+        tab(page, True)
+        tab(page)
     assert state(page)['panel']['focus'] == start
 
 
@@ -339,8 +349,7 @@ def ui_batch_checks(browser):
     # while the control still owns focus/hover; black pressed fallbacks fail here.
     assert Image.open(io.BytesIO(off)).crop(bounds).tobytes() == Image.open(io.BytesIO(on)).crop(bounds).tobytes()
     toggle_shot = screenshot(page, 'android-vibration-on-web-qa-390x844.png')
-    page.keyboard.press('Tab')
-    page.wait_for_timeout(150)
+    tab(page)
     blurred = page.screenshot()
     assert Image.open(io.BytesIO(on)).crop(bounds).tobytes() == Image.open(io.BytesIO(blurred)).crop(bounds).tobytes()
     page.reload()
@@ -375,8 +384,7 @@ def menu_layouts(browser):
         for _ in range(3):
             if state(page)['panel']['focus'] == 'settings':
                 break
-            page.keyboard.press('Tab')
-            page.wait_for_timeout(100)
+            tab(page)
         page.keyboard.press('Enter')
         wait_screen(page, 'settings')
         fixed_panel(page)
