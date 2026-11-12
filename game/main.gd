@@ -16,6 +16,7 @@ var session := 0
 var result_saved := false
 var qa_enabled := false
 var qa_timer := 0.0
+var qa_hero_pose := false
 const CREAM := Color("f4e3ba")
 const MINT := Color("8dc6ac")
 const GOLD := Color("d7a45a")
@@ -319,6 +320,7 @@ func _build_hud() -> void:
 
 
 func _start_game() -> void:
+	qa_hero_pose = false
 	session += 1
 	model = StackSimulation.new(TUNING, Time.get_ticks_usec())
 	world.model = model
@@ -439,8 +441,9 @@ func _advance_game(delta: float) -> void:
 func _process(delta: float) -> void:
 	if world == null:
 		return
-	_advance_game(delta)
-	world.animate(delta if screen != "paused" else 0.0)
+	if not (qa_enabled and qa_hero_pose):
+		_advance_game(delta)
+	world.animate(delta if screen != "paused" and not (qa_enabled and qa_hero_pose) else 0.0)
 	if qa_enabled:
 		qa_timer += delta
 		if qa_timer >= 0.08:
@@ -471,6 +474,8 @@ func _publish_qa() -> void:
 	var status := {"ready": true, "screen": screen, "score": model.score,
 		"session": session, "ticks": model.ticks, "state": model.state,
 		"player": [model.player.x, model.player.y], "grounded": model.grounded,
+		"player_size": [TUNING.player_width, TUNING.player_height],
+		"facing": model.facing, "hero_pose": qa_hero_pose, "hero_frame": world.hero_frame(),
 		"columns": model.tuning.columns, "rows": model.tuning.rows, "crates": model.crates.size(), "first_crate_x": model.crates[0].x if not model.crates.is_empty() else -1,
 		"layout": "landscape" if size.x > size.y else "portrait", "viewport": [size.x, size.y],
 		"field": [world.field.position.x, world.field.position.y, world.field.size.x, world.field.size.y],
@@ -529,8 +534,24 @@ func _qa_command() -> void:
 		return
 	if screen != "playing":
 		return
+	if str(request.get("scenario", "")) == "hero_pose":
+		var pose := str(request.get("pose", "idle"))
+		if pose not in ["idle", "walk_stride", "walk_recover"]:
+			return
+		qa_hero_pose = true
+		model.crates.clear()
+		model.player = Vector2(4.3, TUNING.rows - TUNING.player_height)
+		model.player_velocity = Vector2.ZERO
+		model.grounded = true
+		model.facing = -1 if int(request.get("facing", 1)) < 0 else 1
+		world.axis = 0.0 if pose == "idle" else float(model.facing)
+		world.clock = 0.15 if pose == "walk_recover" else 0.0
+		world.caption_life = 0.0
+		world.particles.clear()
+		return
 	if str(request.get("scenario", "")) not in ["line", "chain", "crush", "overflow", "push", "showcase"]:
 		return
+	qa_hero_pose = false
 	model.crates.clear()
 	model.drop_timer = 999.0
 	model.player_velocity = Vector2.ZERO

@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """End-to-end checks against the actual exported game; debug fixtures require ?qa=1."""
 import functools
+import argparse
+import base64
 import hashlib
 import http.server
+import html
+import io
 import json
 import os
 from pathlib import Path
 import threading
 from playwright.sync_api import sync_playwright
+from PIL import Image
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--sprites-only', action='store_true', help='Run only frozen-pose rendered sprite regressions')
+args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build'
@@ -157,6 +166,105 @@ def fixed_panel(page, touch=True):
     assert state(page)['panel']['focus'] == start
 
 
+def sprite_comparison(browser, check):
+    width, height = check['viewport']
+    commit = json.loads((BUILD/'web/build-source.json').read_text())['commit']
+    cells = []
+    for pose, label in [('idle','Покой'), ('walk_stride','Шаг'), ('walk_recover','Возврат')]:
+        for facing, direction in [(1,'Вправо'), (-1,'Влево')]:
+            sample = next(p for p in check['poses'] if p['pose'] == pose and p['facing'] == facing)
+            left, top, right, bottom = sample['crop_bounds']
+            raw = (ROOT/sample['screenshot']).read_bytes()
+            src = 'data:image/png;base64,' + base64.b64encode(raw).decode()
+            cells.append(f'<section><h2>{label} · {direction}</h2><div class="crop" style="width:{(right-left)*4}px;height:{(bottom-top)*4}px">'
+                         f'<img src="{src}" style="width:{width*4}px;height:{height*4}px;left:{-left*4}px;top:{-top*4}px"></div></section>')
+    page = browser.new_page(viewport={'width':700,'height':400}, device_scale_factor=1)
+    page.set_content('<html lang="ru"><meta charset="utf-8"><style>'
+        'body{margin:0;padding:24px;background:#172333;color:#f4e3ba;font:16px sans-serif}h1{font-size:23px;margin:0 0 10px}'
+        'p{color:#9eafa5;font-size:13px;margin:6px 0}main{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}'
+        'h2{font-size:16px;margin:0 0 8px}section{min-width:0}.crop{position:relative;overflow:hidden;outline:1px solid #617b7b}'
+        'img{position:absolute;max-width:none;image-rendering:pixelated}</style>'
+        f'<h1>Одна позиция · {width}×{height}</h1><p>Web / Chromium · реальные кадры, увеличение 4×</p>'
+        f'<p>Позиция коллизии: (4.3, 10.12) · commit {html.escape(commit[:12])}</p>'
+        '<p>Одинаковая область кадра для всех направлений и фаз.</p><main>'+''.join(cells)+'</main></html>')
+    page.wait_for_function('Array.from(document.images).every(image => image.complete && image.naturalWidth > 0)')
+    path = SHOTS/f'hero-comparison-{width}x{height}.png'
+    page.screenshot(path=str(path), full_page=True)
+    page.close()
+    return str(path.relative_to(ROOT))
+
+
+def sprite_poses(browser):
+    checks = []
+    failures = []
+    source = Image.open(ROOT / 'art/hero_idle.png').convert('RGBA')
+    marker = source.getpixel((3, 9))[:3]  # Symmetric scarf band, fixed to the torso in both frames.
+    alpha = {}
+    for frame in ['idle', 'walk']:
+        with Image.open(ROOT / f'art/hero_{frame}.png') as image:
+            alpha[frame] = {'canvas':image.size, 'used':image.getbbox()}
+            assert image.size == (14,22) and image.getbbox() == (0,0,13,22), 'Sprite canvas/padding changed; recheck its reflection axis'
+            band = [x for y in [9,10] for x in range(image.width) if image.getpixel((x,y)) == (*marker,255)]
+            assert band and (min(band)+max(band)+1)/2 == image.width/2, 'Torso band is not centered in the sprite canvas'
+    for dimensions in [(390,844), (844,390)]:
+        context = browser.new_context(viewport={'width':dimensions[0], 'height':dimensions[1]}, device_scale_factor=1)
+        page = context.new_page()
+        errors = []
+        page.on('pageerror', lambda value: errors.append(str(value)))
+        page.goto(URL)
+        wait_screen(page, 'menu')
+        button(page, 'play')
+        wait_screen(page, 'playing')
+        poses = []
+        for pose in ['idle', 'walk_stride', 'walk_recover']:
+            for facing in [1, -1]:
+                page.evaluate('value => window.stackAttackQARequest = value', {'scenario':'hero_pose', 'pose':pose, 'facing':facing})
+                page.wait_for_function('value => window.stackAttackState.hero_pose && window.stackAttackState.facing === value', arg=facing)
+                page.wait_for_timeout(180)
+                snapshot = state(page)
+                frame = 'walk' if pose == 'walk_stride' else 'idle'
+                assert snapshot['hero_frame'] == frame
+                path = SHOTS / f'hero-{pose}-{"right" if facing == 1 else "left"}-{dimensions[0]}x{dimensions[1]}.png'
+                raw = page.screenshot(path=str(path))
+                image = Image.open(io.BytesIO(raw)).convert('RGB')
+                fx, fy, fw, fh = snapshot['field']
+                cell = fw / snapshot['columns']
+                scale = page.locator('canvas').bounding_box()['width'] / snapshot['viewport'][0]
+                px, py = snapshot['player']
+                left, top = round((fx+(px-.5)*cell)*scale), round((fy+(py-.1)*cell)*scale)
+                right, bottom = round((fx+(px+1.5)*cell)*scale), round((fy+(py+1)*cell)*scale)
+                points = [(x,y) for y in range(top,bottom) for x in range(left,right) if image.getpixel((x,y)) == marker]
+                assert points, ('Torso marker was not rendered', dimensions, pose, facing)
+                xs, ys = zip(*points)
+                center = (min(xs)+max(xs)+1)/2
+                expected_center = (fx+(px+snapshot['player_size'][0]/2)*cell)*scale
+                crop_hash = hashlib.sha256(image.crop((left,top,right,bottom)).tobytes()).hexdigest()
+                poses.append({'pose':pose,'facing':facing,'frame':frame,'player':snapshot['player'],
+                              'torso_center_x':center,'marker_bounds':[min(xs),min(ys),max(xs)+1,max(ys)+1],
+                              'expected_center_x':expected_center,'crop_sha256':crop_hash,'crop_bounds':[left,top,right,bottom],
+                              'screenshot':str(path.relative_to(ROOT))})
+                assert abs(center-expected_center) <= max(1,cell*scale/24), ('Torso is not centered on the collision body', dimensions, pose, facing, center, expected_center)
+        fixed_player = poses[0]['player']
+        for sample in poses:
+            assert sample['player'] == fixed_player, 'Direction or animation changed the fixture collision position'
+            assert sample['marker_bounds'][1::2] == poses[0]['marker_bounds'][1::2], 'Turning or animation moved the torso vertically'
+            if abs(sample['torso_center_x']-poses[0]['torso_center_x']) > 1:
+                failures.append({'viewport':dimensions, 'pose':sample['pose'], 'facing':sample['facing'],
+                                 'drift_pixels':sample['torso_center_x']-poses[0]['torso_center_x']})
+        for facing in [1,-1]:
+            samples = {sample['pose']:sample for sample in poses if sample['facing'] == facing}
+            assert samples['idle']['crop_sha256'] != samples['walk_stride']['crop_sha256'], 'Walking did not render its second animation frame'
+            assert samples['idle']['crop_sha256'] == samples['walk_recover']['crop_sha256'], 'Walking recovery did not return to the centered idle frame'
+        assert not errors, errors
+        checks.append({'viewport':list(dimensions),'alpha':alpha,'poses':poses})
+        print('SPRITE_POSES', json.dumps(checks[-1]), flush=True)
+        context.close()
+    assert not failures, ('Turning or animation displaced the rendered torso', failures)
+    for check in checks:
+        check['comparison'] = sprite_comparison(browser, check)
+    return checks
+
+
 def menu_layouts(browser):
     context = browser.new_context(viewport={'width':390, 'height':844}, has_touch=True, device_scale_factor=1)
     page = context.new_page()
@@ -216,6 +324,12 @@ try:
         browser = p.chromium.launch(executable_path=os.environ.get('CHROMIUM_BIN', '/usr/bin/chromium'),
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
+        sprites = sprite_poses(browser)
+        if args.sprites_only:
+            (BUILD/'sprite-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'renderer':'SwiftShader',
+                'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),'checks':sprites},indent=2)+'\n')
+            browser.close()
+            raise SystemExit(0)
         menus = menu_layouts(browser)
         for touch, dimensions in [(False, (1280, 720)), (True, (390, 844)), (True, (320, 568))]:
             context = browser.new_context(viewport={'width': dimensions[0], 'height': dimensions[1]},
@@ -362,7 +476,7 @@ try:
             results.append(result)
             print(json.dumps(result), flush=True)
             context.close()
-        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'menu_layouts':menus,
+        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'menu_layouts':menus, 'sprite_poses':sprites,
                   'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
                   'page_errors':all_errors,'failed_requests':all_failed_requests,'checks':results}
         (BUILD/'web-check.json').write_text(json.dumps(report,indent=2)+'\n')

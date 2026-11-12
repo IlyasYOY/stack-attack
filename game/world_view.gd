@@ -120,6 +120,10 @@ func _draw_scenery() -> void:
 		draw_rect(Rect2(x, y, 3, 3), Color(0.8, 0.87, 0.55, 0.18 + 0.1 * sin(clock * 2 + index)))
 
 
+func hero_frame() -> String:
+	return "walk" if absf(axis) > 0.1 and int(clock * 9) % 2 == 0 and model.grounded else "idle"
+
+
 func _draw_warehouse() -> void:
 	var outer := field.grow(8)
 	draw_rect(outer.grow(4), Color("10232b"))
@@ -157,10 +161,11 @@ func _draw_warehouse() -> void:
 				tint = Color(1.8, 1.6, 1.1, 1.0)
 		draw_texture(crate_textures[int(crate.color) % 3], position, tint)
 	var hero_position := Vector2(roundf(model.player.x * 24), roundf(model.player.y * 24))
-	var texture := hero_walk if absf(axis) > 0.1 and int(clock * 9) % 2 == 0 and model.grounded else hero_idle
+	var texture := hero_walk if hero_frame() == "walk" else hero_idle
 	var hero_rect := Rect2(hero_position, Vector2(14, 22))
 	if model.facing < 0:
-		hero_rect.position.x += 14
+		# Negative width mirrors UVs inside the same canvas; it does not move its origin.
+		# Keep the full 14 px canvas: the torso axis is x=7 in both animation frames.
 		hero_rect.size.x = -14
 	draw_texture_rect(texture, hero_rect, false)
 	for particle in particles:

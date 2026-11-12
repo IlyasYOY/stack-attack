@@ -16,6 +16,7 @@
 | NDK | r29 / 29.0.14206865 |
 | CMake | пакет 3.10.2.4988404, executable 3.10.2 |
 | Chromium / Python Playwright | 156.0.8078.79 / 1.62.0 |
+| Pillow | 13.0.0 (ассеты и анализ скриншотов) |
 
 В каждом новом shell выполнять `source /workspace/setup-stack/env.sh`. Без активации `java` выбирает системную Java 21, а `javac`, `adb` и `sdkmanager` не доступны в PATH. Значения JAVA_HOME/ANDROID_HOME сами по себе не заменяют активацию PATH.
 
@@ -50,7 +51,7 @@ CI создаёт новый временный тестовый ключ на �
 
 Godot читает `GODOT_ANDROID_KEYSTORE_DEBUG_PATH`, `GODOT_ANDROID_KEYSTORE_DEBUG_USER` и `GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD`. Не запускать экспорт с `--verbose` или shell tracing: инструменты могут показать debug credentials. Для повторной установки с сохранением данных нужен тот же ключ и package. Хранение ключа вне Git означает, что после потери облачного snapshot нужно восстановить приватные signing-файлы из отдельно организованной владельцем копии либо удалить прежний тест перед установкой с новым ключом.
 
-APK: `org.ilyasyoy.stackattack.techtest`, versionCode 5, versionName 0.2.3-prototype, min API 24, target/compile API 36, arm64-v8a, `debuggable`. Другие ABI пока не включены. Датчик разрешает портретную и альбомную ориентации; системные панели оставлены видимыми. Для проверки на телефоне: установить APK, пройти меню → партия → пауза/проигрыш → повтор/меню, проверить кнопки и поворот, звук, вибрацию и сохранение. При последующих тестовых версиях versionCode нужно увеличивать.
+APK: `org.ilyasyoy.stackattack.techtest`, versionCode 6, versionName 0.2.4-prototype, min API 24, target/compile API 36, arm64-v8a, `debuggable`. Другие ABI пока не включены. Датчик разрешает портретную и альбомную ориентации; системные панели оставлены видимыми. Для проверки на телефоне: установить APK, пройти меню → партия → пауза/проигрыш → повтор/меню, проверить кнопки и поворот, звук, вибрацию и сохранение. При последующих тестовых версиях versionCode нужно увеличивать.
 
 ## Подтверждения и границы
 
