@@ -129,6 +129,7 @@ try:
             response = page.goto(URL)
             assert response.status == 200
             wait_screen(page, 'menu')
+            assert state(page)['missing_menu_glyphs'] == '', ('Menu font is missing glyphs', state(page)['missing_menu_glyphs'])
             menu_shot = screenshot(page, f'menu-{dimensions[0]}x{dimensions[1]}.png')
             button(page, 'play', touch)
             wait_screen(page, 'playing')
@@ -253,7 +254,7 @@ try:
             all_failed_requests.extend(failed)
             result = {'viewport':list(dimensions), 'rotated':list(other),
                       'input':'multitouch' if touch else 'keyboard + mouse',
-                      'pause':'PASS', 'line_chain':'PASS', 'both_losses':'PASS', 'restart':'PASS',
+                      'menu_glyphs':'PASS', 'pause':'PASS', 'line_chain':'PASS', 'both_losses':'PASS', 'restart':'PASS',
                       'settings_and_records_reload':'PASS', 'muted_rms':silent_rms, 'audible_rms':audible_rms, 'effects_rms':max(effect_samples),
                       'screenshots':[menu_shot,game_shot]}
             results.append(result)

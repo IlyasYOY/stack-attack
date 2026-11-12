@@ -106,14 +106,14 @@ func _show_screen(value: String) -> void:
 	var content := _make_panel()
 	match screen:
 		"menu":
-			panel_height = 420
+			panel_height = 460 if size.y >= 440 else 420
 			_heading(content, "STACK ATTACK", "НОЧНАЯ СМЕНА", 32)
 			_text(content, "Сдвигай ящики. Собирай нижний ряд.\nБереги голову.", 14 if size.y < 440 else 16)
 			_button(content, "Играть", "play", _start_game)
 			_button(content, "Рекорды", "records", func(): _show_screen("records"))
 			_button(content, "Настройки", "settings", func(): _show_screen("settings"))
 			if size.y >= 440:
-				_text(content, "← →  движение   ·   ПРОБЕЛ  прыжок\nНа телефоне — экранные кнопки", 12, Color("9eafa5"))
+				_text(content, "Стрелки: движение · Пробел: прыжок\nНа телефоне: экранные кнопки", 12, Color("9eafa5"))
 		"paused":
 			panel_height = 300
 			_heading(content, "Пауза", "ВЫДОХНИ. СКЛАД ПОДОЖДЁТ.")
@@ -402,12 +402,24 @@ func _publish_qa() -> void:
 		"layout": "landscape" if size.x > size.y else "portrait", "viewport": [size.x, size.y],
 		"field": [world.field.position.x, world.field.position.y, world.field.size.x, world.field.size.y],
 		"buttons": rects, "sliders": slider_rects, "controls": input_rects,
+		"missing_menu_glyphs": _missing_menu_glyphs(),
 		"profile": {"music": profile.music, "effects": profile.effects,
 			"records": profile.records, "vibration_visible": OS.has_feature("android")},
 		"audio": {"music_playing": sound.music_player.playing, "music_position": sound.music_player.get_playback_position(), "stream_format": sound.music_player.stream.format, "loop_end": sound.music_player.stream.loop_end, "unlocked": sound.unlocked,
 			"music_muted": AudioServer.is_bus_mute(AudioServer.get_bus_index("Music")),
 			"effects_muted": AudioServer.is_bus_mute(AudioServer.get_bus_index("Effects"))}}
 	JavaScriptBridge.eval("window.stackAttackState = " + JSON.stringify(status))
+
+
+func _missing_menu_glyphs() -> String:
+	var missing := ""
+	if screen == "menu":
+		for label in ui.find_children("*", "Label", true, false):
+			var font: Font = label.get_theme_font("font")
+			for character in label.text:
+				if character.unicode_at(0) > 32 and not font.has_char(character.unicode_at(0)) and not missing.contains(character):
+					missing += character
+	return missing
 
 
 func _qa_command() -> void:
