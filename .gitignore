@@ -11,9 +11,12 @@ exports/
 *.keystore
 *.p12
 .env
+*.env
 .env.*
 !.env.example
 export_credentials.cfg
+__pycache__/
+*.pyc
 # OS / editor
 .DS_Store
 .idea/
