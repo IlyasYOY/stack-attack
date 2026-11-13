@@ -150,9 +150,7 @@ func _show_screen(value: String) -> void:
 			_button(content, "Главное меню", "home", func(): _show_screen("menu"))
 		"over":
 			_heading(content, "Смена окончена")
-			_text(content, "СКЛАД ЗАПОЛНЕН" if model.loss_reason == "overflow" else "ОСТОРОЖНО, ЯЩИКИ!", 14, MINT)
 			_text(content, "Счёт: %d" % model.score, 32 if _compact_panel() else 44, GOLD)
-			_text(content, "Очищено рядов: %d" % model.lines, 16)
 			var actions: Control = content
 			if _compact_panel():
 				actions = HBoxContainer.new()
@@ -501,6 +499,7 @@ func _publish_qa() -> void:
 		var rect: Rect2 = world.controls[id]
 		input_rects[id] = [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
 	var status := {"ready": true, "screen": screen, "score": model.score,
+		"lines": model.lines, "loss_reason": model.loss_reason,
 		"session": session, "ticks": model.ticks, "state": model.state,
 		"player": [model.player.x, model.player.y], "grounded": model.grounded,
 		"player_size": [TUNING.player_width, TUNING.player_height],

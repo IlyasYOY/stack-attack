@@ -358,6 +358,16 @@ func app_flow() -> void:
 			var focused := root.gui_get_focus_owner()
 			check(focused != null and app.panel.is_ancestor_of(focused), "Focus must start inside each menu panel")
 	app.profile.records = saved_records
+	for reason in ["crushed", "overflow"]:
+		app.model.loss_reason = reason
+		app.model.score = 200
+		app.model.lines = 2
+		app._show_screen("over")
+		var labels: Array[String] = []
+		for label in app.panel.find_children("*", "Label", true, false):
+			labels.append(label.text)
+		check(labels == ["Смена окончена", "Счёт: 200"], "Game over must display only its unchanged title and final score for either loss")
+		check(app.model.loss_reason == reason and app.model.lines == 2, "Hiding result details must preserve the model's reason and line count")
 	app._show_screen("menu")
 	app._start_game()
 	app._pause()

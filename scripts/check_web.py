@@ -18,6 +18,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 group = parser.add_mutually_exclusive_group()
 group.add_argument('--sprites-only', action='store_true', help='Run only frozen-pose rendered sprite regressions')
 group.add_argument('--ui-only', action='store_true', help='Run demo isolation and vibration UI regressions only')
+group.add_argument('--game-over-only', action='store_true', help='Run score-only result screen regressions and capture screenshots')
 args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -277,6 +278,47 @@ def sprite_poses(browser):
     return checks
 
 
+def score_only_result(page):
+    snapshot = state(page)
+    assert snapshot['screen'] == 'over'
+    labels = [item['text'] for item in snapshot['panel']['items'] if item['kind'] == 'Label']
+    assert labels == ['Смена окончена', f"Счёт: {snapshot['score']}"], ('Unexpected game-over details', labels)
+    assert {'again','home'} <= snapshot['buttons'].keys()
+
+
+def game_over_screens(browser):
+    checks = []
+    for dimensions in [(390,844),(844,390),(768,1004)]:
+        context = browser.new_context(viewport={'width':dimensions[0],'height':dimensions[1]}, has_touch=True, device_scale_factor=1)
+        page = context.new_page()
+        errors = []
+        page.on('pageerror', lambda value: errors.append(str(value)))
+        page.goto(URL)
+        wait_screen(page, 'menu')
+        button(page, 'play', True)
+        wait_screen(page, 'playing')
+        scenario(page, 'chain')
+        page.wait_for_function('window.stackAttackState.score === 200 && window.stackAttackState.state === "playing"')
+        shots = []
+        for reason, fixture in [('crushed','crush'),('overflow','overflow')]:
+            scenario(page, fixture)
+            wait_screen(page, 'over')
+            score_only_result(page)
+            snapshot = state(page)
+            assert snapshot['loss_reason'] == reason
+            assert snapshot['lines'] == (2 if reason == 'crushed' else 0)
+            fixed_panel(page)
+            shots.append(screenshot(page, f'game-over-{reason}-{dimensions[0]}x{dimensions[1]}.png'))
+            button(page, 'again' if reason == 'crushed' else 'home', True)
+            wait_screen(page, 'playing' if reason == 'crushed' else 'menu')
+        assert not errors, errors
+        checks.append({'viewport':list(dimensions),'both_loss_screens':'PASS','model_details_retained':'PASS',
+                       'touch_focus_no_scroll':'PASS','restart_and_home':'PASS','screenshots':shots})
+        context.close()
+    print('GAME_OVER',json.dumps(checks),flush=True)
+    return checks
+
+
 def ui_batch_checks(browser):
     context = browser.new_context(viewport={'width':390,'height':844}, has_touch=True, device_scale_factor=1)
     page = context.new_page()
@@ -422,6 +464,12 @@ try:
         browser = p.chromium.launch(executable_path=os.environ.get('CHROMIUM_BIN', '/usr/bin/chromium'),
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
+        results_over = game_over_screens(browser) if args.game_over_only or not (args.ui_only or args.sprites_only) else []
+        if args.game_over_only:
+            (BUILD/'game-over-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'renderer':'SwiftShader',
+                'checks':results_over,'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest()},indent=2)+'\n')
+            browser.close()
+            raise SystemExit(0)
         ui_batch = ui_batch_checks(browser) if not args.sprites_only else {}
         if args.ui_only:
             (BUILD/'ui-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'checks':ui_batch,
@@ -580,7 +628,7 @@ try:
             results.append(result)
             print(json.dumps(result), flush=True)
             context.close()
-        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch,
+        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,
                   'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
                   'page_errors':all_errors,'failed_requests':all_failed_requests,'checks':results}
         (BUILD/'web-check.json').write_text(json.dumps(report,indent=2)+'\n')
