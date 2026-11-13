@@ -284,6 +284,34 @@ def score_only_result(page):
     labels = [item['text'] for item in snapshot['panel']['items'] if item['kind'] == 'Label']
     assert labels == ['Смена окончена', f"Счёт: {snapshot['score']}"], ('Unexpected game-over details', labels)
     assert {'again','home'} <= snapshot['buttons'].keys()
+    label = next(item for item in snapshot['panel']['items'] if item['name'] == 'result_score')
+    assert label['alignment'] == 1
+    image = Image.open(io.BytesIO(page.screenshot())).convert('RGB')
+    scale = page.locator('canvas').bounding_box()['width']/snapshot['viewport'][0]
+    x,y,w,h = label['rect']
+    bounds = (round(x*scale),round(y*scale),round((x+w)*scale),round((y+h)*scale))
+    points = [(px,py) for py in range(bounds[1],bounds[3]) for px in range(bounds[0],bounds[2])
+              if max(abs(a-b) for a,b in zip(image.getpixel((px,py)),(215,164,90))) <= 5]
+    assert points, 'Score text did not render'
+    center = (min(p[0] for p in points)+max(p[0] for p in points)+1)/2
+    assert abs(center-image.width/2) <= max(3,scale*2), ('Score pixels are not centered',snapshot['score'],center,image.width/2)
+    return center
+
+
+def readable_result_button(page, name):
+    snapshot = state(page)
+    item = next(item for item in snapshot['panel']['items'] if item['name'] == name)
+    for key in ['normal','hover','pressed','hover_pressed','disabled']:
+        assert .7 <= item['styles'][key]['alpha'] <= .9 and item['styles'][key]['border'] == 1
+    image = Image.open(io.BytesIO(page.screenshot())).convert('RGB')
+    scale = page.locator('canvas').bounding_box()['width']/snapshot['viewport'][0]
+    x,y,w,h = item['rect']
+    region = image.crop((round((x+3)*scale),round((y+3)*scale),round((x+w-3)*scale),round((y+h-3)*scale)))
+    raw = region.tobytes()
+    bright = sum(r>150 and g>120 for r,g in zip(raw[0::3],raw[1::3]))
+    assert bright > 20, ('Button text is not visible',name)
+    padding = image.getpixel((round((x+4)*scale),round((y+h/2)*scale)))
+    assert max(padding) < 110, ('Button backing does not protect text from the background',name,padding)
 
 
 def game_over_screens(browser):
@@ -311,9 +339,46 @@ def game_over_screens(browser):
             shots.append(screenshot(page, f'game-over-{reason}-{dimensions[0]}x{dimensions[1]}.png'))
             button(page, 'again' if reason == 'crushed' else 'home', True)
             wait_screen(page, 'playing' if reason == 'crushed' else 'menu')
+        centers = []
+        for score in [0,200,100000000]:
+            page.evaluate('value => window.stackAttackQARequest={scenario:"result_preview",score:value}', score)
+            wait_screen(page, 'over')
+            page.wait_for_function('value => window.stackAttackState.score === value',arg=score)
+            before = state(page)['demo']['ticks']
+            page.wait_for_timeout(220)
+            assert state(page)['demo']['ticks'] > before, 'Readability stress background must actually move'
+            centers.append(score_only_result(page))
+            fixed_panel(page)
+            readable_result_button(page,'again')
+            readable_result_button(page,'home')
+            shots.append(screenshot(page, f'result-centered-{score}-{dimensions[0]}x{dimensions[1]}.png'))
+        for name in ['again','home']:
+            page.evaluate('window.stackAttackQARequest={scenario:"result_preview",score:200}')
+            page.wait_for_function('window.stackAttackState.score === 200')
+            page.wait_for_timeout(180)
+            while state(page)['panel']['focus'] != name:
+                tab(page)
+            readable_result_button(page,name)
+            x,y = point(page,state(page)['buttons'][name])
+            page.mouse.move(x,y)
+            page.wait_for_timeout(180)
+            readable_result_button(page,name)
+            page.mouse.down()
+            page.wait_for_function('name => [1,4].includes(window.stackAttackState.result_button_modes[name])',arg=name)
+            readable_result_button(page,name)
+            shots.append(screenshot(page,f'result-{name}-pressed-{dimensions[0]}x{dimensions[1]}.png'))
+            page.mouse.up()
+            wait_screen(page,'playing' if name == 'again' else 'menu')
+            if name == 'again':
+                assert state(page)['score'] == 0
+                button(page,'pause',True)
+                wait_screen(page,'paused')
+                button(page,'home',True)
+                wait_screen(page,'menu')
         assert not errors, errors
         checks.append({'viewport':list(dimensions),'both_loss_screens':'PASS','model_details_retained':'PASS',
-                       'touch_focus_no_scroll':'PASS','restart_and_home':'PASS','screenshots':shots})
+                       'touch_focus_no_scroll':'PASS','restart_and_home':'PASS','score_pixels_centered':'PASS',
+                       'button_states_readable':'PASS','moving_demo_background':'PASS','score_centers':centers,'screenshots':shots})
         context.close()
     print('GAME_OVER',json.dumps(checks),flush=True)
     return checks

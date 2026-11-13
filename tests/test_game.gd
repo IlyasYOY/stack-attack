@@ -352,7 +352,8 @@ func app_flow() -> void:
 			check(app.panel.find_children("*", "ScrollContainer", true, false).is_empty(), "Menus must not contain a ScrollContainer")
 			for control in app.panel.find_children("*", "Control", true, false):
 				if control is Button:
-					check(is_zero_approx(control.get_theme_stylebox("normal").bg_color.a), "Menu buttons must remain over the live background without backplates")
+					var style: StyleBoxFlat = control.get_theme_stylebox("normal")
+					check(style.bg_color.a >= 0.7 if menu == "over" else is_zero_approx(style.bg_color.a), "Only result actions receive a small readability backing")
 				if control is Label or control.focus_mode == Control.FOCUS_ALL:
 					check(viewport.encloses(control.get_global_rect()), "%s content must remain visible at %s: %s" % [menu, dimensions, control.name])
 			var focused := root.gui_get_focus_owner()
@@ -368,6 +369,22 @@ func app_flow() -> void:
 			labels.append(label.text)
 		check(labels == ["Смена окончена", "Счёт: 200"], "Game over must display only its unchanged title and final score for either loss")
 		check(app.model.loss_reason == reason and app.model.lines == 2, "Hiding result details must preserve the model's reason and line count")
+	for dimensions in [Vector2i(390, 844), Vector2i(844, 390), Vector2i(768, 1004)]:
+		root.size = dimensions
+		for score in [0, 200, 100000000]:
+			app.model.score = score
+			app._show_screen("over")
+			for frame in range(4):
+				await process_frame
+			var label: Label = app.panel.find_child("result_score", true, false)
+			check(label.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER, "Result score must be horizontally centered")
+			check(absf(label.get_global_rect().get_center().x - app.size.x * 0.5) <= 1, "Result score layout must share the viewport's center")
+			var text_width := label.get_theme_font("font").get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, label.get_theme_font_size("font_size")).x
+			check(label.autowrap_mode == TextServer.AUTOWRAP_OFF and text_width <= label.size.x - 4, "Long result scores must fit on one centered line")
+			for id in ["again", "home"]:
+				for state in ["normal", "hover", "pressed", "hover_pressed", "disabled"]:
+					var style: StyleBoxFlat = app.buttons[id].get_theme_stylebox(state)
+					check(style.bg_color.a >= 0.7 and style.bg_color.a <= 0.9 and style.border_width_left == 1, "Result buttons need a subtle backing and thin border in every state")
 	app._show_screen("menu")
 	app._start_game()
 	app._pause()

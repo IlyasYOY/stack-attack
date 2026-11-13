@@ -20,6 +20,7 @@ var qa_timer := 0.0
 var qa_hero_pose := false
 var qa_android_settings := false
 var qa_freeze_demo := false
+var qa_result_demo := false
 const CREAM := Color("f4e3ba")
 const MINT := Color("8dc6ac")
 const GOLD := Color("d7a45a")
@@ -86,6 +87,19 @@ func _make_theme() -> Theme:
 	result.set_constant("separation", "VBoxContainer", 4 if _compact_panel() else 10)
 	result.set_constant("separation", "HBoxContainer", 16)
 	result.set_font_size("font_size", "Button", 18)
+	result.set_type_variation("ResultAction", "Button")
+	for state in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
+		var focused: bool = state == "focus"
+		var fill := Color(0.035, 0.07, 0.10, 0.78 if state in ["normal", "disabled"] else 0.88)
+		var border := Color(0.55, 0.65, 0.63, 0.45)
+		if state in ["pressed", "hover_pressed", "focus"]:
+			border = GOLD
+		elif state == "hover":
+			border = MINT
+		var style := _make_style(Color.TRANSPARENT if focused else fill, border, 8 if _compact_panel() else 12)
+		style.set_border_width_all(1)
+		style.set_corner_radius_all(4)
+		result.set_stylebox(state, "ResultAction", style)
 	var rail := _make_style(Color("243d4a"), Color("617b7b"), 3)
 	result.set_stylebox("slider", "HSlider", rail)
 	result.set_stylebox("grabber_area", "HSlider", _make_style(Color("a38459"), GOLD, 3))
@@ -122,6 +136,8 @@ func _clear_ui() -> void:
 
 
 func _show_screen(value: String) -> void:
+	if value != "over":
+		qa_result_demo = false
 	var previous_focus := get_viewport().gui_get_focus_owner()
 	var focus_name := str(previous_focus.name) if previous_focus != null else ""
 	screen = value
@@ -150,13 +166,13 @@ func _show_screen(value: String) -> void:
 			_button(content, "Главное меню", "home", func(): _show_screen("menu"))
 		"over":
 			_heading(content, "Смена окончена")
-			_text(content, "Счёт: %d" % model.score, 32 if _compact_panel() else 44, GOLD)
+			_result_score(content)
 			var actions: Control = content
 			if _compact_panel():
 				actions = HBoxContainer.new()
 				content.add_child(actions)
-			_button(actions, "Играть снова", "again", _start_game)
-			_button(actions, "Главное меню", "home", func(): _show_screen("menu"))
+			_button(actions, "Играть снова", "again", _start_game).theme_type_variation = "ResultAction"
+			_button(actions, "Главное меню", "home", func(): _show_screen("menu")).theme_type_variation = "ResultAction"
 			if not profile.last_error.is_empty():
 				_text(content, profile.last_error, 12)
 		"records":
@@ -216,8 +232,25 @@ func _make_panel() -> VBoxContainer:
 
 func _position_panel() -> void:
 	if panel != null:
-		panel.size = Vector2(minf(720 if _wide_panel() and screen != "menu" else 440, size.x - 32), panel.get_combined_minimum_size().y)
+		panel.size = Vector2(_panel_width(), panel.get_combined_minimum_size().y)
 		_center_panel()
+
+
+func _panel_width() -> float:
+	return minf(720 if _wide_panel() and screen != "menu" else 440, size.x - 32)
+
+
+func _result_score(parent: Control) -> void:
+	var label := _text(parent, "Счёт: %d" % model.score, 32 if _compact_panel() else 44, GOLD)
+	label.name = "result_score"
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	var available := _panel_width() - panel.get_theme_stylebox("panel").get_minimum_size().x - 8
+	var font := label.get_theme_font("font")
+	var font_size := label.get_theme_font_size("font_size")
+	while font_size > 20 and font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > available:
+		font_size -= 1
+	label.add_theme_font_size_override("font_size", font_size)
 
 
 func _center_panel() -> void:
@@ -443,7 +476,7 @@ func _advance_game(delta: float) -> void:
 
 
 func _background_demo() -> bool:
-	return screen in ["menu", "settings", "records"]
+	return screen in ["menu", "settings", "records"] or (qa_enabled and qa_result_demo and screen == "over")
 
 
 func _advance_demo(delta: float) -> void:
@@ -481,6 +514,10 @@ func _notification(what: int) -> void:
 
 
 func _publish_qa() -> void:
+	var result_modes := {}
+	if screen == "over":
+		for id in ["again", "home"]:
+			result_modes[id] = buttons[id].get_draw_mode()
 	var vibration_styles := {}
 	if buttons.has("vibration"):
 		for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
@@ -510,6 +547,7 @@ func _publish_qa() -> void:
 		"buttons": rects, "sliders": slider_rects, "controls": input_rects,
 		"missing_menu_glyphs": _missing_menu_glyphs(),
 		"panel": _panel_snapshot(),
+		"result_button_modes": result_modes,
 		"vibration_styles": vibration_styles,
 		"demo": {"active": _background_demo(), "rounds": demo.rounds, "ticks": demo.total_ticks,
 			"jumps": demo.jumps, "drops": demo.drops, "lines": demo.lines, "losses": demo.losses,
@@ -544,11 +582,23 @@ func _panel_snapshot() -> Dictionary:
 			var bounds: Rect2 = control.get_global_rect()
 			items.append({"name": str(control.name), "kind": control.get_class(), "rect": [bounds.position.x, bounds.position.y, bounds.size.x, bounds.size.y],
 				"text": str(control.text) if control is Label or control is Button else "",
+				"alignment": control.horizontal_alignment if control is Label else -1,
+				"font_size": control.get_theme_font_size("font_size") if control is Label else 0,
+				"styles": _button_style_snapshot(control),
 				"focusable": control.focus_mode == Control.FOCUS_ALL})
 	var focused := get_viewport().gui_get_focus_owner()
 	return {"rect": [rect.position.x, rect.position.y, rect.size.x, rect.size.y], "items": items,
 		"scroll_containers": panel.find_children("*", "ScrollContainer", true, false).size(),
 		"focus": str(focused.name) if focused != null else ""}
+
+
+func _button_style_snapshot(control: Control) -> Dictionary:
+	var styles := {}
+	if control is Button:
+		for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
+			var style: StyleBoxFlat = control.get_theme_stylebox(state)
+			styles[state] = {"alpha": style.bg_color.a, "border": style.border_width_left}
+	return styles
 
 
 func _qa_command() -> void:
@@ -559,6 +609,12 @@ func _qa_command() -> void:
 	JavaScriptBridge.eval("window.stackAttackQARequest = null")
 	var request: Variant = JSON.parse_string(str(raw))
 	if not request is Dictionary:
+		return
+	if str(request.get("scenario", "")) == "result_preview" and screen in ["menu", "over"]:
+		model.score = clampi(int(request.get("score", 0)), 0, 100000000)
+		model.state = "over"
+		qa_result_demo = true
+		_show_screen("over")
 		return
 	if str(request.get("scenario", "")) == "android_settings" and _background_demo():
 		qa_android_settings = true
