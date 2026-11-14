@@ -18,7 +18,7 @@ if git("status", "--porcelain"):
     raise SystemExit("Commit source changes before packaging the tested build.")
 commit = git("rev-parse", "HEAD")
 build = root / "build"
-apk = build / "android/stack-attack-tech-debug.apk"
+apk = build / "android/stack-attack-prototype-debug.apk"
 web = build / "web"
 for required in [apk, web / "index.html", web / "index.pck", web / "index.wasm", build / "web-check.json"]:
     if not required.is_file():
@@ -37,7 +37,7 @@ if (web_check["status"] != "PASS" or web_check["pck_sha256"] !=
     raise SystemExit("Check the current Web export before packaging.")
 destination = build / "deliverables"
 destination.mkdir(exist_ok=True)
-prefix = f"stack-attack-tech-{commit[:12]}"
+prefix = f"stack-attack-prototype-{commit[:12]}"
 copied_apk = destination / f"{prefix}-debug.apk"
 shutil.copy2(apk, copied_apk)
 archive = destination / f"{prefix}-web.zip"
@@ -46,7 +46,7 @@ with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
         if file.is_file():
             output.write(file, "web/" + file.name)
     output.writestr("README.txt", (
-        "Stack Attack: technical test, no gameplay or final art.\n"
+        "Stack Attack: first playable prototype.\n"
         f"Source commit: {commit}\n"
         "Extract, then: python3 -m http.server 8765 --directory web\n"
         "Open http://127.0.0.1:8765 (not file://). Requires WebGL 2.\n"
@@ -55,9 +55,9 @@ with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
 manifest = {
     "commit": commit,
     "godot": (root / ".godot-version").read_text().strip(),
-    "android": {"package": "org.ilyasyoy.stackattack.techtest", "version_code": 1,
+    "android": {"package": "org.ilyasyoy.stackattack.techtest", "version_code": 10,
                 "min_sdk": 24, "target_sdk": 36, "abi": "arm64-v8a", "signing": "test debug"},
-    "phone_run": "not tested",
+    "phone_run": "prototype not tested; earlier technical APK accepted by owner",
     "web_check": web_check,
     "files": [{"name": file.name, "bytes": file.stat().st_size,
                "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}
