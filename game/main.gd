@@ -64,6 +64,7 @@ func _make_style(color: Color, border: Color, margin: int = 12) -> StyleBoxFlat:
 
 func _make_theme() -> Theme:
 	var result := Theme.new()
+	result.default_font = preload("res://art/workshop_font.fnt")
 	result.default_font_size = 17
 	result.set_color("font_color", "Label", CREAM)
 	result.set_color("font_color", "Button", CREAM)
@@ -82,7 +83,7 @@ func _make_theme() -> Theme:
 	# Every action inherits the same game-over styling, including the Android toggle.
 	for state in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
 		var focused: bool = state == "focus"
-		var fill := Color(0.035, 0.07, 0.10, 0.78 if state in ["normal", "disabled"] else 0.88)
+		var fill := Color(0.055, 0.13, 0.16, 0.86 if state in ["normal", "disabled"] else 0.90)
 		var border := Color(0.55, 0.65, 0.63, 0.45)
 		if state in ["pressed", "hover_pressed", "focus"]:
 			border = GOLD
@@ -91,6 +92,9 @@ func _make_theme() -> Theme:
 		var style := _make_style(Color.TRANSPARENT if focused else fill, border, 8 if _compact_panel() else 12)
 		style.set_border_width_all(1)
 		style.set_corner_radius_all(4)
+		style.shadow_color = Color(0.02, 0.06, 0.08, 0.35)
+		style.shadow_size = 0 if focused else 2
+		style.shadow_offset = Vector2(0, 2)
 		result.set_stylebox(state, "Button", style)
 	var rail := _make_style(Color("243d4a"), Color("617b7b"), 3)
 	result.set_stylebox("slider", "HSlider", rail)
@@ -160,7 +164,7 @@ func _show_screen(value: String) -> void:
 			_heading(content, "Смена окончена")
 			_result_score(content)
 			var actions: Control = content
-			if _compact_panel():
+			if _compact_panel() and _wide_panel():
 				actions = HBoxContainer.new()
 				content.add_child(actions)
 			_button(actions, "Играть снова", "again", _start_game)
@@ -294,8 +298,16 @@ func _button(parent: Control, title: String, id: String, action: Callable) -> Bu
 		sound.effect("click")
 		action.call_deferred())
 	parent.add_child(button)
+	button.draw.connect(_workshop_trim.bind(button))
 	buttons[id] = button
 	return button
+
+
+func _workshop_trim(control: Control) -> void:
+	for at in [Vector2(6, 6), Vector2(control.size.x - 7, 6), Vector2(6, control.size.y - 7), control.size - Vector2(7, 7)]:
+		control.draw_rect(Rect2(at, Vector2(3, 3)), Color("132f3b"))
+		control.draw_rect(Rect2(at, Vector2(2, 2)), Color("aa9875"))
+		control.draw_rect(Rect2(at, Vector2.ONE), Color("e2d4af"))
 
 
 func _slider(parent: Control, title: String, id: String, value: float) -> void:
@@ -333,23 +345,49 @@ func _vibration_option(parent: Control) -> void:
 		if enabled:
 			sound.preview_vibration())
 	parent.add_child(vibration)
+	vibration.draw.connect(_workshop_trim.bind(vibration))
 	buttons["vibration"] = vibration
 
 func _build_hud() -> void:
+	var plate := Panel.new()
+	plate.position = Vector2(14, 10)
+	plate.size = Vector2(124, 46)
+	plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	plate.add_theme_stylebox_override("panel", theme.get_stylebox("normal", "Button"))
+	ui.add_child(plate)
+	plate.draw.connect(_workshop_trim.bind(plate))
 	score_label = Label.new()
-	score_label.position = Vector2(18, 12)
-	score_label.add_theme_font_size_override("font_size", 25)
-	score_label.text = "%06d" % model.score
+	score_label.position = Vector2(24, 14)
+	score_label.size = Vector2(104, 36)
+	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	score_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_update_hud_score()
 	ui.add_child(score_label)
 	var pause := _button(ui, "II", "pause", _pause)
+	pause.text = ""
+	pause.icon = preload("res://art/pause_icon.png")
+	pause.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	pause.expand_icon = true
 	pause.focus_mode = Control.FOCUS_NONE
 	pause.size = Vector2(48, 48)
 	pause.custom_minimum_size.y = 48
 	pause.position = Vector2(size.x - 66, 10)
 
 
+func _update_hud_score() -> void:
+	var value := "%06d" % model.score
+	if score_label.text == value:
+		return
+	score_label.text = value
+	var font_size := 25
+	while font_size > 12 and theme.default_font.get_string_size(score_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > 100:
+		font_size -= 1
+	score_label.add_theme_font_size_override("font_size", font_size)
+
+
 func _start_game() -> void:
 	qa_hero_pose = false
+	world.cosmetic_magnet = true
 	session += 1
 	model = StackSimulation.new(TUNING, Time.get_ticks_usec())
 	world.model = model
@@ -464,7 +502,7 @@ func _advance_game(delta: float) -> void:
 				sound.effect("over")
 				_end_game()
 	if score_label != null:
-		score_label.text = "%06d" % model.score
+		_update_hud_score()
 
 
 func _background_demo() -> bool:
@@ -531,7 +569,7 @@ func _publish_qa() -> void:
 		"session": session, "ticks": model.ticks, "state": model.state,
 		"player": [model.player.x, model.player.y], "grounded": model.grounded,
 		"player_size": [TUNING.player_width, TUNING.player_height],
-		"facing": model.facing, "hero_pose": qa_hero_pose, "hero_frame": world.hero_frame(),
+		"facing": model.facing, "hero_pose": qa_hero_pose, "hero_frame": world.hero_frame(), "cosmetic_magnet": world.cosmetic_magnet,
 		"columns": model.tuning.columns, "rows": model.tuning.rows, "crates": model.crates.size(), "first_crate_x": model.crates[0].x if not model.crates.is_empty() else -1,
 		"layout": "landscape" if size.x > size.y else "portrait", "viewport": [size.x, size.y],
 		"field": [world.field.position.x, world.field.position.y, world.field.size.x, world.field.size.y],
@@ -629,15 +667,18 @@ func _qa_command() -> void:
 		return
 	if str(request.get("scenario", "")) == "hero_pose":
 		var pose := str(request.get("pose", "idle"))
-		if pose not in ["idle", "walk_stride", "walk_recover"]:
+		if pose not in ["idle", "walk_stride", "walk_recover", "jump", "push"]:
 			return
 		qa_hero_pose = true
 		model.crates.clear()
 		model.player = Vector2(4.3, TUNING.rows - TUNING.player_height)
 		model.player_velocity = Vector2.ZERO
-		model.grounded = true
+		model.grounded = pose != "jump"
 		model.facing = -1 if int(request.get("facing", 1)) < 0 else 1
-		world.axis = 0.0 if pose == "idle" else float(model.facing)
+		world.axis = 0.0 if pose in ["idle", "jump"] else float(model.facing)
+		world.cosmetic_magnet = bool(request.get("magnet", true))
+		if pose == "push":
+			model.add_crate(model.player.x + TUNING.player_width if model.facing > 0 else model.player.x - 1, float(TUNING.rows - 1))
 		world.clock = 0.15 if pose == "walk_recover" else 0.0
 		world.caption_life = 0.0
 		world.particles.clear()

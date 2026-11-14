@@ -34,6 +34,7 @@ python3 scripts/create_debug_key.py /workspace/stack-attack-local/debug-signing
 source /workspace/stack-attack-local/debug-signing/debug-signing.env
 bash scripts/export.sh all
 python3 scripts/check_web.py
+python3 scripts/package_showcase.py
 ```
 
 - `check.sh`: импорт, GDScript-проверки правил игры, экранов, управления, локального сохранения и смены ориентации; отдельный headless-запуск. Геометрия цельных меню проверяется также на Fold-размерах и с Android-строкой вибрации; все элементы должны оставаться в кадре без ScrollContainer. Таймаут и проверка ERROR в логах не позволяют принять зависание или ошибку импорта за успех.
@@ -51,7 +52,7 @@ CI создаёт новый временный тестовый ключ на �
 
 Godot читает `GODOT_ANDROID_KEYSTORE_DEBUG_PATH`, `GODOT_ANDROID_KEYSTORE_DEBUG_USER` и `GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD`. Не запускать экспорт с `--verbose` или shell tracing: инструменты могут показать debug credentials. Для повторной установки с сохранением данных нужен тот же ключ и package. Хранение ключа вне Git означает, что после потери облачного snapshot нужно восстановить приватные signing-файлы из отдельно организованной владельцем копии либо удалить прежний тест перед установкой с новым ключом.
 
-APK: `org.ilyasyoy.stackattack.techtest`, versionCode 10, versionName 0.2.8-prototype, min API 24, target/compile API 36, arm64-v8a, `debuggable`. Другие ABI пока не включены. Датчик разрешает портретную и альбомную ориентации; системные панели оставлены видимыми. Для проверки на телефоне: установить APK, пройти меню → партия → пауза/проигрыш → повтор/меню, проверить кнопки и поворот, звук, вибрацию и сохранение. При последующих тестовых версиях versionCode нужно увеличивать.
+APK: `org.ilyasyoy.stackattack.techtest`, versionCode 11, versionName 0.3.0-workshop-prototype, min API 24, target/compile API 36, arm64-v8a, `debuggable`. Другие ABI пока не включены. Датчик разрешает портретную и альбомную ориентации; системные панели оставлены видимыми. Для проверки на телефоне: установить APK, пройти меню → партия → пауза/проигрыш → повтор/меню, проверить кнопки и поворот, звук, вибрацию и сохранение. При последующих тестовых версиях versionCode нужно увеличивать.
 
 ## Подтверждения и границы
 

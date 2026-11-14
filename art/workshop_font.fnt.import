@@ -1,0 +1,17 @@
+[remap]
+
+importer="font_data_bmfont"
+type="FontFile"
+uid="uid://crlj34cs61pmv"
+path="res://.godot/imported/workshop_font.fnt-077cf575ea5c12b3d45878d1484e0e17.fontdata"
+
+[deps]
+
+source_file="res://art/workshop_font.fnt"
+dest_files=["res://.godot/imported/workshop_font.fnt-077cf575ea5c12b3d45878d1484e0e17.fontdata"]
+
+[params]
+
+fallbacks=[]
+compress=true
+scaling_mode=2

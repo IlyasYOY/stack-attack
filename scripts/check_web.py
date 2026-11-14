@@ -16,6 +16,7 @@ from PIL import Image
 
 parser = argparse.ArgumentParser(description=__doc__)
 group = parser.add_mutually_exclusive_group()
+group.add_argument('--workshop-only', action='store_true', help='Capture and validate the workshop visual slice')
 group.add_argument('--sprites-only', action='store_true', help='Run only frozen-pose rendered sprite regressions')
 group.add_argument('--ui-only', action='store_true', help='Run demo isolation and vibration UI regressions only')
 group.add_argument('--game-over-only', action='store_true', help='Run score-only result screen regressions and capture screenshots')
@@ -183,9 +184,9 @@ def sprite_comparison(browser, check):
     width, height = check['viewport']
     commit = json.loads((BUILD/'web/build-source.json').read_text())['commit']
     cells = []
-    for pose, label in [('idle','Покой'), ('walk_stride','Шаг'), ('walk_recover','Возврат')]:
+    for pose, label in [('idle','Покой'), ('walk_stride','Шаг'), ('walk_recover','Возврат'), ('jump','Прыжок'), ('push','Толкание')]:
         for facing, direction in [(1,'Вправо'), (-1,'Влево')]:
-            sample = next(p for p in check['poses'] if p['pose'] == pose and p['facing'] == facing)
+            sample = next(p for p in check['poses'] if p['pose'] == pose and p['facing'] == facing and p['magnet'])
             left, top, right, bottom = sample['crop_bounds']
             raw = (ROOT/sample['screenshot']).read_bytes()
             src = 'data:image/png;base64,' + base64.b64encode(raw).decode()
@@ -211,13 +212,13 @@ def sprite_poses(browser):
     checks = []
     failures = []
     source = Image.open(ROOT / 'art/hero_idle.png').convert('RGBA')
-    marker = source.getpixel((3, 9))[:3]  # Symmetric scarf band, fixed to the torso in both frames.
+    marker = source.getpixel((9, 23))[:3]  # Symmetric scarf band, fixed to the torso in both frames.
     alpha = {}
-    for frame in ['idle', 'walk']:
+    for frame in ['idle','walk','jump','push','idle_bare','walk_bare','jump_bare','push_bare']:
         with Image.open(ROOT / f'art/hero_{frame}.png') as image:
             alpha[frame] = {'canvas':image.size, 'used':image.getbbox()}
-            assert image.size == (14,22) and image.getbbox() == (0,0,13,22), 'Sprite canvas/padding changed; recheck its reflection axis'
-            band = [x for y in [9,10] for x in range(image.width) if image.getpixel((x,y)) == (*marker,255)]
+            assert image.size == (32,48) and image.getpixel((0,0))[3] == 0, 'Workshop sprite canvas/padding changed; recheck reflection axis'
+            band = [x for y in [23,24] for x in range(image.width) if image.getpixel((x,y)) == (*marker,255)]
             assert band and (min(band)+max(band)+1)/2 == image.width/2, 'Torso band is not centered in the sprite canvas'
     for dimensions in [(390,844), (844,390)]:
         context = browser.new_context(viewport={'width':dimensions[0], 'height':dimensions[1]}, device_scale_factor=1)
@@ -229,15 +230,15 @@ def sprite_poses(browser):
         button(page, 'play')
         wait_screen(page, 'playing')
         poses = []
-        for pose in ['idle', 'walk_stride', 'walk_recover']:
+        for pose,magnet in [(p,m) for m in [True,False] for p in ['idle','walk_stride','walk_recover','jump','push']]:
             for facing in [1, -1]:
-                page.evaluate('value => window.stackAttackQARequest = value', {'scenario':'hero_pose', 'pose':pose, 'facing':facing})
+                page.evaluate('value => window.stackAttackQARequest = value', {'scenario':'hero_pose', 'pose':pose, 'facing':facing, 'magnet':magnet})
                 page.wait_for_function('value => window.stackAttackState.hero_pose && window.stackAttackState.facing === value', arg=facing)
                 page.wait_for_timeout(180)
                 snapshot = state(page)
-                frame = 'walk' if pose == 'walk_stride' else 'idle'
+                frame = {'walk_stride':'walk','jump':'jump','push':'push'}.get(pose,'idle')
                 assert snapshot['hero_frame'] == frame
-                path = SHOTS / f'hero-{pose}-{"right" if facing == 1 else "left"}-{dimensions[0]}x{dimensions[1]}.png'
+                path = SHOTS / f'hero-{pose}-{"magnet" if magnet else "bare"}-{"right" if facing == 1 else "left"}-{dimensions[0]}x{dimensions[1]}.png'
                 raw = page.screenshot(path=str(path))
                 image = Image.open(io.BytesIO(raw)).convert('RGB')
                 fx, fy, fw, fh = snapshot['field']
@@ -252,7 +253,10 @@ def sprite_poses(browser):
                 center = (min(xs)+max(xs)+1)/2
                 expected_center = (fx+(px+snapshot['player_size'][0]/2)*cell)*scale
                 crop_hash = hashlib.sha256(image.crop((left,top,right,bottom)).tobytes()).hexdigest()
-                poses.append({'pose':pose,'facing':facing,'frame':frame,'player':snapshot['player'],
+                red = sum(image.getpixel((x,y)) == (215,67,56) for y in range(top,bottom) for x in range(left,right))
+                assert (red > 0) == magnet, ('Cosmetic magnet is not readable/isolated',dimensions,pose,facing,magnet,red)
+                assert snapshot['cosmetic_magnet'] == magnet
+                poses.append({'pose':pose,'magnet':magnet,'magnet_pixels':red,'facing':facing,'frame':frame,'player':snapshot['player'],
                               'torso_center_x':center,'marker_bounds':[min(xs),min(ys),max(xs)+1,max(ys)+1],
                               'expected_center_x':expected_center,'crop_sha256':crop_hash,'crop_bounds':[left,top,right,bottom],
                               'screenshot':str(path.relative_to(ROOT))})
@@ -265,7 +269,7 @@ def sprite_poses(browser):
                 failures.append({'viewport':dimensions, 'pose':sample['pose'], 'facing':sample['facing'],
                                  'drift_pixels':sample['torso_center_x']-poses[0]['torso_center_x']})
         for facing in [1,-1]:
-            samples = {sample['pose']:sample for sample in poses if sample['facing'] == facing}
+            samples = {sample['pose']:sample for sample in poses if sample['facing'] == facing and sample['magnet']}
             assert samples['idle']['crop_sha256'] != samples['walk_stride']['crop_sha256'], 'Walking did not render its second animation frame'
             assert samples['idle']['crop_sha256'] == samples['walk_recover']['crop_sha256'], 'Walking recovery did not return to the centered idle frame'
         assert not errors, errors
@@ -569,6 +573,55 @@ def ui_batch_checks(browser):
     return result
 
 
+def workshop_screens(browser):
+    checks = []
+    for width,height in [(390,844),(844,390),(768,1004)]:
+        context = browser.new_context(viewport={'width':width,'height':height},has_touch=True,device_scale_factor=1)
+        page = context.new_page()
+        errors = []
+        page.on('pageerror',lambda value: errors.append(str(value)))
+        page.goto(URL)
+        wait_screen(page,'menu')
+        assert state(page)['missing_menu_glyphs'] == ''
+        ticks = state(page)['demo']['ticks']
+        page.wait_for_timeout(350)
+        assert state(page)['demo']['ticks'] > ticks
+        page.mouse.move(2,2)
+        menu = screenshot(page,f'workshop-menu-{width}x{height}.png')
+        button(page,'play',True)
+        wait_screen(page,'playing')
+        scenario(page,'showcase')
+        page.wait_for_timeout(350)
+        snapshot = state(page)
+        assert snapshot['columns'] == 10 and snapshot['rows'] == 11
+        assert set(snapshot['buttons']) == {'pause'}, 'Visual slice must not add tool/ability UI'
+        assert snapshot['cosmetic_magnet']
+        raw = page.screenshot()
+        image = Image.open(io.BytesIO(raw)).convert('RGB')
+        fx,fy,fw,_ = snapshot['field'];px,py=snapshot['player']
+        cell=fw/snapshot['columns'];scale=page.locator('canvas').bounding_box()['width']/snapshot['viewport'][0]
+        area=(round((fx+(px-.25)*cell)*scale),round((fy+(py-.15)*cell)*scale),round((fx+(px+1)*cell)*scale),round((fy+(py+1)*cell)*scale))
+        red=sum(image.getpixel((x,y)) == (215,67,56) for y in range(area[1],area[3]) for x in range(area[0],area[2]))
+        assert red >= 2, ('Cosmetic U magnet must be visible at real game scale',width,height,red)
+        game = screenshot(page,f'workshop-game-{width}x{height}.png')
+        hero_crop = [round((fx+(px-1/24)*cell)*scale)-2,round((fy+(py-2/24)*cell)*scale)-2,
+                     round((fx+(px+15/24)*cell)*scale)+2,round((fy+(py+22/24)*cell)*scale)+2]
+        button(page,'pause',True)
+        wait_screen(page,'paused')
+        fixed_panel(page)
+        page.mouse.move(2,2)
+        paused = screenshot(page,f'workshop-paused-{width}x{height}.png')
+        button(page,'home',True)
+        wait_screen(page,'menu')
+        assert not errors,errors
+        checks.append({'viewport':[width,height],'reference_style':'workshop','cosmetic_magnet_pixels':red,'unchanged_grid':[10,11],
+                       'no_tool_slots':'PASS','live_menu':'PASS','pause_home':'PASS','hero_crop':hero_crop,'screenshots':[menu,game,paused],
+                       'screenshot_sha256':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in [menu,game,paused]}})
+        print('WORKSHOP',json.dumps(checks[-1]),flush=True)
+        context.close()
+    return checks
+
+
 def menu_layouts(browser):
     context = browser.new_context(viewport={'width':390, 'height':844}, has_touch=True, device_scale_factor=1)
     page = context.new_page()
@@ -627,6 +680,12 @@ try:
         browser = p.chromium.launch(executable_path=os.environ.get('CHROMIUM_BIN', '/usr/bin/chromium'),
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
+        if args.workshop_only:
+            checks = workshop_screens(browser)
+            (BUILD/'workshop-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'renderer':'SwiftShader','checks':checks,
+                'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest()},indent=2)+'\n')
+            browser.close()
+            raise SystemExit(0)
         results_over = game_over_screens(browser) if args.game_over_only or not (args.ui_only or args.sprites_only) else []
         if args.game_over_only:
             (BUILD/'game-over-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'renderer':'SwiftShader',
@@ -646,6 +705,7 @@ try:
                 'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),'checks':sprites},indent=2)+'\n')
             browser.close()
             raise SystemExit(0)
+        workshop = workshop_screens(browser)
         menus = menu_layouts(browser)
         for touch, dimensions in [(False, (1280, 720)), (True, (390, 844)), (True, (320, 568))]:
             context = browser.new_context(viewport={'width': dimensions[0], 'height': dimensions[1]},
@@ -792,7 +852,7 @@ try:
             results.append(result)
             print(json.dumps(result), flush=True)
             context.close()
-        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
+        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
                   'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
                   'page_errors':all_errors,'failed_requests':all_failed_requests,'checks':results}
         (BUILD/'web-check.json').write_text(json.dumps(report,indent=2)+'\n')

@@ -325,6 +325,15 @@ func app_flow() -> void:
 	await process_frame
 	check(app.sound.music_player.stream.loop_mode == AudioStreamWAV.LOOP_FORWARD and app.sound.music_player.stream.loop_end > 300000, "Music must loop over decoded frames on every platform")
 	check(app.screen == "menu" and app.buttons.has("play") and app.buttons.has("settings"), "Main menu must offer the agreed screens")
+	var art_model = app.world.model
+	var art_snapshot := [art_model.player, art_model.score, art_model.crates.duplicate(true), art_model._rng.state, art_model.ticks]
+	for equipped in [false, true]:
+		app.world.cosmetic_magnet = equipped
+		app.world.hero_frame()
+		check(art_snapshot == [art_model.player, art_model.score, art_model.crates, art_model._rng.state, art_model.ticks], "Cosmetic equipment and pose selection must never mutate gameplay")
+	for pose in ["idle", "walk", "jump", "push", "idle_bare", "walk_bare", "jump_bare", "push_bare"]:
+		check(app.world.HERO_TEXTURES[pose].get_size() == Vector2(32, 48), "All workshop poses must preserve the same full sprite canvas")
+	check(app._missing_menu_glyphs().is_empty(), "The original workshop bitmap face must cover the visible menu text")
 	var initial_records: Array = app.profile.records.duplicate(true)
 	var personal = app.model
 	var random_before: int = personal._rng.state
