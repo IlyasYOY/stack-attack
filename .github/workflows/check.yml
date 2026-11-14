@@ -16,20 +16,20 @@ jobs:
       - name: Download the pinned official Godot binary
         shell: bash
         run: |
-          curl --fail --location --retry 3 --output "$RUNNER_TEMP/godot.zip" https://github.com/godotengine/godot-builds/releases/download/4.6.3-stable/Godot_v4.6.3-stable_linux.x86_64.zip
-          echo "a035258da32b77f966a5376f9fa29c30a6adde826a85ba918e1605bd1fc9823eba7d85f1dd5e748956bd2ba72827c0025ffa11bb82aec91128c407a2e723c99c  $RUNNER_TEMP/godot.zip" | sha512sum --check
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/godot.zip" https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip
+          echo "9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65  $RUNNER_TEMP/godot.zip" | sha512sum --check
           mkdir -p "$RUNNER_TEMP/godot"
           unzip -q "$RUNNER_TEMP/godot.zip" -d "$RUNNER_TEMP/godot"
-          chmod +x "$RUNNER_TEMP/godot/Godot_v4.6.3-stable_linux.x86_64"
+          chmod +x "$RUNNER_TEMP/godot/Godot_v4.7.2-stable_linux.x86_64"
       - name: Import, test the scene, and run headless
         env:
-          GODOT_BIN: ${{ runner.temp }}/godot/Godot_v4.6.3-stable_linux.x86_64
+          GODOT_BIN: ${{ runner.temp }}/godot/Godot_v4.7.2-stable_linux.x86_64
         run: bash scripts/check.sh
       - name: Export private technical builds
         if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
         shell: bash
         env:
-          GODOT_BIN: ${{ runner.temp }}/godot/Godot_v4.6.3-stable_linux.x86_64
+          GODOT_BIN: ${{ runner.temp }}/godot/Godot_v4.7.2-stable_linux.x86_64
           XDG_DATA_HOME: ${{ runner.temp }}/stack-attack-data
           XDG_CONFIG_HOME: ${{ runner.temp }}/stack-attack-config
           XDG_CACHE_HOME: ${{ runner.temp }}/stack-attack-cache
@@ -40,17 +40,17 @@ jobs:
           java -version
           test -f "$ANDROID_HOME/platforms/android-36/android.jar"
           test -x "$ANDROID_HOME/build-tools/36.1.0/apksigner"
-          curl --fail --location --retry 3 --output "$RUNNER_TEMP/templates.tpz" https://github.com/godotengine/godot-builds/releases/download/4.6.3-stable/Godot_v4.6.3-stable_export_templates.tpz
-          echo "da606b61c10157844f8300172df374472665f95015495cb1a7cd132c40ede404faa96cc1016a4b9662db9909ddea69632c4948b2cd11163438dad4808881fb68  $RUNNER_TEMP/templates.tpz" | sha512sum --check
-          mkdir -p "$XDG_DATA_HOME/godot/export_templates/4.6.3.stable" "$XDG_CONFIG_HOME/godot"
-          unzip -j -q "$RUNNER_TEMP/templates.tpz" templates/android_debug.apk templates/android_release.apk templates/web_nothreads_debug.zip templates/web_nothreads_release.zip templates/icudt_godot.dat templates/version.txt -d "$XDG_DATA_HOME/godot/export_templates/4.6.3.stable"
+          curl --fail --location --retry 3 --output "$RUNNER_TEMP/templates.tpz" https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz
+          echo "ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079  $RUNNER_TEMP/templates.tpz" | sha512sum --check
+          mkdir -p "$XDG_DATA_HOME/godot/export_templates/4.7.2.stable" "$XDG_CONFIG_HOME/godot"
+          unzip -j -q "$RUNNER_TEMP/templates.tpz" templates/android_debug.apk templates/android_release.apk templates/web_nothreads_debug.zip templates/web_nothreads_release.zip templates/icudt_godot.dat templates/version.txt -d "$XDG_DATA_HOME/godot/export_templates/4.7.2.stable"
           python3 scripts/create_debug_key.py "$RUNNER_TEMP/stack-attack-debug-signing"
           source "$RUNNER_TEMP/stack-attack-debug-signing/debug-signing.env"
           echo "::add-mask::$GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD"
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          settings = Path(os.environ['XDG_CONFIG_HOME']) / 'godot/editor_settings-4.6.tres'
+          settings = Path(os.environ['XDG_CONFIG_HOME']) / 'godot/editor_settings-4.7.tres'
           values = {
               'export/android/java_sdk_path': os.environ['JAVA_HOME'],
               'export/android/android_sdk_path': os.environ['ANDROID_HOME'],

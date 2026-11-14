@@ -1,12 +1,51 @@
 # Stack Attack
 
-Первый играбельный прототип собственной 2D-аркады на **Godot 4.6.3 + GDScript** для Android и Web. Падающие ящики, движение и прыжок, толкание, очистка нижнего ряда, растущий темп, оба условия поражения, меню, локальные рекорды, настройки и собственная пиксельная и звуковая подача.
+Первый играбельный прототип собственной 2D-аркады на **Godot 4.7.2 + GDScript** для Android и Web. Падающие ящики, движение и прыжок, толкание, очистка нижнего ряда, растущий темп, оба условия поражения, меню, локальные рекорды, настройки и собственная пиксельная и звуковая подача.
 
 Илья подтвердил работу технической основы на телефоне. Сам игровой прототип, художественная подача и баланс ждут его проверки; новый PR не мержится без одобрения.
 
-## Запуск и проверки
+## Локальная работа на macOS
 
-В каждом новом cloud shell сначала активировать закреплённый инструментарий:
+Системные зависимости отслеживаются в dotfiles: `godot` в `Brewfile.mac.cask`, `coreutils`, `python@3.13` и `uv` в `Brewfile.mac`; Chrome уже есть в списке casks. Установка только нужных пакетов:
+
+```bash
+brew install coreutils python@3.13 uv
+brew install --cask godot google-chrome
+godot --version
+```
+
+Версия движка должна точно совпадать с `.godot-version`. Если brew предлагает более новую версию, сначала согласовать обновление проекта, CI и cloud; проверка версии намеренно остаётся строгой.
+
+Один раз в каждом рабочем checkout подготовить Python-окружение и Web-шаблоны:
+
+```bash
+uv sync --locked --group web --python "$(brew --prefix python@3.13)/bin/python3.13"
+bash scripts/install_web_templates.sh
+```
+
+Playwright, Pillow и их зависимости находятся в `.venv/`, версии и контрольные суммы — в `uv.lock`. Скрипт шаблонов проверяет SHA-512 официального архива и кеширует его в `build/cache/`. Web-шаблоны и необходимые данные движка устанавливаются на macOS в `~/Library/Application Support/Godot/export_templates/4.7.2.stable/`. Повторный запуск использует кеш.
+
+Редактор и проверки:
+
+```bash
+godot --editor --path .
+# В другом shell из того же checkout:
+bash scripts/check.sh
+bash scripts/export.sh web
+uv run --locked --group web python scripts/check_web.py
+```
+
+На macOS браузерный тест использует установленный Google Chrome, без скачивания отдельного Chromium. `CHROMIUM_BIN` позволяет явно выбрать другой Chromium-совместимый executable; в Linux по умолчанию остаётся `/usr/bin/chromium`. Автотест использует SwiftShader, поэтому плавность и изображение на реальном GPU проверяются отдельно.
+
+Для быстрой ручной обратной связи запустить сервер командой ниже, открыть localhost в Chrome или Safari и после изменений повторить `bash scripts/export.sh web`, затем обновить вкладку. Автоэкспорта и автоматического обновления страницы нет.
+
+Предыдущая техническая сцена проверена 14 ноября 2026 на macOS 27.0.1 / Apple M2: Godot `4.7.2.stable.official.ed1daf0bf`, Python 3.13.18, Playwright 1.62.0, Chrome 157.0.8103.79. Прошли headless-проверки, Web-экспорт и браузерный тест на шести размерах окна; выполнен ручной просмотр в Chrome и Safari, в Safari проверен клавиатурный ввод. Редактор открыл техническую сцену; отдельный нативный запуск с локальным GPU выдал `STACK_ATTACK_TECH_READY`. Повторный Web-экспорт занял около 4 секунд. Это не проверка Android или опубликованного cloud-окружения.
+
+## Запуск и проверка в облачном окружении
+
+Опубликованное окружение ранее проверялось с Godot 4.6.3; для этого checkout его нужно обновить до 4.7.2 по [промпту настройки](docs/cloud-setup-prompt.md). Изменение CI не обновляет опубликованный snapshot автоматически.
+
+В **каждом новом shell** сначала активировать инструменты:
 
 ```bash
 source /workspace/setup-stack/env.sh
@@ -27,7 +66,7 @@ source /workspace/setup-stack/env.sh
 python3 scripts/create_debug_key.py /workspace/stack-attack-local/debug-signing
 source /workspace/stack-attack-local/debug-signing/debug-signing.env
 bash scripts/export.sh all
-python3 scripts/check_web.py
+uv run --locked --group web python scripts/check_web.py
 ```
 
 Результат — `build/android/stack-attack-prototype-debug.apk` и `build/web/`. Отдельно: `bash scripts/export.sh web` или `bash scripts/export.sh android`. Web открывать через HTTP:

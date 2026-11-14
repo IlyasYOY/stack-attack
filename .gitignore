@@ -1,5 +1,6 @@
 # Godot
 .godot/
+.venv/
 # Exported builds
 build/
 builds/

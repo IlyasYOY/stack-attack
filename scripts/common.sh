@@ -9,6 +9,8 @@ if [[ "$("$GODOT_BIN" --version)" != "$expected_version" ]]; then
   exit 1
 fi
 mkdir -p build/logs
+# Generated screenshots and tool archives are not project resources.
+: > build/.gdignore
 
 run_godot() {
   local label="$1"

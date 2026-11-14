@@ -1,13 +1,15 @@
 # Облачное окружение и сборки прототипа
 
-Опубликованное окружение восстановлено и проверено в новой задаче 11 ноября 2026 на Linux Debian 13.6 x86_64. Работа на компьютере Ильи не выполнялась. Скрипты установки окружения находятся вне checkout в `/workspace/setup-stack`; команды проекта ничего не устанавливают и не принимают лицензии.
+Последняя подтверждённая версия опубликованного окружения проверена 11 ноября 2026 на Linux Debian 13.6 x86_64 с Godot 4.6.3. Текущий checkout переведён на **4.7.2** для установки редактора через Homebrew и локальной проверки Web. Обновление опубликованного cloud snapshot ещё не подтверждено: его выполняет отдельный агент по [промпту настройки](cloud-setup-prompt.md).
+
+Скрипты установки облачного окружения находятся вне checkout в `/workspace/setup-stack`. Активация `/workspace/setup-stack/env.sh` после обновления должна выбирать точную сборку из `.godot-version`. Локальные инструкции macOS — в README. Команды проверки и экспорта проекта ничего не устанавливают и не принимают лицензии; отдельный `install_web_templates.sh` устанавливает Web-шаблоны.
 
 ## Закреплённый инструментарий
 
-| Компонент | Проверенная версия |
+| Компонент | Требуемая версия |
 | --- | --- |
-| Godot, обычная сборка без .NET | 4.6.3.stable.official.7d41c59c4 |
-| Export templates | 4.6.3.stable |
+| Godot, обычная сборка без .NET | 4.7.2.stable.official.ed1daf0bf |
+| Export templates | 4.7.2.stable |
 | JDK / javac | Temurin 17.0.21+9 / 17.0.21 |
 | Android command-line tools | 19.0 |
 | Android platform-tools | 37.0.1, build 15733141 |
@@ -18,11 +20,13 @@
 | Chromium / Python Playwright | 156.0.8078.79 / 1.62.0 |
 | Pillow | 13.0.0 (ассеты и анализ скриншотов) |
 
+Godot и Web-шаблоны новой версии установлены локально на macOS 14 ноября 2026. Версии остальных облачных инструментов в таблице взяты из проверки 11 ноября и требуют повторной проверки агентом настройки. Playwright и Pillow закреплены в группе `web` и `uv.lock`. Использовать Python 3.13 в проектной `.venv`. На macOS тест выбирает установленный Chrome, в cloud — `/usr/bin/chromium` либо `CHROMIUM_BIN`.
+
 В каждом новом shell выполнять `source /workspace/setup-stack/env.sh`. Без активации `java` выбирает системную Java 21, а `javac`, `adb` и `sdkmanager` не доступны в PATH. Значения JAVA_HOME/ANDROID_HOME сами по себе не заменяют активацию PATH.
 
-Godot и шаблоны должны совпадать. `.godot-version` и `scripts/common.sh` проверяют точную сборку движка; шаблоны находятся в `$XDG_DATA_HOME/godot/export_templates/4.6.3.stable`. Java SDK Path и Android SDK Path уже заданы в EditorSettings опубликованного окружения. В другом Linux-окружении эти пути нужно настроить на существующие JDK/SDK, а движок и шаблоны установить по указанным ниже официальным источникам.
+Godot и шаблоны должны совпадать. `.godot-version` и `scripts/common.sh` проверяют точную сборку движка; в Linux шаблоны находятся в `${XDG_DATA_HOME:-$HOME/.local/share}/godot/export_templates/4.7.2.stable`. Настройки Android нужно перенести в `editor_settings-4.7.tres`: Java SDK Path и Android SDK Path должны указывать на существующие JDK/SDK. Настройки 4.6 сами по себе не подтверждают готовность 4.7.
 
-Точная конфигурация Android релиза 4.6.3 использует SDK 36, build-tools 36.1.0 и NDK 29; документация общей ветки 4.6 ещё перечисляет SDK 35/NDK 28b. Для воспроизведения закреплены параметры точного релиза, а не `latest`. Штатный APK использует готовый шаблон без Gradle; NDK/CMake в этой сборке не компилируют код.
+Точная конфигурация Android релиза 4.7.2 по-прежнему использует Java 17, SDK 36, build-tools 36.1.0 и NDK 29. Для воспроизведения закреплены параметры точного релиза, а не `latest`. Штатный APK использует готовый шаблон без Gradle; NDK/CMake в этой сборке не компилируют код.
 
 ## Повторение проверок
 
@@ -33,7 +37,8 @@ bash scripts/check.sh
 python3 scripts/create_debug_key.py /workspace/stack-attack-local/debug-signing
 source /workspace/stack-attack-local/debug-signing/debug-signing.env
 bash scripts/export.sh all
-python3 scripts/check_web.py
+uv sync --locked --group web --python python3.13
+uv run --locked --group web python scripts/check_web.py
 ```
 
 - `check.sh`: импорт, GDScript-проверки правил игры, экранов, управления, локального сохранения и смены ориентации; отдельный headless-запуск. Геометрия цельных меню проверяется также на Fold-размерах и с Android-строкой вибрации; все элементы должны оставаться в кадре без ScrollContainer. Таймаут и проверка ERROR в логах не позволяют принять зависание или ошибку импорта за успех.
@@ -55,17 +60,19 @@ APK: `org.ilyasyoy.stackattack.techtest`, versionCode 10, versionName 0.2.8-prot
 
 ## Подтверждения и границы
 
-На облачной машине подтверждены headless-проверки и обе сборки; Web исполняет GDScript и получает ввод в Chromium. Сам APK проверен по подписи, структуре, ABI и alignment. Илья подтвердил успешную работу предыдущего технического APK на телефоне. **Новый игровой прототип на телефоне ещё не проверен**: реального Android-устройства у агента нет. Отдельно остаются mobile browser, touch на устройстве, вырезы/системные панели конкретных телефонов, audio/vibration и производительность. Эмуляция touch и SwiftShader их не заменяют.
+Для предыдущей технической сцены 14 ноября на macOS 27.0.1 / Apple M2 с Godot 4.7.2 прошли импорт, GDScript-тест, headless-запуск, Web-экспорт и Playwright-проверка в Chrome 157.0.8103.79 на шести размерах окна. Web просмотрен вручную в Chrome и Safari. В Safari подтверждён клавиатурный ввод. Редактор открыл сцену, нативный запуск на Apple M2 выдал `STACK_ATTACK_TECH_READY`. Повторный экспорт Web занял около 4 секунд. Локальные отчёты и скриншоты находятся в игнорируемом `build/` соответствующего checkout.
 
-Нативный графический запуск Godot в shell без DISPLAY/Wayland не проверен. Web использует Compatibility/WebGL 2, single-threaded, без GDExtension и PWA/service worker. Требуется HTTP/HTTPS; открытие index.html как локального файла не поддерживается. Сайт и релизы не публиковались.
+На облачной машине с Godot 4.6.3 подтверждены headless-проверки и обе сборки; Web исполняет GDScript и получает ввод в Chromium. Сам APK проверен по подписи, структуре, ABI и alignment. Илья подтвердил успешную работу предыдущего технического APK на телефоне. **Новый игровой прототип на телефоне ещё не проверен**: реального Android-устройства у агента нет. Отдельно остаются mobile browser, touch на устройстве, вырезы/системные панели конкретных телефонов, audio/vibration и производительность. Эмуляция touch и SwiftShader их не заменяют.
+
+Нативный графический запуск Godot в cloud shell без DISPLAY/Wayland не проверен. Web использует Compatibility/WebGL 2, single-threaded, без GDExtension и PWA/service worker. Требуется HTTP/HTTPS; открытие index.html как локального файла не поддерживается. Сайт и релизы не публиковались.
 
 Первая техническая часть проверена, включая телефонную проверку Ильи. Теперь подготовлен первый играбельный прототип; его приёмка, баланс и художественная подача ещё ждут оценки Ильи. Подробнее — [описание прототипа](prototype.md).
 
 ## Официальные источники
 
-- [Godot 4.6.3 binaries и templates](https://github.com/godotengine/godot-builds/releases/tag/4.6.3-stable)
-- [Конфигурация Android точного релиза](https://raw.githubusercontent.com/godotengine/godot/4.6.3-stable/platform/android/java/app/config.gradle)
-- [Переменные подписи точного релиза](https://raw.githubusercontent.com/godotengine/godot/4.6.3-stable/platform/android/export/export_plugin.h)
-- [Командная строка Godot 4.6](https://docs.godotengine.org/en/4.6/tutorials/editor/command_line_tutorial.html)
-- [Android export](https://docs.godotengine.org/en/4.6/tutorials/export/exporting_for_android.html)
-- [Web export](https://docs.godotengine.org/en/4.6/tutorials/export/exporting_for_web.html)
+- [Godot 4.7.2 binaries и templates](https://github.com/godotengine/godot-builds/releases/tag/4.7.2-stable)
+- [Конфигурация Android точного релиза](https://raw.githubusercontent.com/godotengine/godot/4.7.2-stable/platform/android/java/app/config.gradle)
+- [Переменные подписи точного релиза](https://raw.githubusercontent.com/godotengine/godot/4.7.2-stable/platform/android/export/export_plugin.h)
+- [Командная строка Godot 4.7](https://docs.godotengine.org/en/4.7/tutorials/editor/command_line_tutorial.html)
+- [Android export](https://docs.godotengine.org/en/4.7/tutorials/export/exporting_for_android.html)
+- [Web export](https://docs.godotengine.org/en/4.7/tutorials/export/exporting_for_web.html)
