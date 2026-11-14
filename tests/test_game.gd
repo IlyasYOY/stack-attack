@@ -320,6 +320,7 @@ func vibration_toggle() -> void:
 
 
 func app_flow() -> void:
+	check(ProjectSettings.get_setting("application/config/name") == "Stack Attack · Ночная смена", "Visual changes must preserve the existing user data namespace")
 	var app = load("res://game/main.tscn").instantiate()
 	root.add_child(app)
 	await process_frame
