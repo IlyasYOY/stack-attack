@@ -573,6 +573,38 @@ def ui_batch_checks(browser):
     return result
 
 
+def wooden_crates(browser):
+    context = browser.new_context(viewport={'width':360,'height':800},has_touch=True,device_scale_factor=1)
+    page = context.new_page()
+    page.goto(URL)
+    wait_screen(page,'menu')
+    checks = []
+    for screen in ['menu','playing']:
+        if screen == 'playing':
+            button(page,'play',True)
+            wait_screen(page,'playing')
+        scenario(page,'crate_appearance')
+        page.wait_for_function('window.stackAttackState.visible_crates.map(c => c.color).join() === "0,1,2"')
+        snapshot = state(page)
+        image = Image.open(io.BytesIO(page.screenshot())).convert('RGB')
+        fx,fy,fw,_ = snapshot['field']
+        cell = fw/snapshot['columns']
+        assert cell == 32 and snapshot['viewport'] == [360,800]
+        crops = [image.crop((round(fx+c['x']*cell),round(fy+c['y']*cell),round(fx+(c['x']+1)*cell),round(fy+(c['y']+1)*cell)))
+                 for c in snapshot['visible_crates']]
+        hashes = [hashlib.sha256(crop.tobytes()).hexdigest() for crop in crops]
+        assert len(set(hashes)) == 1, ('Legacy color tags changed the crate appearance',screen,hashes)
+        if screen == 'playing':
+            raw = crops[0].tobytes()
+            orange = sum(r>150 and r>g>b for r,g,b in zip(raw[0::3],raw[1::3],raw[2::3]))
+            assert orange > cell*cell/3, 'The shared appearance must be wood'
+        checks.append({'screen':screen,'legacy_color_tags':[0,1,2],'identical_crate_pixels':'PASS',
+                       'screenshot':screenshot(page,f'wood-crates-{screen}-360x800.png')})
+    context.close()
+    print('WOODEN_CRATES',json.dumps(checks),flush=True)
+    return checks
+
+
 def workshop_screens(browser):
     checks = []
     for width,height in [(390,844),(844,390),(768,1004)]:
@@ -681,8 +713,9 @@ try:
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         if args.workshop_only:
+            crates = wooden_crates(browser)
             checks = workshop_screens(browser)
-            (BUILD/'workshop-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'renderer':'SwiftShader','checks':checks,
+            (BUILD/'workshop-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'renderer':'SwiftShader','checks':checks,'wooden_crates':crates,
                 'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest()},indent=2)+'\n')
             browser.close()
             raise SystemExit(0)
@@ -705,6 +738,7 @@ try:
                 'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),'checks':sprites},indent=2)+'\n')
             browser.close()
             raise SystemExit(0)
+        crates = wooden_crates(browser)
         workshop = workshop_screens(browser)
         menus = menu_layouts(browser)
         for touch, dimensions in [(False, (1280, 720)), (True, (390, 844)), (True, (320, 568))]:
@@ -852,7 +886,7 @@ try:
             results.append(result)
             print(json.dumps(result), flush=True)
             context.close()
-        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
+        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
                   'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
                   'page_errors':all_errors,'failed_requests':all_failed_requests,'checks':results}
         (BUILD/'web-check.json').write_text(json.dumps(report,indent=2)+'\n')

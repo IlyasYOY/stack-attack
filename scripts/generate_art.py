@@ -9,58 +9,28 @@ def bolt(d, x, y):
     d.rectangle((x - 2, y - 2, x + 2, y + 2), fill='#45555c')
     d.rectangle((x - 1, y - 1, x + 1, y + 1), fill='#e6d5ad')
     d.point((x + 1, y + 1), fill='#8d8878')
-for kind in ['copper', 'teal', 'violet']:
-    image = Image.new('RGBA', (48, 48))
-    d = ImageDraw.Draw(image)
-    d.rectangle((0, 0, 47, 47), fill=INK)
-    if kind == 'copper':
-        d.rectangle((2, 2, 45, 45), fill='#633c2b')
-        for x in range(4, 44, 9):
-            d.rectangle((x, 5, x + 7, 41), fill='#b97035')
-            d.line((x + 1, 6, x + 1, 40), fill='#d28a45')
-            d.line((x + 7, 8, x + 7, 39), fill='#804b2a')
-            d.line((x + 3, 16, x + 3, 24), fill='#a65e2f')
-            d.line((x + 4, 29, x + 4, 35), fill='#dc944e')
-        for box in [(2, 2, 45, 8), (2, 39, 45, 45), (2, 8, 7, 39), (40, 8, 45, 39)]:
-            d.rectangle(box, fill='#d08b43')
-        d.line((3, 3, 44, 3), fill='#ffe1a1', width=2)
-        d.line((3, 40, 44, 40), fill='#edb96e')
-        d.rectangle((3, 44, 45, 46), fill='#523a2e')
-        d.polygon([(4, 37), (37, 4), (44, 4), (44, 10), (11, 43), (4, 43)], fill='#68422c')
-        d.polygon([(5, 37), (38, 4), (43, 5), (43, 9), (10, 42), (5, 42)], fill='#d9954d')
-        d.line((7, 37, 39, 5), fill='#f5c178', width=2)
-        d.line((10, 41, 43, 8), fill='#a76030')
-    elif kind == 'teal':
-        d.rectangle((2, 2, 45, 45), fill='#254a53')
-        d.rectangle((5, 5, 42, 42), fill='#367b80')
-        for x in [14, 25, 36]:
-            d.line((x, 7, x, 40), fill='#285c65')
-            d.line((x + 1, 8, x + 1, 39), fill='#4c9291')
-        for a, b in [((6, 6), (41, 41)), ((6, 41), (41, 6))]:
-            d.line((*a, *b), fill='#183d4b', width=9)
-            d.line((a[0], a[1] - 1, b[0], b[1] - 1), fill='#88b9ae', width=5)
-            d.line((a[0], a[1] + 2, b[0], b[1] + 2), fill='#457b7d', width=2)
-        for box in [(2, 2, 45, 7), (2, 40, 45, 45), (2, 7, 7, 40), (40, 7, 45, 40)]:
-            d.rectangle(box, fill='#638e8d')
-        d.line((3, 3, 44, 3), fill='#c0d7c0', width=2)
-        d.line((3, 41, 44, 41), fill='#a6c6b1')
-        d.rectangle((3, 45, 46, 46), fill='#254552')
-    else:
-        d.rectangle((2, 2, 45, 45), fill='#4c4358')
-        d.rectangle((5, 5, 42, 42), fill='#89748c')
-        d.rectangle((7, 7, 40, 40), fill='#675b76')
-        for y in [12, 20, 28]:
-            d.rectangle((10, y, 37, y + 4), fill='#263344')
-            d.line((11, y - 1, 36, y - 1), fill='#b8a1af')
-            d.line((12, y + 4, 36, y + 4), fill='#a28a9b')
-        d.rectangle((2, 2, 45, 6), fill='#a08b9e')
-        d.line((4, 3, 43, 3), fill='#d8c7c3')
-        d.rectangle((3, 41, 45, 45), fill='#77677f')
-        d.line((34, 34, 40, 39), fill='#e1ad4b', width=3)
-        d.line((37, 34, 32, 39), fill='#e1ad4b', width=2)
-    for x, y in [(5, 5), (42, 5), (5, 42), (42, 42)]:
-        bolt(d, x, y)
-    image.save(ROOT / f'crate_{kind}.png')
+image = Image.new('RGBA', (48, 48))
+d = ImageDraw.Draw(image)
+d.rectangle((0, 0, 47, 47), fill=INK)
+d.rectangle((2, 2, 45, 45), fill='#633c2b')
+for x in range(4, 44, 9):
+    d.rectangle((x, 5, x + 7, 41), fill='#b97035')
+    d.line((x + 1, 6, x + 1, 40), fill='#d28a45')
+    d.line((x + 7, 8, x + 7, 39), fill='#804b2a')
+    d.line((x + 3, 16, x + 3, 24), fill='#a65e2f')
+    d.line((x + 4, 29, x + 4, 35), fill='#dc944e')
+for box in [(2, 2, 45, 8), (2, 39, 45, 45), (2, 8, 7, 39), (40, 8, 45, 39)]:
+    d.rectangle(box, fill='#d08b43')
+d.line((3, 3, 44, 3), fill='#ffe1a1', width=2)
+d.line((3, 40, 44, 40), fill='#edb96e')
+d.rectangle((3, 44, 45, 46), fill='#523a2e')
+d.polygon([(4, 37), (37, 4), (44, 4), (44, 10), (11, 43), (4, 43)], fill='#68422c')
+d.polygon([(5, 37), (38, 4), (43, 5), (43, 9), (10, 42), (5, 42)], fill='#d9954d')
+d.line((7, 37, 39, 5), fill='#f5c178', width=2)
+d.line((10, 41, 43, 8), fill='#a76030')
+for x, y in [(5, 5), (42, 5), (5, 42), (42, 42)]:
+    bolt(d, x, y)
+image.save(ROOT / 'crate_wood.png')
 for frame in ['idle', 'walk', 'jump', 'push']:
     for equipped in [False, True]:
         image = Image.new('RGBA', (32, 48))

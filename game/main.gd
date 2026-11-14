@@ -564,6 +564,9 @@ func _publish_qa() -> void:
 	for id in world.controls:
 		var rect: Rect2 = world.controls[id]
 		input_rects[id] = [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
+	var visible_crates := []
+	for crate in world.model.crates:
+		visible_crates.append({"x": crate.x, "y": crate.y, "color": crate.color})
 	var status := {"ready": true, "screen": screen, "score": model.score,
 		"lines": model.lines, "loss_reason": model.loss_reason,
 		"session": session, "ticks": model.ticks, "state": model.state,
@@ -572,7 +575,7 @@ func _publish_qa() -> void:
 		"facing": model.facing, "hero_pose": qa_hero_pose, "hero_frame": world.hero_frame(), "cosmetic_magnet": world.cosmetic_magnet,
 		"columns": model.tuning.columns, "rows": model.tuning.rows, "crates": model.crates.size(), "first_crate_x": model.crates[0].x if not model.crates.is_empty() else -1,
 		"layout": "landscape" if size.x > size.y else "portrait", "viewport": [size.x, size.y],
-		"field": [world.field.position.x, world.field.position.y, world.field.size.x, world.field.size.y],
+		"field": [world.field.position.x, world.field.position.y, world.field.size.x, world.field.size.y], "visible_crates": visible_crates,
 		"buttons": rects, "sliders": slider_rects, "controls": input_rects,
 		"missing_menu_glyphs": _missing_menu_glyphs(),
 		"panel": _panel_snapshot(),
@@ -640,6 +643,21 @@ func _qa_command() -> void:
 	JavaScriptBridge.eval("window.stackAttackQARequest = null")
 	var request: Variant = JSON.parse_string(str(raw))
 	if not request is Dictionary:
+		return
+	if str(request.get("scenario", "")) == "crate_appearance" and screen in ["menu", "playing"]:
+		var target := demo.model if screen == "menu" else model
+		target.crates.clear()
+		target.state = "playing"
+		target.player = Vector2(8.4, TUNING.rows - TUNING.player_height)
+		target.player_velocity = Vector2.ZERO
+		target.grounded = true
+		for index in range(3):
+			var crate := target.add_crate(float(1 + index * 3), 2.0)
+			crate.color = index
+		qa_freeze_demo = screen == "menu"
+		qa_hero_pose = screen == "playing"
+		world.axis = 0.0
+		world.particles.clear()
 		return
 	if str(request.get("scenario", "")) == "result_preview" and screen in ["menu", "over"]:
 		model.score = clampi(int(request.get("score", 0)), 0, 100000000)

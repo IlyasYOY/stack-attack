@@ -21,7 +21,7 @@ const HERO_TEXTURES := {
 	"jump": preload("res://art/hero_jump.png"), "push": preload("res://art/hero_push.png"),
 	"idle_bare": preload("res://art/hero_idle_bare.png"), "walk_bare": preload("res://art/hero_walk_bare.png"),
 	"jump_bare": preload("res://art/hero_jump_bare.png"), "push_bare": preload("res://art/hero_push_bare.png")}
-var crate_textures: Array[Texture2D] = [preload("res://art/crate_copper.png"), preload("res://art/crate_teal.png"), preload("res://art/crate_violet.png")]
+const CRATE_TEXTURE: Texture2D = preload("res://art/crate_wood.png")
 const INK := Color("102733")
 const CREAM := Color("f4e3ba")
 const GOLD := Color("d7a45a")
@@ -205,7 +205,7 @@ func _draw_warehouse() -> void:
 		if float(crate.y) < -1.0: continue
 		var tint := Color.WHITE
 		if model.state == "clearing" and model.clear_elapsed < model.tuning.clear_flash_time and float(crate.y) > model.tuning.rows-1.01: tint=Color(1.8,1.6,1.1,1.0)
-		draw_texture_rect(crate_textures[int(crate.color)%3],Rect2(position,Vector2(24,24)),false,tint)
+		draw_texture_rect(CRATE_TEXTURE,Rect2(position,Vector2(24,24)),false,tint)
 	var hero_position := Vector2(roundf(model.player.x*24),roundf(model.player.y*24))+HERO_OFFSET
 	var texture: Texture2D = HERO_TEXTURES[hero_frame() + ("" if cosmetic_magnet else "_bare")]
 	var hero_rect := Rect2(hero_position,HERO_SIZE)

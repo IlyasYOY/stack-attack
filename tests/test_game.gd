@@ -334,6 +334,7 @@ func app_flow() -> void:
 		check(art_snapshot == [art_model.player, art_model.score, art_model.crates, art_model._rng.state, art_model.ticks], "Cosmetic equipment and pose selection must never mutate gameplay")
 	for pose in ["idle", "walk", "jump", "push", "idle_bare", "walk_bare", "jump_bare", "push_bare"]:
 		check(app.world.HERO_TEXTURES[pose].get_size() == Vector2(32, 48), "All workshop poses must preserve the same full sprite canvas")
+	check(app.world.CRATE_TEXTURE.get_size() == Vector2(48, 48) and app.world.CRATE_TEXTURE.resource_path == "res://art/crate_wood.png", "All crates must use the one existing wooden appearance")
 	check(app._missing_menu_glyphs().is_empty(), "The original workshop bitmap face must cover the visible menu text")
 	var initial_records: Array = app.profile.records.duplicate(true)
 	var personal = app.model
