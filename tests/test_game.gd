@@ -301,7 +301,8 @@ func vibration_toggle() -> void:
 	check(probe.pulses == [60], "Enabling vibration must request one short preview pulse")
 	for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
 		var style: StyleBoxFlat = toggle.get_theme_stylebox(state)
-		check(is_zero_approx(style.bg_color.a), "Focused/pressed vibration controls must not fall back to an opaque black background: " + state)
+		check(is_zero_approx(style.bg_color.a) if state == "focus" else style.bg_color.a >= 0.7 and style.bg_color.a <= 0.9, "Vibration must use the shared translucent action styles without a black fallback: " + state)
+		check(style == app.theme.get_stylebox(state, "Button"), "Vibration must share every action state: " + state)
 	toggle.button_pressed = false
 	check(not app.profile.vibration and toggle.text.ends_with("Выкл") and probe.pulses == [60], "Disabling vibration must update the state without a pulse")
 	app.profile.vibration = true
@@ -352,8 +353,11 @@ func app_flow() -> void:
 			check(app.panel.find_children("*", "ScrollContainer", true, false).is_empty(), "Menus must not contain a ScrollContainer")
 			for control in app.panel.find_children("*", "Control", true, false):
 				if control is Button:
-					var style: StyleBoxFlat = control.get_theme_stylebox("normal")
-					check(style.bg_color.a >= 0.7 if menu == "over" else is_zero_approx(style.bg_color.a), "Only result actions receive a small readability backing")
+					check(control.size.y >= 48, "Shared styling must preserve touch target height")
+					for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
+						var style: StyleBoxFlat = control.get_theme_stylebox(state)
+						check(style == app.theme.get_stylebox(state, "Button"), "Every menu button must share the result action style: " + menu + "/" + str(control.name) + "/" + state)
+						check(style.border_width_left == 1 and style.corner_radius_top_left == 4 and (is_zero_approx(style.bg_color.a) if state == "focus" else style.bg_color.a >= 0.7 and style.bg_color.a <= 0.9), "Shared actions must retain the thin border and translucent backing")
 				if control is Label or control.focus_mode == Control.FOCUS_ALL:
 					check(viewport.encloses(control.get_global_rect()), "%s content must remain visible at %s: %s" % [menu, dimensions, control.name])
 			var focused := root.gui_get_focus_owner()

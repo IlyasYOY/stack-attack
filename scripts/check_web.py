@@ -298,7 +298,7 @@ def score_only_result(page):
     return center
 
 
-def readable_result_button(page, name):
+def readable_action_button(page, name):
     snapshot = state(page)
     item = next(item for item in snapshot['panel']['items'] if item['name'] == name)
     for key in ['normal','hover','pressed','hover_pressed','disabled']:
@@ -312,6 +312,103 @@ def readable_result_button(page, name):
     assert bright > 20, ('Button text is not visible',name)
     padding = image.getpixel((round((x+4)*scale),round((y+h/2)*scale)))
     assert max(padding) < 110, ('Button backing does not protect text from the background',name,padding)
+
+
+def uniform_action_buttons(browser, viewports=((390,844),(844,390),(768,1004))):
+    checks = []
+    for width,height in viewports:
+        context = browser.new_context(viewport={'width':width,'height':height}, has_touch=True, device_scale_factor=1)
+        page = context.new_page()
+        errors = []
+        page.on('pageerror',lambda value: errors.append(str(value)))
+        page.goto(URL)
+        wait_screen(page,'menu')
+        page.evaluate('window.stackAttackQARequest={scenario:"result_preview",score:200}')
+        wait_screen(page,'over')
+        reference = next(item['styles'] for item in state(page)['panel']['items'] if item['name'] == 'again')
+        button(page,'home',True)
+        wait_screen(page,'menu')
+        screens = []
+        shots = []
+
+        def inspect_actions():
+            before = state(page)
+            names = [item['name'] for item in before['panel']['items'] if item['kind'] == 'Button']
+            for name in names:
+                item = next(item for item in state(page)['panel']['items'] if item['name'] == name)
+                assert item['styles'] == reference, ('Action style diverged from game over',before['screen'],name)
+                readable_action_button(page,name)
+                for _ in before['panel']['items']:
+                    if state(page)['panel']['focus'] == name:
+                        break
+                    tab(page)
+                assert state(page)['panel']['focus'] == name
+                readable_action_button(page,name)
+                if name == 'vibration':
+                    # A toggle's latched mode is also its pressed appearance.
+                    # Exercise real on/off taps rather than treating it as a navigation action.
+                    for expected in [not before['profile']['vibration'],before['profile']['vibration']]:
+                        button(page,name,True)
+                        page.wait_for_function('value => window.stackAttackState.profile.vibration === value',arg=expected)
+                        readable_action_button(page,name)
+                    continue
+                x,y = point(page,state(page)['buttons'][name])
+                page.mouse.move(x,y)
+                page.wait_for_function('name => [2,4].includes(window.stackAttackState.button_modes[name])',arg=name)
+                readable_action_button(page,name)
+                page.mouse.down()
+                try:
+                    page.wait_for_function('name => [1,4].includes(window.stackAttackState.button_modes[name])',arg=name,timeout=5000)
+                except Exception:
+                    print('BUTTON_STATE_FAILURE',json.dumps({'viewport':[width,height],'screen':before['screen'],'button':name,'state':state(page)}),flush=True)
+                    screenshot(page,f'button-state-failure-{width}x{height}.png')
+                    raise
+                readable_action_button(page,name)
+                # Cancel outside: inspect pressed pixels without activating navigation/toggles.
+                x,y,_,_ = state(page)['panel']['rect']
+                page.mouse.move(*point(page,[x+16,y+12,1,1]))
+                page.mouse.up()
+                page.wait_for_timeout(150)
+                after = state(page)
+                assert after['screen'] == before['screen'] and after['profile'] == before['profile']
+            fixed_panel(page)
+            android_qa = before['screen'] == 'settings' and before['profile']['vibration_visible']
+            tag = 'android-settings-web-qa' if android_qa else before['screen']
+            screens.append({'screen':before['screen'],'android_qa':android_qa,'buttons':names,'rendered_focus_hover_pressed':'PASS','matches_game_over_all_styles':'PASS'})
+            shots.append(screenshot(page,f'unified-{tag}-{width}x{height}.png'))
+
+        inspect_actions()
+        button(page,'records',True)
+        wait_screen(page,'records')
+        inspect_actions()
+        button(page,'back',True)
+        wait_screen(page,'menu')
+        button(page,'settings',True)
+        wait_screen(page,'settings')
+        inspect_actions()
+        scenario(page,'android_settings')
+        wait_screen(page,'settings')
+        inspect_actions()
+        button(page,'back',True)
+        wait_screen(page,'menu')
+        button(page,'play',True)
+        wait_screen(page,'playing')
+        button(page,'pause',True)
+        wait_screen(page,'paused')
+        inspect_actions()
+        button(page,'resume',True)
+        wait_screen(page,'playing')
+        scenario(page,'crush')
+        wait_screen(page,'over')
+        inspect_actions()
+        button(page,'again',True)
+        wait_screen(page,'playing')
+        assert state(page)['score'] == 0
+        assert not errors, errors
+        checks.append({'viewport':[width,height],'screens':screens,'screenshots':shots})
+        print('UNIFIED_BUTTONS',json.dumps(checks[-1]),flush=True)
+        context.close()
+    return checks
 
 
 def game_over_screens(browser):
@@ -349,8 +446,8 @@ def game_over_screens(browser):
             assert state(page)['demo']['ticks'] > before, 'Readability stress background must actually move'
             centers.append(score_only_result(page))
             fixed_panel(page)
-            readable_result_button(page,'again')
-            readable_result_button(page,'home')
+            readable_action_button(page,'again')
+            readable_action_button(page,'home')
             shots.append(screenshot(page, f'result-centered-{score}-{dimensions[0]}x{dimensions[1]}.png'))
         for name in ['again','home']:
             page.evaluate('window.stackAttackQARequest={scenario:"result_preview",score:200}')
@@ -358,14 +455,14 @@ def game_over_screens(browser):
             page.wait_for_timeout(180)
             while state(page)['panel']['focus'] != name:
                 tab(page)
-            readable_result_button(page,name)
+            readable_action_button(page,name)
             x,y = point(page,state(page)['buttons'][name])
             page.mouse.move(x,y)
             page.wait_for_timeout(180)
-            readable_result_button(page,name)
+            readable_action_button(page,name)
             page.mouse.down()
-            page.wait_for_function('name => [1,4].includes(window.stackAttackState.result_button_modes[name])',arg=name)
-            readable_result_button(page,name)
+            page.wait_for_function('name => [1,4].includes(window.stackAttackState.button_modes[name])',arg=name)
+            readable_action_button(page,name)
             shots.append(screenshot(page,f'result-{name}-pressed-{dimensions[0]}x{dimensions[1]}.png'))
             page.mouse.up()
             wait_screen(page,'playing' if name == 'again' else 'menu')
@@ -445,14 +542,15 @@ def ui_batch_checks(browser):
     page.wait_for_timeout(150)
     enabled = state(page)
     assert enabled['profile']['vibration']
-    assert all(value == 0 for value in enabled['vibration_styles'].values())
+    assert enabled['vibration_styles']['focus'] == 0
+    assert all(.7 <= value <= .9 for key,value in enabled['vibration_styles'].items() if key != 'focus')
     toggle = next(item for item in enabled['panel']['items'] if item['name'] == 'vibration')
     assert toggle['text'] == 'Виброотклик: Вкл'
     on = page.screenshot()
     x,y,w,h = enabled['buttons']['vibration']
     a,b = point(page,[x+2,y+8,1,1]),point(page,[x+6,y+h-8,1,1])
     bounds = (round(a[0]),round(a[1]),round(b[0]),round(b[1]))
-    # The clear padding must keep the same background immediately after toggling,
+    # The shared translucent padding must remain stable immediately after toggling,
     # while the control still owns focus/hover; black pressed fallbacks fail here.
     assert Image.open(io.BytesIO(off)).crop(bounds).tobytes() == Image.open(io.BytesIO(on)).crop(bounds).tobytes()
     toggle_shot = screenshot(page, 'android-vibration-on-web-qa-390x844.png')
@@ -535,9 +633,10 @@ try:
                 'checks':results_over,'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest()},indent=2)+'\n')
             browser.close()
             raise SystemExit(0)
+        button_styles = uniform_action_buttons(browser) if not args.sprites_only else []
         ui_batch = ui_batch_checks(browser) if not args.sprites_only else {}
         if args.ui_only:
-            (BUILD/'ui-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'checks':ui_batch,
+            (BUILD/'ui-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'checks':ui_batch,'button_styles':button_styles,
                 'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest()},indent=2)+'\n')
             browser.close()
             raise SystemExit(0)
@@ -693,7 +792,7 @@ try:
             results.append(result)
             print(json.dumps(result), flush=True)
             context.close()
-        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,
+        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
                   'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
                   'page_errors':all_errors,'failed_requests':all_failed_requests,'checks':results}
         (BUILD/'web-check.json').write_text(json.dumps(report,indent=2)+'\n')

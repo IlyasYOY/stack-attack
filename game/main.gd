@@ -68,14 +68,6 @@ func _make_theme() -> Theme:
 	result.set_color("font_color", "Label", CREAM)
 	result.set_color("font_color", "Button", CREAM)
 	result.set_color("font_hover_color", "Button", Color.WHITE)
-	var padding := 8 if size.y < 440 else 12
-	for state in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
-		var style := _make_style(Color.TRANSPARENT, Color.TRANSPARENT, padding)
-		style.set_border_width_all(0)
-		if state in ["hover", "pressed", "hover_pressed", "focus"]:
-			style.border_color = MINT if state == "hover" else GOLD
-			style.border_width_bottom = 2
-		result.set_stylebox(state, "Button", style)
 	result.set_color("font_pressed_color", "Button", GOLD)
 	result.set_color("font_hover_pressed_color", "Button", GOLD)
 	for kind in ["Label", "Button"]:
@@ -87,7 +79,7 @@ func _make_theme() -> Theme:
 	result.set_constant("separation", "VBoxContainer", 4 if _compact_panel() else 10)
 	result.set_constant("separation", "HBoxContainer", 16)
 	result.set_font_size("font_size", "Button", 18)
-	result.set_type_variation("ResultAction", "Button")
+	# Every action inherits the same game-over styling, including the Android toggle.
 	for state in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
 		var focused: bool = state == "focus"
 		var fill := Color(0.035, 0.07, 0.10, 0.78 if state in ["normal", "disabled"] else 0.88)
@@ -99,7 +91,7 @@ func _make_theme() -> Theme:
 		var style := _make_style(Color.TRANSPARENT if focused else fill, border, 8 if _compact_panel() else 12)
 		style.set_border_width_all(1)
 		style.set_corner_radius_all(4)
-		result.set_stylebox(state, "ResultAction", style)
+		result.set_stylebox(state, "Button", style)
 	var rail := _make_style(Color("243d4a"), Color("617b7b"), 3)
 	result.set_stylebox("slider", "HSlider", rail)
 	result.set_stylebox("grabber_area", "HSlider", _make_style(Color("a38459"), GOLD, 3))
@@ -171,8 +163,8 @@ func _show_screen(value: String) -> void:
 			if _compact_panel():
 				actions = HBoxContainer.new()
 				content.add_child(actions)
-			_button(actions, "Играть снова", "again", _start_game).theme_type_variation = "ResultAction"
-			_button(actions, "Главное меню", "home", func(): _show_screen("menu")).theme_type_variation = "ResultAction"
+			_button(actions, "Играть снова", "again", _start_game)
+			_button(actions, "Главное меню", "home", func(): _show_screen("menu"))
 			if not profile.last_error.is_empty():
 				_text(content, profile.last_error, 12)
 		"records":
@@ -514,10 +506,9 @@ func _notification(what: int) -> void:
 
 
 func _publish_qa() -> void:
-	var result_modes := {}
-	if screen == "over":
-		for id in ["again", "home"]:
-			result_modes[id] = buttons[id].get_draw_mode()
+	var button_modes := {}
+	for id in buttons:
+		button_modes[id] = buttons[id].get_draw_mode()
 	var vibration_styles := {}
 	if buttons.has("vibration"):
 		for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
@@ -547,7 +538,7 @@ func _publish_qa() -> void:
 		"buttons": rects, "sliders": slider_rects, "controls": input_rects,
 		"missing_menu_glyphs": _missing_menu_glyphs(),
 		"panel": _panel_snapshot(),
-		"result_button_modes": result_modes,
+		"button_modes": button_modes,
 		"vibration_styles": vibration_styles,
 		"demo": {"active": _background_demo(), "rounds": demo.rounds, "ticks": demo.total_ticks,
 			"jumps": demo.jumps, "drops": demo.drops, "lines": demo.lines, "losses": demo.losses,
@@ -597,7 +588,9 @@ func _button_style_snapshot(control: Control) -> Dictionary:
 	if control is Button:
 		for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
 			var style: StyleBoxFlat = control.get_theme_stylebox(state)
-			styles[state] = {"alpha": style.bg_color.a, "border": style.border_width_left}
+			styles[state] = {"alpha": style.bg_color.a, "border": style.border_width_left,
+				"fill": style.bg_color.to_html(true), "edge": style.border_color.to_html(true),
+				"radius": style.corner_radius_top_left, "margin": style.content_margin_left}
 	return styles
 
 
