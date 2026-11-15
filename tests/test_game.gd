@@ -47,6 +47,7 @@ func run() -> void:
 	diagonal_crate_collisions()
 	clearing()
 	loss_conditions()
+	crush_beside_support()
 	crane_cycles()
 	crane_contention()
 	storage()
@@ -189,29 +190,58 @@ func clearing() -> void:
 	game.cranes[0].x = 2.5 - game.tuning.crane_speed * Simulation.STEP
 	game.cranes[0].release_column = 2
 	var crane_positions := game.cranes.duplicate(true)
-	game.player = Vector2(2, 5 - game.tuning.player_height)
+	game.player = Vector2(2, 4 - game.tuning.player_height)
+	var retiring_ids: Array[int] = []
 	for column in range(4):
-		game.add_crate(column, 5)
-	var survivor := game.add_crate(0, 4)
+		retiring_ids.append(int(game.add_crate(column, 5).id))
+	var survivor := game.add_crate(2, 4)
+	game.add_crate(0, 4)
 	var player_y := game.player.y
-	game.advance(1.0 / 120, 0)
+	game.advance(Simulation.STEP, 0)
 	check(game.state == "clearing", "Only a complete settled bottom row starts clearing")
 	check(game.score == 100, "A line awards exactly the configured points")
-	check(game.cleared_crates == 0, "Flashing crates must be counted only when collapse removes them")
-	advance(game, .1)
+	var is_retiring := func(crate_id: int) -> bool: return game.is_clearing_crate(crate_id)
+	check(retiring_ids.all(is_retiring) and not game.is_clearing_crate(int(survivor.id))
+		and not game.is_clearing_crate(-1), "Only actual bottom-row IDs must be exposed for retirement")
+	advance(game, 26 * Simulation.STEP)
 	check(game.cranes == crane_positions, "Cranes must stay still and hold cargo during a clear")
+	check(game.cleared_crates == 0 and game.crates.size() == 6 and retiring_ids.all(is_retiring),
+		"The retiring crates must remain in the model throughout the 0.22 second hold")
+	check(game.player.y == player_y and float(survivor.y) == 4.0, "Support must stay in place during the hold")
 	game.cranes_enabled = false
-	advance(game, .45)
-	check(game.crates.size() == 1 and absf(float(survivor.y) - 5) < .001, "All crates above a cleared row descend one cell")
-	check(game.cleared_crates == 4, "A collapse must count only the crates it removes")
+	var safe_support := true
+	for tick in range(30):
+		game.advance(Simulation.STEP, 0)
+		var feet_y := game.player.y + game.tuning.player_height
+		safe_support = safe_support and crates_separate(game) and absf(feet_y - float(survivor.y)) < .000001
+		if tick == 0:
+			check(game.cleared_crates == 4 and not retiring_ids.any(is_retiring),
+				"Collapse must count the removed crates and stop exposing their retirement IDs")
+		if tick == 14:
+			check(float(survivor.y) > 4.4 and float(survivor.y) < 4.6 and game.state == "clearing",
+				"The player and crates must still be descending halfway through collapse")
+	check(safe_support, "Collapse must preserve contact between the player and their support without penetration")
+	check(game.state == "clearing", "Collapse must continue for the full 0.25 seconds")
+	game.advance(Simulation.STEP, 0)
+	var descended := game.crates.all(func(crate: Dictionary) -> bool: return absf(float(crate.y) - 5) < .001)
+	check(game.crates.size() == 2 and descended, "All crates above a cleared row descend one cell")
 	check(absf(game.player.y - player_y - 1) < .001, "The character descends together with the warehouse contents")
 	check(game.state == "playing", "Joint descent must not cause a false crush")
 	var chain_game := empty(4, 6)
 	chain_game.player = Vector2(2, 4 - chain_game.tuning.player_height)
+	var chain_ids: Array[int] = []
 	for row in [4, 5]:
 		for column in range(4):
-			chain_game.add_crate(column, row)
-	advance(chain_game, 1.2)
+			var crate := chain_game.add_crate(column, row)
+			if column == 0:
+				chain_ids.append(int(crate.id))
+	chain_game.advance(Simulation.STEP, 0)
+	check(chain_game.is_clearing_crate(chain_ids[1]) and not chain_game.is_clearing_crate(chain_ids[0]),
+		"Only the first bottom row must retire when a chain starts")
+	advance(chain_game, 57 * Simulation.STEP)
+	check(chain_game.is_clearing_crate(chain_ids[0]) and not chain_game.is_clearing_crate(chain_ids[1]),
+		"The next row must retire with its own IDs after the first collapse")
+	advance(chain_game, 86 * Simulation.STEP)
 	check(chain_game.lines == 2 and chain_game.score == 200, "Successive full bottom rows clear without score multipliers")
 	check(chain_game.crates.is_empty() and chain_game.state == "playing", "A chain must finish with safe descent")
 	check(chain_game.chain == 0 and chain_game.best_combo == 2, "The longest chain must survive the reset of the current chain")
@@ -232,28 +262,73 @@ func clearing() -> void:
 	for column in range(4):
 		upper_only.add_crate(column, 3)
 	upper_only.advance(1.0 / 120, 0)
-	check(upper_only.lines == 0, "A full upper row must not clear independently")
+	check(upper_only.lines == 0 and not upper_only.is_clearing_crate(int(upper_only.crates[0].id)),
+		"A full upper row must not clear independently")
 
 
 func loss_conditions() -> void:
 	var crushed := empty(4, 6)
 	crushed.player.x = 1.2
-	crushed.add_crate(1, 3, 1)
-	advance(crushed, 1)
+	crushed.add_crate(3, 5)
+	var falling := crushed.add_crate(1, 3, 1)
+	check(crushed.impact_crate_id == -1, "A living character must have no impact crate")
+	crushed.advance(1.0, 0)
 	check(crushed.state == "over" and crushed.loss_reason == "crushed", "A crate falling on the head must end the party")
-	var crush_result := crushed.match_result("2026-11-15T21:52:35")
-	check(crush_result.reason == "crushed" and crush_result.score == 0 and crush_result.crates == 0,
-		"An immediate crush must preserve its reason and zero-score result")
+	check(crushed.impact_crate_id == int(falling.id), "The impact ID must identify the crate that hit the character")
+	check(crushed.events == [{"type": "over", "reason": "crushed", "score": 0}], "Crush must still emit the ordinary loss event")
+	var ended_at := "2026-11-15T21:52:35"
+	var crush_result := crushed.match_result(ended_at)
+	check(crush_result == {"ended_at": ended_at, "duration_ms": 317, "score": 0, "lines": 0,
+		"crates": 0, "best_combo": 0, "reason": "crushed"}, "Crush must preserve the ordinary final result and duration")
 	var final_ticks := crushed.ticks
-	advance(crushed, .5)
-	check(crushed.ticks == final_ticks and crushed.events.is_empty(), "Game over must be emitted only once and freeze the model")
+	var final_player := crushed.player
+	var final_crates := crushed.crates.duplicate(true)
+	crushed.advance(.5, 1.0, true)
+	check(crushed.ticks == final_ticks and crushed.events.is_empty() and crushed.player == final_player
+		and crushed.crates == final_crates and crushed.impact_crate_id == int(falling.id)
+		and crushed.match_result(ended_at) == crush_result, "Game over must be emitted only once and freeze the model")
+	crushed.reset(7481)
+	check(crushed.impact_crate_id == -1, "Reset must discard the prior impact ID")
 	var full := empty(4, 6)
 	full.cranes_enabled = true
 	for row in range(6):
 		full.add_crate(0, row)
 	full.advance(1.0 / 120, 0)
-	check(full.state == "over" and full.loss_reason == "overflow", "A settled tower at full field height blocks the cranes")
+	check(full.state == "over" and full.loss_reason == "overflow" and full.impact_crate_id == -1,
+		"A settled tower at full field height blocks the cranes without reporting an impact")
 	check(full.cranes[0].x == -Simulation.CRANE_EDGE_MARGIN, "Overflow must stop the cranes before another release")
+
+
+func crush_beside_support() -> void:
+	var game := empty()
+	game.player = Vector2(2.1, 4.83)
+	game.grounded = false
+	var support := game.add_crate(1.0, 5.0)
+	for row in range(6, game.tuning.rows):
+		game.add_crate(1.0, row)
+	var impact := game.add_crate(1.8, 3.81, 6.0)
+	game.advance(Simulation.STEP, 0.0)
+	check(game.state == "over" and game.loss_reason == "crushed" and game.impact_crate_id == int(impact.id),
+		"An off-center impact beside a stack must cause the ordinary loss")
+	check(not game.grounded and is_equal_approx(float(impact.y), 3.86) and crates_separate(game),
+		"The lethal simulation tick must keep the airborne hero and the falling crate in their original contact geometry")
+	var final_player := game.player
+	var final_crates := game.crates.duplicate(true)
+	var view := StackWorldView.new()
+	view.model = game
+	view.crush_progress = 1.0
+	var geometry := view.crush_geometry(impact)
+	var crate: Rect2 = geometry.crate
+	var hero: Rect2 = geometry.hero
+	var support_top := float(support.y) * StackWorldView.PIXELS_PER_CELL
+	var support_right := (float(support.x) + 1.0) * StackWorldView.PIXELS_PER_CELL
+	check(crate.end.y <= support_top + Simulation.EPS, "The animated crate must stop above the adjacent support")
+	check(hero.position.x >= support_right - Simulation.EPS, "The flattened hero must stay outside the stack")
+	check(hero.position.y <= crate.end.y + Simulation.EPS and hero.position.x < crate.end.x and hero.end.x > crate.position.x,
+		"The flattened hero must remain in contact with the crate")
+	check(game.player == final_player and game.crates == final_crates,
+		"Drawing the supported crush must preserve the final simulation positions")
+	view.free()
 
 
 func crane_cycles() -> void:
@@ -560,7 +635,8 @@ func app_flow() -> void:
 		await process_frame
 	check(app.model.ticks == paused_ticks, "Pause must freeze the entire simulation")
 	app._show_screen("playing")
-	for dimensions in [Vector2i(390, 844), Vector2i(844, 390), Vector2i(320, 568), Vector2i(568, 320)]:
+	for dimensions in [Vector2i(390, 844), Vector2i(844, 390), Vector2i(320, 568), Vector2i(568, 320),
+			Vector2i(344, 882), Vector2i(882, 344), Vector2i(768, 1004), Vector2i(1004, 768), Vector2i(360, 360)]:
 		root.size = dimensions
 		await process_frame
 		await process_frame
@@ -573,12 +649,21 @@ func app_flow() -> void:
 	app._show_screen("statistics")
 	check(app.buttons.has("back"), "Statistics must provide a return path")
 	app.set_process(false)
-	# Exercise button callbacks without starting audio in the headless lifecycle test.
+	# Exercise input and button callbacks without starting audio in the headless lifecycle test.
 	app.sound.unlocked = true
 	app.sound.sounds.clear()
+	var arrow_up := InputEventKey.new()
+	arrow_up.physical_keycode = KEY_UP
+	arrow_up.pressed = true
+	app._input(arrow_up)
+	check(not app.jump_pending, "Arrow Up in menus must remain available for UI navigation")
 	app._start_game()
 	check(app.session == 2 and app.model.score == 0, "Restart must start a fresh party")
+	app._input(arrow_up)
+	check(app.jump_pending, "Arrow Up must queue the ordinary jump during personal play")
 	app._pause()
+	app._input(arrow_up)
+	check(not app.jump_pending, "Arrow Up must not queue a jump on the pause panel")
 	app.buttons.restart.pressed.emit()
 	await process_frame
 	check(app.session == 3 and app.profile.matches.is_empty() and not FileAccess.file_exists(path),
@@ -611,9 +696,32 @@ func app_flow() -> void:
 	app.buttons.again.pressed.emit()
 	await process_frame
 	check(app.screen == "playing", "Playing again after a loss must start a new unfinished match")
+	app.model.crates.clear()
+	app.model.cranes_enabled = false
+	app.model.player.x = 4.3
+	var impact: Dictionary = app.model.add_crate(4.0, 8.0, 1.0)
+	app._advance_game(.5)
+	var impact_ticks: int = app.model.ticks
+	check(app.model.state == "over" and app.screen == "playing" and app.crush_elapsed == 0.0,
+		"A fatal hit must stop physics immediately and play before the result appears")
+	check(app.model.impact_crate_id == impact.id and Profile.new(path).matches.size() == 2,
+		"The fatal impact must keep its crate ID and save the result before the animation")
+	app._advance_game(.12)
+	app._pause()
+	app._advance_game(.5)
+	check(app.crush_elapsed == .12 and app.model.ticks == impact_ticks,
+		"Pause must freeze the squash without extending the match")
+	app.buttons.resume.pressed.emit()
+	await process_frame
+	app._advance_game(.31)
+	check(app.screen == "over" and app.model.ticks == impact_ticks and app.profile.matches.size() == 2,
+		"The standard result must follow the squash without writing a duplicate match")
+	app.buttons.again.pressed.emit()
+	await process_frame
+	check(app.crush_elapsed < 0.0 and app.model.impact_crate_id == -1, "A new match must clear the death pose")
 	app.queue_free()
 	await process_frame
-	check(Profile.new(path).matches.size() == 1, "Closing during a new match must leave completed history unchanged")
+	check(Profile.new(path).matches.size() == 2, "Closing during a new match must leave completed history unchanged")
 	DirAccess.remove_absolute(path)
 
 

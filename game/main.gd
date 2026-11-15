@@ -1,6 +1,7 @@
 extends Control
 const TUNING: StackTuning = preload("res://game/prototype.tres")
 const STATISTICS_VIEW = preload("res://game/statistics_view.gd")
+const CRUSH_ANIMATION_TIME := 0.42
 var model: StackSimulation
 var demo: StackDemo
 var profile: StackProfile
@@ -16,6 +17,7 @@ var pointers := {}
 var jump_pending := false
 var session := 0
 var result_saved := false
+var crush_elapsed := -1.0
 var first_match := 0
 var expanded_match := -1
 var qa_enabled := false
@@ -27,6 +29,7 @@ var qa_result_demo := false
 var qa_statistics_preview: StackProfile
 var qa_crane_preview := false
 var qa_crane_releases: Array[Dictionary] = []
+var qa_animation_held := false
 const CREAM := Color("f4e3ba")
 const MINT := Color("8dc6ac")
 const GOLD := Color("d7a45a")
@@ -392,11 +395,12 @@ func _start_game() -> void:
 	qa_hero_pose = false
 	qa_crane_preview = false
 	qa_crane_releases.clear()
+	qa_animation_held = false
+	crush_elapsed = -1.0
 	world.cosmetic_magnet = true
 	session += 1
 	model = StackSimulation.new(TUNING, Time.get_ticks_usec())
 	world.model = model
-	world.particles.clear()
 	world.caption_life = 0.0
 	world._layout()
 	result_saved = false
@@ -408,10 +412,14 @@ func _pause() -> void:
 		_show_screen("paused")
 
 
-func _end_game() -> void:
+func _record_result() -> void:
 	if not result_saved:
 		result_saved = true
 		profile.add_match(model.match_result(Time.get_datetime_string_from_system()))
+
+
+func _end_game() -> void:
+	_record_result()
 	_show_screen("over")
 
 
@@ -449,9 +457,11 @@ func _input(event: InputEvent) -> void:
 		if event.physical_keycode == KEY_ESCAPE:
 			_pause()
 			get_viewport().set_input_as_handled()
-		elif event.physical_keycode == KEY_SPACE:
+		elif event.physical_keycode in [KEY_SPACE, KEY_UP] and crush_elapsed < 0.0:
 			jump_pending = true
 			get_viewport().set_input_as_handled()
+	elif crush_elapsed >= 0.0:
+		return
 	elif event is InputEventScreenTouch:
 		_pointer(event.index, event.position, event.pressed)
 	elif event is InputEventScreenDrag and pointers.has(event.index):
@@ -486,6 +496,11 @@ func _pointer(id: int, position: Vector2, down: bool) -> void:
 func _advance_game(delta: float) -> void:
 	if model == null or screen != "playing":
 		return
+	if crush_elapsed >= 0.0:
+		crush_elapsed = minf(crush_elapsed + delta, CRUSH_ANIMATION_TIME)
+		if crush_elapsed >= CRUSH_ANIMATION_TIME:
+			_end_game()
+		return
 	var actions: Array[String] = []
 	for action in pointers.values():
 		if not actions.has(action):
@@ -511,7 +526,12 @@ func _advance_game(delta: float) -> void:
 				world.line_effect(int(event.chain))
 			"over":
 				sound.effect("over")
-				_end_game()
+				if event.reason == "crushed":
+					_record_result()
+					_release_controls()
+					crush_elapsed = 0.0
+				else:
+					_end_game()
 	if score_label != null:
 		_update_hud_score()
 
@@ -534,13 +554,22 @@ func _advance_demo(delta: float) -> void:
 				world.line_effect(int(event.chain))
 
 
+func _update_crush_view() -> void:
+	var elapsed := crush_elapsed
+	if _background_demo():
+		elapsed = demo.over_elapsed if demo.model.state == "over" and demo.model.loss_reason == "crushed" else -1.0
+	world.crush_progress = minf(elapsed / CRUSH_ANIMATION_TIME, 1.0) if elapsed >= 0.0 else -1.0
+
+
 func _process(delta: float) -> void:
 	if world == null:
 		return
 	_advance_demo(delta)
-	if not (qa_enabled and qa_hero_pose):
+	if not (qa_enabled and (qa_hero_pose or qa_animation_held)):
 		_advance_game(delta)
-	world.animate(delta if screen != "paused" and not (qa_enabled and (qa_hero_pose or qa_freeze_demo)) else 0.0)
+	_update_crush_view()
+	var frozen := screen == "paused" or (qa_enabled and (qa_hero_pose or qa_freeze_demo or qa_animation_held))
+	world.animate(0.0 if frozen else delta)
 	if qa_enabled:
 		qa_timer += delta
 		if qa_timer >= 0.08:
@@ -576,8 +605,11 @@ func _publish_qa() -> void:
 		var rect: Rect2 = world.controls[id]
 		input_rects[id] = [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
 	var visible_crates := []
+	var retiring_ids := []
 	for crate in world.model.crates:
 		visible_crates.append({"id": crate.id, "x": crate.x, "y": crate.y, "color": crate.color})
+		if world.model.is_clearing_crate(int(crate.id)):
+			retiring_ids.append(crate.id)
 	var cranes := []
 	var trolleys := []
 	for index in range(world.model.cranes.size()):
@@ -591,6 +623,11 @@ func _publish_qa() -> void:
 	var status := {"ready": true, "screen": screen, "score": model.score,
 		"lines": model.lines, "loss_reason": model.loss_reason,
 		"session": session, "ticks": model.ticks, "state": model.state,
+		"animation_held": qa_animation_held,
+		"jump_pending": jump_pending,
+		"clear_animation": {"phase": world.clear_animation_phase(), "elapsed": world.model.clear_elapsed, "ids": retiring_ids},
+		"crush_animation": {"active": screen in ["playing", "paused"] and crush_elapsed >= 0.0,
+			"progress": world.crush_progress, "impact_crate": world.model.impact_crate_id},
 		"active_duration_ms": roundi(model.ticks * StackSimulation.STEP * 1000.0),
 		"player": [model.player.x, model.player.y], "grounded": model.grounded,
 		"player_size": [TUNING.player_width, TUNING.player_height],
@@ -693,6 +730,16 @@ func _qa_command() -> void:
 	var request: Variant = JSON.parse_string(str(raw))
 	if not request is Dictionary:
 		return
+	if str(request.get("scenario", "")) == "animation_step":
+		qa_animation_held = bool(request.get("animation_hold", qa_animation_held))
+		if qa_animation_held:
+			for frame in range(clampi(int(request.get("frames", 0)), 0, 180)):
+				if screen != "playing":
+					break
+				_advance_game(StackSimulation.STEP)
+				world.animate(StackSimulation.STEP)
+		_update_crush_view()
+		return
 	if str(request.get("scenario", "")) == "crate_appearance" and screen in ["menu", "playing"]:
 		var target := demo.model if screen == "menu" else model
 		target.crates.clear()
@@ -706,7 +753,6 @@ func _qa_command() -> void:
 		qa_freeze_demo = screen == "menu"
 		qa_hero_pose = screen == "playing"
 		world.axis = 0.0
-		world.particles.clear()
 		return
 	if str(request.get("scenario", "")) == "result_preview" and screen in ["menu", "over"]:
 		model.score = clampi(int(request.get("score", 0)), 0, 100000000)
@@ -733,6 +779,7 @@ func _qa_command() -> void:
 		# Reset a real simulation and start the first routes at known positions for capture.
 		qa_hero_pose = false
 		qa_crane_preview = true
+		qa_animation_held = false
 		qa_crane_releases.clear()
 		_release_controls()
 		model.reset(7481)
@@ -741,7 +788,6 @@ func _qa_command() -> void:
 		model.cranes[1].x = TUNING.columns + 0.75
 		model.cranes[0].release_column = 7
 		model.cranes[1].release_column = 1
-		world.particles.clear()
 		world.caption_life = 0.0
 		return
 	if str(request.get("scenario", "")) == "hero_pose":
@@ -760,12 +806,12 @@ func _qa_command() -> void:
 			model.add_crate(model.player.x + TUNING.player_width if model.facing > 0 else model.player.x - 1, float(TUNING.rows - 1))
 		world.clock = 0.15 if pose == "walk_recover" else 0.0
 		world.caption_life = 0.0
-		world.particles.clear()
 		return
 	if str(request.get("scenario", "")) not in ["line", "chain", "crush", "overflow", "push", "showcase"]:
 		return
 	qa_hero_pose = false
 	qa_crane_preview = false
+	qa_animation_held = bool(request.get("animation_hold", false))
 	model.crates.clear()
 	model.cranes_enabled = false
 	model.player_velocity = Vector2.ZERO

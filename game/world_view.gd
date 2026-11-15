@@ -10,10 +10,10 @@ var crane_rail := Rect2()
 var cell := 24.0
 var controls := {}
 var pressed_actions: Array[String] = []
-var particles: Array[Dictionary] = []
 var line_caption := ""
 var caption_life := 0.0
 var cosmetic_magnet := true
+var crush_progress := -1.0
 const FONT: Font = preload("res://art/workshop_font.fnt")
 const HERO_SIZE := Vector2(16, 24)
 const HERO_OFFSET := Vector2(-1, -2)
@@ -31,10 +31,15 @@ const CRANE_METAL := [Color("355762"), Color("785132")]
 const CRANE_TOP := -52.0
 const SCORE_PANEL_RIGHT := 138.0
 const HUD_CLEARANCE_Y := 60.0
+const LANDSCAPE_FRAME_CLEARANCE := 18.0
 const INK := Color("102733")
 const CREAM := Color("f4e3ba")
 const GOLD := Color("d7a45a")
 const MINT := Color("8dc6ac")
+const CLEAR_GLOW_FRACTION := 0.30
+const CLEAR_LIP_TIME := 0.08
+const EFFECT_AMBER := Color("ffc276")
+const EFFECT_DUST := Color("e9c598")
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -45,13 +50,30 @@ func _ready() -> void:
 func _layout() -> void:
 	if model == null: return
 	var landscape := size.x > size.y
-	var free_width := size.x - (202.0 if landscape else 36.0)
+	var button_size := Vector2(66, 64)
+	var left_limit := 0.0
+	var right_limit := size.x
+	var free_width := size.x - 36.0
+	if landscape:
+		var right_button := Rect2(Vector2(84, size.y - 90), button_size)
+		var jump_button := Rect2(Vector2(size.x - 82, size.y - 90), Vector2(70, 64))
+		controls = {"left": Rect2(Vector2(12, size.y - 90), button_size),
+			"right": right_button, "jump": jump_button}
+		left_limit = right_button.end.x + LANDSCAPE_FRAME_CLEARANCE
+		right_limit = jump_button.position.x - LANDSCAPE_FRAME_CLEARANCE
+		free_width = right_limit - left_limit
+	else:
+		controls = {"left": Rect2(Vector2(18, size.y - 92), button_size),
+			"right": Rect2(Vector2(90, size.y - 92), button_size),
+			"jump": Rect2(Vector2(size.x - 88, size.y - 92), Vector2(70, 64))}
 	var free_height := size.y - (84.0 if landscape else 204.0)
 	cell = maxf(8.0, floorf(minf(free_width / model.tuning.columns, free_height / (model.tuning.rows + 2))))
 	var world_size := Vector2(model.tuning.columns * cell, model.tuning.rows * cell)
 	var top := 60.0 + cell * 1.1
 	if not landscape: top += maxf(0.0, (free_height - (model.tuning.rows + 2) * cell) * 0.4)
 	var left := floorf((size.x - world_size.x) * 0.5)
+	if landscape:
+		left = clampf(left, left_limit, maxf(left_limit, right_limit - world_size.x))
 	var scale_to_view := cell / PIXELS_PER_CELL
 	var rail_margin := clampf(10.0 * scale_to_view, 0.0, maxf(0.0, left - 3.0))
 	# On the narrower layouts the headroom is shared with the score and pause plates.
@@ -60,35 +82,32 @@ func _layout() -> void:
 	field = Rect2(Vector2(left, top), world_size)
 	crane_rail = Rect2(Vector2(left - rail_margin, top + CRANE_TOP * scale_to_view),
 		Vector2(world_size.x + rail_margin * 2.0, (CRANE_TRACK_Y[1] + 6.0 - CRANE_TOP) * scale_to_view))
-	var button_size := Vector2(66, 64)
-	if landscape:
-		controls = {"left": Rect2(Vector2(12, size.y - 90), button_size), "right": Rect2(Vector2(84, size.y - 90), button_size), "jump": Rect2(Vector2(size.x - 82, size.y - 90), Vector2(70, 64))}
-	else:
-		controls = {"left": Rect2(Vector2(18, size.y - 92), button_size), "right": Rect2(Vector2(90, size.y - 92), button_size), "jump": Rect2(Vector2(size.x - 88, size.y - 92), Vector2(70, 64))}
 	queue_redraw()
 
 func animate(delta: float) -> void:
 	clock += delta
 	caption_life = maxf(0.0, caption_life - delta)
-	for particle in particles:
-		particle.life = float(particle.life) - delta
-		particle.position += particle.velocity * delta
-		particle.velocity.y += 7.0 * delta
-	particles = particles.filter(func(p: Dictionary) -> bool: return float(p.life) > 0.0)
 	queue_redraw()
 
 func line_effect(chain: int) -> void:
 	caption_life = 1.4
 	line_caption = "+%d" % model.tuning.points_per_line if chain == 1 else "ЦЕПОЧКА · %d РЯДА" % chain
-	for index in range(40):
-		particles.append({"position": Vector2(float(index) / 40 * model.tuning.columns, model.tuning.rows - 0.5), "velocity": Vector2(sin(index * 7.1) * 2.5, -1.0 - fmod(index * 0.7, 3.0)), "life": 0.5 + fmod(index * 0.13, 0.5)})
+
+func clear_animation_phase() -> String:
+	if model == null or model.state != "clearing":
+		return "none"
+	if model.clear_elapsed >= model.tuning.clear_flash_time:
+		return "collapse"
+	if model.clear_elapsed < model.tuning.clear_flash_time * CLEAR_GLOW_FRACTION:
+		return "glow"
+	return "retreat"
 
 func _draw() -> void:
 	_draw_scenery()
 	if model == null: return
 	_draw_warehouse()
 	if active: _draw_controls()
-	if caption_life > 0.0 and active:
+	if caption_life > 0.0 and active and model.state != "over":
 		var width := FONT.get_string_size(line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
 		var at := Vector2(size.x * 0.5 - width * 0.5, field.position.y + field.size.y * 0.3)
 		draw_string_outline(FONT, at, line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, 3, INK)
@@ -287,6 +306,202 @@ func _draw_crane_jaw(span: Rect2, joint: Vector2, side: float, spread: float, bo
 		_draw_crane_rect(part.grow(-1.0), span, body)
 	_draw_crane_rect(Rect2(wrist, joint.y + 3.0, 1.0, 1.0), span, light)
 
+func _draw_clearing_row(width: float, floor_y: float, phase: String) -> void:
+	var row := Rect2(0.0, floor_y - PIXELS_PER_CELL, width, PIXELS_PER_CELL)
+	var progress := model.clear_elapsed / model.tuning.clear_flash_time
+	var retreat := inverse_lerp(CLEAR_GLOW_FRACTION, 1.0, progress) if phase == "retreat" else 0.0
+	var depth: float = smoothstep(0.0, 1.0, retreat)
+	var openness: float = smoothstep(0.0, 0.30, retreat)
+	var glow: float = smoothstep(-0.04, 0.13, progress) * (1.0 - smoothstep(0.0, 0.24, retreat))
+	var shadow: float = smoothstep(0.0, 0.82, retreat)
+	var tint := Color(1.0 + 0.25 * glow, 1.0 + 0.12 * glow, 1.0 - 0.10 * glow)
+	tint = tint.lerp(Color("62574b"), shadow)
+	tint.a = 1.0 - smoothstep(0.62, 1.0, retreat)
+	_draw_receiving_slot(row, openness)
+	var width_scale := lerpf(1.0, 0.84, depth)
+	var height := roundf(lerpf(PIXELS_PER_CELL, 12.0, depth))
+	for crate in model.crates:
+		if not model.is_clearing_crate(int(crate.id)):
+			continue
+		var x := _crate_origin(float(crate.x), float(crate.y)).x
+		var left := roundf(lerpf(width * 0.5, x, width_scale))
+		var right := roundf(lerpf(width * 0.5, x + PIXELS_PER_CELL, width_scale))
+		draw_texture_rect(CRATE_TEXTURE, Rect2(left, floor_y - height, right - left, height), false, tint)
+	_draw_receiving_lip(row, openness)
+	if glow > 0.0:
+		draw_rect(row.grow(1.0), Color(EFFECT_AMBER, glow * 0.28), false, 3.0)
+		draw_rect(row.grow(-0.5), Color(EFFECT_AMBER, glow), false, 1.0)
+
+func _draw_receiving_slot(row: Rect2, openness: float) -> void:
+	if openness <= 0.0:
+		return
+	draw_rect(row, Color(Color("253b43"), openness))
+	var inner := row.grow(-2.0)
+	draw_rect(inner, Color(Color("0b202b"), openness))
+	draw_rect(Rect2(inner.position, Vector2(inner.size.x, 1.0)), Color(Color("536b6d"), openness))
+	for side: float in [-1.0, 1.0]:
+		var rim_x := inner.get_center().x + inner.size.x * 0.5 * side
+		var back_x := rim_x - 9.0 * side
+		var points := PackedVector2Array([Vector2(rim_x, inner.position.y + 1.0),
+			Vector2(back_x, inner.position.y + 6.0), Vector2(back_x, inner.end.y),
+			Vector2(rim_x, inner.end.y)])
+		draw_colored_polygon(points, Color(Color("192f39"), openness))
+
+func _draw_receiving_lip(row: Rect2, openness: float) -> void:
+	if openness <= 0.0:
+		return
+	var lip_y := row.end.y - 4.0
+	draw_rect(Rect2(0.0, lip_y, row.size.x, 4.0), Color(Color("192f39"), openness))
+	draw_rect(Rect2(1.0, lip_y + 1.0, row.size.x - 2.0, 1.0), Color(Color("627874"), openness))
+
+func _draw_clear_dust(width: float, floor_y: float, elapsed: float) -> void:
+	var collapse_time := model.tuning.collapse_time
+	var progress := clampf(elapsed / collapse_time, 0.0, 1.0)
+	var opacity: float = smoothstep(0.35, 0.54, progress) * (1.0 - smoothstep(0.75, 1.0, progress))
+	if opacity <= 0.0:
+		return
+	for fraction: float in [0.12, 0.28]:
+		var x := roundf(width * fraction)
+		var rise := roundf(progress * 6.0)
+		draw_rect(Rect2(x, floor_y - 2.0 - rise, 2.0, 2.0), Color(EFFECT_DUST, opacity * 0.90))
+		draw_rect(Rect2(x + 4.0, floor_y - rise, 1.0, 1.0), Color(EFFECT_DUST, opacity * 0.69))
+
+func _hero_bounds() -> Rect2:
+	var at := Vector2(roundf(model.player.x * PIXELS_PER_CELL), roundf(model.player.y * PIXELS_PER_CELL))
+	return Rect2(at + HERO_OFFSET, HERO_SIZE)
+
+func _draw_hero(bounds: Rect2, frame: String) -> void:
+	var texture: Texture2D = HERO_TEXTURES[frame + ("" if cosmetic_magnet else "_bare")]
+	if model.facing < 0:
+		bounds.size.x = -bounds.size.x
+	draw_texture_rect(texture, bounds, false)
+
+func crush_geometry(impact: Dictionary) -> Dictionary[String, Rect2]:
+	var strength: float = smoothstep(0.0, 0.39, crush_progress)
+	var floor_y := model.tuning.rows * PIXELS_PER_CELL
+	var hero := _hero_bounds()
+	var player_feet := roundf((model.player.y + model.tuning.player_height) * PIXELS_PER_CELL)
+	var feet := roundf(lerpf(hero.end.y, minf(player_feet, floor_y), strength))
+	hero.size.y = roundf(lerpf(hero.size.y, 7.0, strength))
+	hero.position.y = feet - hero.size.y
+	var overlap := roundf(4.0 * strength)
+	var crate := _impact_crate_bounds(impact, hero.position.y + overlap, floor_y)
+	# A nearby stack can stop the crate before it reaches the usual pose.
+	hero.position.y = minf(hero.position.y, crate.end.y - overlap)
+	hero = _spread_squashed_hero(hero, strength)
+	var geometry: Dictionary[String, Rect2] = {"hero": hero, "crate": crate}
+	return geometry
+
+func _spread_squashed_hero(bounds: Rect2, strength: float) -> Rect2:
+	var left := 0.0
+	var right := model.tuning.columns * PIXELS_PER_CELL
+	var center_x := bounds.get_center().x
+	# Preserve the base pose while keeping any extra spread out of adjacent crates.
+	for crate in model.crates:
+		var at := _crate_origin(float(crate.x), float(crate.y))
+		if at.y >= bounds.end.y or at.y + PIXELS_PER_CELL <= bounds.position.y:
+			continue
+		if at.x + PIXELS_PER_CELL <= center_x:
+			left = maxf(left, at.x + PIXELS_PER_CELL)
+		elif at.x >= center_x:
+			right = minf(right, at.x)
+	var spread := roundf(10.0 * strength)
+	var x := maxf(bounds.position.x - spread, minf(left, bounds.position.x))
+	var end_x := minf(bounds.end.x + spread, maxf(right, bounds.end.x))
+	return Rect2(x, bounds.position.y, end_x - x, bounds.size.y)
+
+func _impact_crate_bounds(impact: Dictionary, target_bottom: float, floor_y: float) -> Rect2:
+	var x := float(impact.x)
+	var bottom := float(impact.y) + 1.0
+	var at := _crate_origin(x, float(impact.y))
+	# The cosmetic descent stops at the same solid surfaces as a falling crate.
+	for crate in model.crates:
+		if float(crate.y) + StackSimulation.EPS < bottom or crate.id == impact.id:
+			continue
+		var other_x := float(crate.x)
+		if x < other_x + 1.0 and x + 1.0 > other_x:
+			floor_y = minf(floor_y, roundf(float(crate.y) * PIXELS_PER_CELL))
+	at.y = maxf(at.y, minf(floor_y, target_bottom) - PIXELS_PER_CELL)
+	return Rect2(at, Vector2.ONE * PIXELS_PER_CELL)
+
+func _draw_crush(impact: Dictionary, width: float) -> void:
+	var geometry := crush_geometry(impact)
+	var pose := geometry["hero"]
+	var crate := geometry["crate"]
+	var reach: float = smoothstep(0.13, 0.40, crush_progress)
+	_draw_hero(pose, hero_frame() if crush_progress == 0.0 else "idle")
+	if reach > 0.0:
+		for x in [pose.position.x, pose.end.x - 4.0]:
+			var glove := Vector2(x, pose.end.y - 4.0)
+			draw_rect(Rect2(glove, Vector2(4, 3)), Color(INK, reach))
+			draw_rect(Rect2(glove + Vector2(1, 0), Vector2(2, 2)), Color(Color("f1bb83"), reach))
+	draw_texture_rect(CRATE_TEXTURE, crate, false)
+	if reach > 0.0:
+		var center := _hero_bounds().get_center().x
+		for x in [center - 6.0, center + 2.0]:
+			var boot := Vector2(x, pose.end.y - 5.0)
+			draw_rect(Rect2(boot, Vector2(4, 5)), Color(INK, reach))
+			draw_rect(Rect2(boot + Vector2(1, 1), Vector2(2, 3)), Color(Color("79583c"), reach))
+	_draw_crush_marks(crate, pose.end.y, width)
+
+func _draw_crush_marks(crate: Rect2, feet: float, width: float) -> void:
+	var shock: float = smoothstep(-0.05, 0.10, crush_progress) * (1.0 - smoothstep(0.12, 0.36, crush_progress))
+	var dust: float = 1.0 - smoothstep(0.13, 0.44, crush_progress)
+	for side: float in [-1.0, 1.0]:
+		var edge := crate.get_center().x + crate.size.x * side * 0.5
+		if edge + side * 9.0 >= 0.0 and edge + side * 9.0 <= width:
+			var contact := Vector2(edge, crate.end.y - 4.0)
+			if shock > 0.0:
+				draw_colored_polygon(PackedVector2Array([contact + Vector2(side, 2),
+					contact + Vector2(side * 9, -7), contact + Vector2(side * 6, -1),
+					contact + Vector2(side * 9, 0), contact + Vector2(side * 5, 2),
+					contact + Vector2(side * 6, 4)]), Color(EFFECT_AMBER, shock))
+			if dust > 0.0:
+				draw_rect(Rect2(edge + side * 7.0 - 1.0, feet - 5.0, 3.0, 2.0), Color(EFFECT_DUST, dust * 0.78))
+				draw_rect(Rect2(edge + side * 4.0 - 1.0, feet - 3.0, 2.0, 2.0), Color(EFFECT_DUST, dust * 0.62))
+	var stars: float = smoothstep(0.53, 0.74, crush_progress)
+	if stars > 0.0:
+		for index in range(-1, 2):
+			var lift := 3.0 * absf(float(index)) + roundf((1.0 - stars) * 3.0)
+			var center := Vector2(clampf(crate.get_center().x + index * 9.0, 3.0, width - 3.0),
+				crate.position.y - 9.0 + lift)
+			_draw_crush_star(center, stars)
+
+func _draw_crush_star(center: Vector2, opacity: float) -> void:
+	var shape := PackedVector2Array([center + Vector2(0, -3), center + Vector2(1, -1),
+		center + Vector2(3, -1), center + Vector2(2, 1), center + Vector2(2, 3), center + Vector2(0, 2),
+		center + Vector2(-2, 3), center + Vector2(-2, 1), center + Vector2(-3, -1), center + Vector2(-1, -1)])
+	draw_colored_polygon(shape, Color(EFFECT_AMBER, opacity))
+	draw_rect(Rect2(center, Vector2.ONE), Color(Color("fff0be"), opacity))
+
+func _draw_field_objects() -> void:
+	var width := model.tuning.columns * PIXELS_PER_CELL
+	var floor_y := model.tuning.rows * PIXELS_PER_CELL
+	var phase := clear_animation_phase()
+	var collapse_elapsed := model.clear_elapsed - model.tuning.clear_flash_time
+	if phase == "glow" or phase == "retreat":
+		_draw_clearing_row(width, floor_y, phase)
+	elif phase == "collapse":
+		var openness: float = 1.0 - smoothstep(0.0, CLEAR_LIP_TIME, collapse_elapsed)
+		var row := Rect2(0.0, floor_y - PIXELS_PER_CELL, width, PIXELS_PER_CELL)
+		_draw_receiving_slot(row, openness)
+		_draw_receiving_lip(row, openness)
+	var impact := {}
+	for crate in model.crates:
+		if float(crate.y) < -1.0 or model.is_clearing_crate(int(crate.id)):
+			continue
+		if crush_progress >= 0.0 and int(crate.id) == model.impact_crate_id:
+			impact = crate
+			continue
+		var position := _crate_origin(float(crate.x), float(crate.y))
+		draw_texture_rect(CRATE_TEXTURE, Rect2(position, Vector2.ONE * PIXELS_PER_CELL), false)
+	if impact.is_empty():
+		_draw_hero(_hero_bounds(), hero_frame())
+	else:
+		_draw_crush(impact, width)
+	if phase == "collapse":
+		_draw_clear_dust(width, floor_y, collapse_elapsed)
+
 func _draw_warehouse() -> void:
 	var outer := field.grow(13)
 	draw_rect(outer.grow(3),Color("0a1e28"))
@@ -311,18 +526,7 @@ func _draw_warehouse() -> void:
 	_bracket(outer.end,Vector2(-1,-1))
 	draw_set_transform(field.position, 0.0, Vector2.ONE * cell / PIXELS_PER_CELL)
 	_draw_cranes()
-	for crate in model.crates:
-		var position := _crate_origin(float(crate.x), float(crate.y))
-		if float(crate.y) < -1.0: continue
-		var tint := Color.WHITE
-		if model.state == "clearing" and model.clear_elapsed < model.tuning.clear_flash_time and float(crate.y) > model.tuning.rows-1.01: tint=Color(1.8,1.6,1.1,1.0)
-		draw_texture_rect(CRATE_TEXTURE,Rect2(position,Vector2.ONE * PIXELS_PER_CELL),false,tint)
-	var hero_position := Vector2(roundf(model.player.x*24),roundf(model.player.y*24))+HERO_OFFSET
-	var texture: Texture2D = HERO_TEXTURES[hero_frame() + ("" if cosmetic_magnet else "_bare")]
-	var hero_rect := Rect2(hero_position,HERO_SIZE)
-	if model.facing < 0: hero_rect.size.x=-HERO_SIZE.x
-	draw_texture_rect(texture,hero_rect,false)
-	for particle in particles: draw_rect(Rect2(particle.position*24,Vector2(2,2)),Color(0.95,0.76,0.4,clampf(float(particle.life)*2,0,1)))
+	_draw_field_objects()
 	draw_set_transform(Vector2.ZERO)
 	var floor_y := field.end.y
 	draw_rect(Rect2(field.position.x-8,floor_y,field.size.x+16,8),Color("bc8549"))

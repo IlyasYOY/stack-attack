@@ -21,6 +21,7 @@ var elapsed := 0.0
 var ticks := 0
 var state := "playing"
 var loss_reason := ""
+var impact_crate_id := -1
 var events: Array[Dictionary] = []
 var chain := 0
 var clear_elapsed := 0.0
@@ -57,6 +58,7 @@ func reset(seed_value: int) -> void:
 	ticks = 0
 	state = "playing"
 	loss_reason = ""
+	impact_crate_id = -1
 	chain = 0
 	accumulator = 0.0
 	_jump_buffer = 0.0
@@ -86,6 +88,10 @@ func time_to_crane_release(crane: Dictionary) -> float:
 		return INF
 	var distance := (float(crane.release_column) + 0.5 - float(crane.x)) * int(crane.direction)
 	return maxf(0.0, distance) / tuning.crane_speed
+
+
+func is_clearing_crate(crate_id: int) -> bool:
+	return state == "clearing" and not _collapse_started and _clear_ids.has(crate_id)
 
 
 func match_result(ended_at: String) -> Dictionary:
@@ -255,6 +261,7 @@ func _move_crates() -> void:
 			if new_y + 1.0 >= player.y + 0.02 and _overlap(
 				float(crate.x), 1.0, player.x, tuning.player_width, 0.055):
 				crate.y = new_y
+				impact_crate_id = int(crate.id)
 				_lose("crushed")
 				return
 		crate.y = new_y

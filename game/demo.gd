@@ -13,7 +13,7 @@ var total_ticks := 0
 var events: Array[Dictionary] = []
 var _seed: int
 var _accumulator := 0.0
-var _over_wait := 0.0
+var over_elapsed := 0.0
 var _think := 0.0
 var _escape := 0.0
 var _escape_axis := 0.0
@@ -32,7 +32,7 @@ func _init(settings: StackTuning, seed_value: int = 7481) -> void:
 func _restart() -> void:
 	model = StackSimulation.new(tuning, _seed + rounds * 97)
 	rounds += 1
-	_over_wait = 0.0
+	over_elapsed = 0.0
 	_think = 0.0
 	_escape = 0.0
 	_push = 0.0
@@ -49,8 +49,8 @@ func advance(delta: float) -> void:
 		_accumulator -= StackSimulation.STEP
 		total_ticks += 1
 		if model.state == "over":
-			_over_wait += StackSimulation.STEP
-			if _over_wait >= 1.2:
+			over_elapsed += StackSimulation.STEP
+			if over_elapsed >= 1.2:
 				_restart()
 			continue
 		var jump := _input_step()

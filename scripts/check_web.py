@@ -14,7 +14,7 @@ from pathlib import Path
 import sys
 import threading
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
-from PIL import Image
+from PIL import Image, ImageStat
 
 parser = argparse.ArgumentParser(description=__doc__)
 group = parser.add_mutually_exclusive_group()
@@ -24,11 +24,17 @@ group.add_argument('--ui-only', action='store_true', help='Run demo isolation an
 group.add_argument('--game-over-only', action='store_true', help='Run score-only result screen regressions and capture screenshots')
 group.add_argument('--statistics-only', action='store_true', help='Check Statistics and capture its rendered overview and history')
 group.add_argument('--cranes-only', action='store_true', help='Check crane passes and capture both playing layouts')
+group.add_argument('--animations-only', action='store_true', help='Check row clear and crush transitions and capture their rendered phases')
+group.add_argument('--keyboard-only', action='store_true', help='Check jump keys and menu keyboard isolation')
 args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build'
 SHOTS = BUILD / 'screenshots'
+WEB_LAYOUT_VIEWPORTS = (
+    (390, 844), (844, 390), (320, 568), (568, 320), (344, 882), (882, 344),
+    (768, 1004), (1004, 768), (360, 360),
+)
 SHOTS.mkdir(exist_ok=True)
 
 
@@ -88,6 +94,18 @@ def button(page, name, touch=False):
     else:
         page.mouse.click(x, y)
     page.wait_for_timeout(160)
+
+
+def check_touch_control_layout(snapshot):
+    width, height = snapshot['viewport']
+    field_x, field_y, field_width, field_height = snapshot['field']
+    assert snapshot['controls'].keys() == {'left', 'right', 'jump'}
+    for action, rect in snapshot['controls'].items():
+        x, y, w, h = rect
+        assert 0 <= x and 0 <= y and x + w <= width + 1 and y + h <= height + 1, (
+            'Touch control is outside the viewport', action, rect, snapshot['viewport'])
+        assert x + w <= field_x or x >= field_x + field_width or y + h <= field_y or y >= field_y + field_height, (
+            'Touch control overlaps the field', action, rect, snapshot['field'], snapshot['viewport'])
 
 
 def scenario(page, name):
@@ -1052,6 +1070,322 @@ def crane_checks(browser):
             'releases':releases, 'screenshots':shots}
 
 
+def animation_request(page, name, **options):
+    page.evaluate('request => window.stackAttackQARequest = request', {'scenario':name, **options})
+    page.wait_for_function('window.stackAttackQARequest === null', timeout=5000)
+    return state(page)
+
+
+def animation_step(page, frames, **options):
+    return animation_request(page, 'animation_step', frames=frames, **options)
+
+
+def animation_image(page, dimensions, shots, phase=None):
+    path = None
+    if phase is not None:
+        path = SHOTS / f'animation-{phase}-{dimensions[0]}x{dimensions[1]}.png'
+    image = Image.open(io.BytesIO(page.screenshot(path=str(path) if path else None))).convert('RGB')
+    assert image.size == dimensions
+    if path:
+        shots.append(str(path.relative_to(ROOT)))
+    return image
+
+
+def field_crop(image, snapshot, x, y, width, height):
+    left, top, field_width, _ = snapshot['field']
+    cell = field_width / snapshot['columns']
+    scale_x = image.width / snapshot['viewport'][0]
+    scale_y = image.height / snapshot['viewport'][1]
+    return image.crop((round((left + x * cell) * scale_x), round((top + y * cell) * scale_y),
+                       round((left + (x + width) * cell) * scale_x), round((top + (y + height) * cell) * scale_y)))
+
+
+def wood_fraction(image):
+    return sum(r > 120 and r > g * 1.15 and g > b * 1.1 for r, g, b in image.get_flattened_data()) / (image.width * image.height)
+
+
+def warm_pixels(image):
+    return sum(r >= 231 and 160 <= g <= 215 and 90 <= b <= 142 for r, g, b in image.get_flattened_data())
+
+
+def hero_height(image, snapshot):
+    x, y = snapshot['player']
+    region = field_crop(image, snapshot, x - .48, y - .15, 1.52, 1.05)
+    colors = {(240,186,132), (39,123,130), (94,169,163), (215,67,56), (241,187,131), (121,88,60)}
+    # The glove and boot strokes are still slightly translucent at the squash frame.
+    rows = []
+    for line in range(region.height):
+        scanline = region.crop((0, line, region.width, line + 1)).get_flattened_data()
+        if any(max(abs(channel - target) for channel, target in zip(pixel, marker)) <= 5
+               for pixel in scanline for marker in colors):
+            rows.append(line)
+    assert rows, ('No workshop hero pixels found', image.size)
+    return max(rows) - min(rows) + 1
+
+
+def assert_frozen_animation(before, after, phase=True):
+    keys = ['ticks', 'active_duration_ms', 'state', 'loss_reason', 'score', 'lines', 'player',
+            'visible_crates', 'cranes', 'crane_releases']
+    if phase:
+        keys.extend(['clear_animation', 'crush_animation'])
+    for key in keys:
+        assert before[key] == after[key], ('Frozen match state changed', key, before[key], after[key])
+    assert personal_statistics(before) == personal_statistics(after)
+
+
+def pause_animation_and_rotate(page, before, dimensions):
+    button(page, 'pause', True)
+    wait_screen(page, 'paused')
+    unheld = animation_step(page, 0, animation_hold=False)
+    assert not unheld['animation_held']
+    rotated = dimensions[::-1] if dimensions[0] != dimensions[1] else (844, 390)
+    for width, height in (rotated, dimensions):
+        page.set_viewport_size({'width':width, 'height':height})
+        page.wait_for_function('layout => window.stackAttackState.layout === layout',
+                               arg='landscape' if width > height else 'portrait', timeout=5000)
+        page.wait_for_timeout(180)
+        after = state(page)
+        assert after['screen'] == 'paused'
+        assert_frozen_animation(before, after)
+        if (width, height) == rotated:
+            assert before['field'] != after['field']
+        else:
+            assert before['field'] == after['field']
+    held = animation_step(page, 0, animation_hold=True)
+    assert held['animation_held']
+    button(page, 'resume', True)
+    wait_screen(page, 'playing')
+    assert_frozen_animation(before, state(page))
+
+
+def clear_animation_check(page, dimensions, shots):
+    loaded = animation_request(page, 'chain', animation_hold=True)
+    assert loaded['animation_held'] and loaded['clear_animation']['phase'] == 'none'
+    still = animation_image(page, dimensions, shots)
+    began = animation_step(page, 1)
+    assert began['state'] == 'clearing' and began['clear_animation']['phase'] == 'glow'
+    glow = animation_step(page, 5)
+    assert glow['clear_animation']['phase'] == 'glow' and 0 < glow['clear_animation']['elapsed'] < .08
+    assert glow['lines'] == 1 and glow['score'] == 100
+    glow_image = animation_image(page, dimensions, shots, 'glow')
+
+    retreat = animation_step(page, 14)
+    assert retreat['clear_animation']['phase'] == 'retreat' and .08 < retreat['clear_animation']['elapsed'] < .22
+    for key in ['player', 'visible_crates', 'cranes', 'crane_releases', 'lines', 'score']:
+        assert glow[key] == retreat[key], ('The departing row moved physics before collapse', key)
+    assert glow['clear_animation']['ids'] == retreat['clear_animation']['ids']
+    retreat_image = animation_image(page, dimensions, shots, 'retreat')
+    rows = retreat['rows']
+    columns = retreat['columns']
+    row_middle = (.1, rows - .8, columns - .2, .6)
+    lower_before = field_crop(still, loaded, *row_middle).convert('L')
+    lower_glow = field_crop(glow_image, glow, *row_middle).convert('L')
+    assert ImageStat.Stat(lower_glow).mean[0] > ImageStat.Stat(lower_before).mean[0] + 8, (
+        'The retiring row did not brighten', dimensions)
+    stroke_widths = []
+    for edge in (rows - 1, rows):
+        # At some scales only one horizontal edge lands on a pixel center.
+        band = field_crop(glow_image, glow, .1, edge - .15, columns - .2, .3)
+        for y in range(band.height):
+            stroke = band.crop((0, y, band.width, y + 1)).get_flattened_data()
+            stroke_widths.append(stroke.count((255,194,118)) / band.width)
+    assert max(stroke_widths) >= .75, ('The retiring row did not render a continuous amber outline', dimensions)
+    lip = field_crop(retreat_image, retreat, .12, rows - .17, columns - .24, .17)
+    # Either surface of the lip can be the one sampled on the smallest canvases.
+    lip_colors = {(25,47,57), (98,120,116)}
+    assert sum(pixel in lip_colors for pixel in lip.get_flattened_data()) > lip.width / 2, (
+        'The receiving slot lip did not render', dimensions)
+    for x in (.1, columns - .8):
+        ceiling = (x, rows - 1.9, .7, .75)
+        assert field_crop(glow_image, glow, *ceiling).tobytes() == field_crop(retreat_image, retreat, *ceiling).tobytes(), (
+            'The upper row changed during the retreat', dimensions, x)
+        side = (x, rows - .92, .7, .65)
+        assert wood_fraction(field_crop(retreat_image, retreat, *side)) < wood_fraction(field_crop(still, loaded, *side)) / 2, (
+            'The retreat did not pull the row in from the sides', dimensions, x)
+
+    collapse = animation_step(page, 22)
+    assert collapse['clear_animation']['phase'] == 'collapse' and .22 < collapse['clear_animation']['elapsed'] < .47
+    departing_ids = set(retreat['clear_animation']['ids'])
+    assert len(departing_ids) == columns
+    assert {crate['id'] for crate in retreat['visible_crates'] if crate['y'] == rows - 1} == departing_ids
+    remaining = {crate['id']:crate for crate in retreat['visible_crates'] if crate['id'] not in departing_ids}
+    assert {crate['id'] for crate in collapse['visible_crates']} == remaining.keys()
+    descent = collapse['player'][1] - retreat['player'][1]
+    assert .25 < descent < .75 and collapse['player'][0] == retreat['player'][0]
+    for crate in collapse['visible_crates']:
+        origin = remaining[crate['id']]
+        assert abs(crate['y'] - origin['y'] - descent) < 1e-5 and crate['x'] == origin['x']
+    collapse_image = animation_image(page, dimensions, shots, 'collapse')
+    former_top = (.15, rows - 1.9, .65, .25)
+    assert wood_fraction(field_crop(collapse_image, collapse, *former_top)) < .1
+    assert wood_fraction(field_crop(still, loaded, *former_top)) > .25
+    pause_animation_and_rotate(page, collapse, dimensions)
+
+    second = animation_step(page, 16)
+    assert second['state'] == 'clearing' and second['clear_animation']['phase'] == 'glow'
+    assert set(second['clear_animation']['ids']) == remaining.keys()
+    assert second['score'] == 200 and second['lines'] == 2
+    assert abs(second['player'][1] - began['player'][1] - 1) < 1e-5
+    finished = animation_step(page, 57)
+    assert finished['state'] == 'playing' and finished['clear_animation']['phase'] == 'none'
+    assert finished['score'] == 200 and finished['lines'] == 2 and not finished['visible_crates']
+    assert abs(finished['player'][1] - began['player'][1] - 2) < 1e-5
+    assert not finished['profile']['matches']
+    return {name: snapshot['clear_animation']['elapsed'] for name, snapshot in
+            [('glow',glow), ('retreat',retreat), ('collapse',collapse)]}
+
+
+def loss_animation_check(page, dimensions, shots):
+    loaded = animation_request(page, 'crush', animation_hold=True)
+    assert loaded['animation_held'] and loaded['state'] == 'playing'
+    standing_height = hero_height(animation_image(page, dimensions, shots), loaded)
+    for _ in range(24):
+        hit = animation_step(page, 6)
+        if hit['state'] == 'over':
+            break
+    assert hit['crush_animation']['active'] and hit['screen'] == 'playing' and hit['loss_reason'] == 'crushed'
+    assert 0 <= hit['crush_animation']['progress'] < .15
+    assert hit['crush_animation']['impact_crate'] in {crate['id'] for crate in hit['visible_crates']}
+    assert 'again' not in hit['buttons'] and 'home' not in hit['buttons']
+    crushed, = hit['profile']['matches']
+    assert {key:crushed[key] for key in ('reason', 'score', 'lines', 'crates', 'best_combo')} == {
+        'reason':'crushed', 'score':200, 'lines':2, 'crates':20, 'best_combo':2}
+    assert crushed['duration_ms'] == hit['active_duration_ms']
+    assert abs(crushed['duration_ms'] - hit['ticks'] * 1000 / 120) <= .5 + 1e-9
+    animation_image(page, dimensions, shots, 'crush-impact')
+
+    page.keyboard.down('ArrowRight')
+    page.keyboard.press('Space')
+    try:
+        squash = animation_step(page, 15)
+    finally:
+        page.keyboard.up('ArrowRight')
+    assert squash['crush_animation']['active'] and squash['screen'] == 'playing'
+    assert hit['crush_animation']['progress'] < squash['crush_animation']['progress'] < 1
+    assert_frozen_animation(hit, squash, phase=False)
+    squash_image = animation_image(page, dimensions, shots, 'crush')
+    squash_height = hero_height(squash_image, squash)
+    assert squash_height < standing_height * .7, ('The hero sprite did not squash', dimensions, standing_height, squash_height)
+    pause_animation_and_rotate(page, squash, dimensions)
+
+    settled = animation_step(page, 17)
+    assert settled['screen'] == 'playing' and settled['crush_animation']['active']
+    assert .62 < settled['crush_animation']['progress'] < .9
+    assert_frozen_animation(hit, settled, phase=False)
+    settled_image = animation_image(page, dimensions, shots, 'crush-settled')
+    impact_x = next(crate['x'] for crate in hit['visible_crates'] if crate['id'] == hit['crush_animation']['impact_crate'])
+    for offset in (0, 1/3, 2/3):
+        star = field_crop(settled_image, settled, impact_x + offset, settled['rows'] - 1.7, 1/3, .47)
+        assert warm_pixels(star) >= 3, ('A crush star did not render above the crate', dimensions, offset)
+    animation_step(page, 0, animation_hold=False)
+    wait_screen(page, 'over')
+    result = state(page)
+    assert not result['crush_animation']['active']
+    assert_frozen_animation(hit, result, phase=False)
+    score_only_result(page)
+    animation_image(page, dimensions, shots, 'crushed-result')
+
+    button(page, 'again', True)
+    wait_screen(page, 'playing')
+    restarted = state(page)
+    assert restarted['session'] == hit['session'] + 1 and restarted['score'] == 0
+    assert not restarted['animation_held'] and not restarted['crush_animation']['active']
+    animation_request(page, 'overflow', animation_hold=True)
+    overflow = animation_step(page, 1)
+    assert overflow['screen'] == overflow['state'] == 'over' and overflow['loss_reason'] == 'overflow'
+    assert not overflow['crush_animation']['active']
+    assert [match['reason'] for match in overflow['profile']['matches']] == ['overflow', 'crushed']
+    assert overflow['profile']['matches'][1] == crushed
+    lost_to_stack = overflow['profile']['matches'][0]
+    assert {key:lost_to_stack[key] for key in ('score', 'lines', 'crates', 'best_combo', 'duration_ms')} == {
+        'score':0, 'lines':0, 'crates':0, 'best_combo':0, 'duration_ms':overflow['active_duration_ms']}
+    wait_screen(page, 'over')
+    score_only_result(page)
+    animation_image(page, dimensions, shots, 'overflow-result')
+    return {'crush_progress':squash['crush_animation']['progress'], 'duration_ms':crushed['duration_ms'],
+            'standing_hero_pixels':standing_height, 'squashed_hero_pixels':squash_height}
+
+
+def animation_checks(browser):
+    checks = []
+    for dimensions in WEB_LAYOUT_VIEWPORTS:
+        width, height = dimensions
+        context = browser.new_context(viewport={'width':width, 'height':height}, has_touch=True, device_scale_factor=1)
+        page = context.new_page()
+        errors = []
+        page.on('pageerror', lambda value: errors.append(str(value)))
+        page.goto(URL)
+        wait_screen(page, 'menu')
+        button(page, 'play', True)
+        wait_screen(page, 'playing')
+        check_touch_control_layout(state(page))
+        page.mouse.move(2, 2)
+        shots = []
+        clear = clear_animation_check(page, dimensions, shots)
+        crush = loss_animation_check(page, dimensions, shots)
+        assert not errors, errors
+        check = {'viewport':list(dimensions), 'clear_elapsed':clear, **crush, 'pause_and_resize':'PASS', 'touch_controls_clear':'PASS',
+                 'chain_and_match_statistics':'PASS', 'overflow_immediate':'PASS', 'screenshots':shots,
+                 'screenshot_sha256':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in shots}}
+        checks.append(check)
+        print('ANIMATIONS', json.dumps(check), flush=True)
+        context.close()
+    return checks
+
+
+def keyboard_jump_checks(browser):
+    context = browser.new_context(viewport={'width':844, 'height':390}, device_scale_factor=1)
+    page = context.new_page()
+    errors = []
+    page.on('pageerror', lambda value: errors.append(str(value)))
+    page.goto(URL)
+    wait_screen(page, 'menu')
+    menu = state(page)
+    page.keyboard.press('ArrowUp')
+    after_menu = animation_step(page, 0)
+    assert after_menu['screen'] == 'menu' and after_menu['panel']['focus'] in after_menu['buttons']
+    assert not after_menu['jump_pending'], 'ArrowUp queued a jump in the main menu'
+    for key in ('session', 'ticks', 'player', 'score'):
+        assert after_menu[key] == menu[key], ('ArrowUp changed the match from the main menu', key)
+    assert personal_statistics(after_menu) == personal_statistics(menu)
+
+    button(page, 'play')
+    wait_screen(page, 'playing')
+    animation_request(page, 'push', animation_hold=True)
+    grounded = animation_step(page, 1)
+    assert grounded['grounded'], 'The jump fixture must start on the floor'
+    page.keyboard.press('Escape')
+    wait_screen(page, 'paused')
+    page.keyboard.press('ArrowUp')
+    paused = animation_step(page, 0)
+    assert paused['screen'] == 'paused' and paused['panel']['focus'] in paused['buttons']
+    assert not paused['jump_pending'], 'ArrowUp queued a jump while paused'
+    assert_frozen_animation(grounded, paused)
+    page.keyboard.press('Escape')
+    wait_screen(page, 'playing')
+    resumed = animation_step(page, 12)
+    assert resumed['grounded'] and resumed['player'] == grounded['player']
+
+    jumps = {}
+    for key in ('ArrowUp', 'Space'):
+        animation_request(page, 'push', animation_hold=True)
+        grounded = animation_step(page, 1)
+        assert grounded['grounded'] and not grounded['jump_pending']
+        page.keyboard.press(key)
+        queued = animation_step(page, 0)
+        assert queued['jump_pending'], ('The jump key did not reach the game', key)
+        airborne = animation_step(page, 12)
+        rise = grounded['player'][1] - airborne['player'][1]
+        assert airborne['screen'] == 'playing' and not airborne['grounded'] and rise > .35, (
+            'The hero did not jump', key, rise)
+        assert airborne['player'][0] == grounded['player'][0], ('The jump key moved the hero sideways', key)
+        jumps[key] = rise
+    assert personal_statistics(airborne) == personal_statistics(menu)
+    assert not errors, errors
+    context.close()
+    return {'menu_isolation':'PASS', 'pause_isolation':'PASS', 'jump_rise_cells':jumps}
+
+
 def wooden_crates(browser):
     context = browser.new_context(viewport={'width':360,'height':800},has_touch=True,device_scale_factor=1)
     page = context.new_page()
@@ -1141,7 +1475,7 @@ def menu_layouts(browser):
     page.goto(URL)
     wait_screen(page, 'menu')
     results = []
-    for dimensions in [(320,568), (568,320), (390,844), (844,390), (344,882), (882,344), (768,1004), (1004,768), (360,360)]:
+    for dimensions in WEB_LAYOUT_VIEWPORTS:
         previous_focus = state(page)['panel']['focus']
         page.set_viewport_size({'width':dimensions[0], 'height':dimensions[1]})
         page.wait_for_timeout(400)
@@ -1201,6 +1535,20 @@ try:
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         full_check = not any(vars(args).values())
+        keyboard = keyboard_jump_checks(browser) if args.keyboard_only or full_check else {}
+        if keyboard:
+            print('KEYBOARD', json.dumps(keyboard), flush=True)
+        if args.keyboard_only:
+            (BUILD/'keyboard-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'renderer':'SwiftShader',
+                'checks':keyboard,'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest()},indent=2)+'\n')
+            browser.close()
+            raise SystemExit(0)
+        animations = animation_checks(browser) if args.animations_only or full_check else []
+        if args.animations_only:
+            (BUILD/'animation-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'renderer':'SwiftShader',
+                'checks':animations,'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest()},indent=2)+'\n')
+            browser.close()
+            raise SystemExit(0)
         cranes = crane_checks(browser) if args.cranes_only or full_check else {}
         if cranes:
             print('CRANES', json.dumps(cranes), flush=True)
@@ -1306,11 +1654,7 @@ try:
             assert rotated['ticks'] == paused['ticks']
             assert rotated['player'] == paused['player'] and rotated['score'] == paused['score']
             assert rotated['columns'] == 10 and rotated['rows'] == 11
-            for rect in rotated['controls'].values():
-                x,y,w,h = rect
-                assert x>=0 and y>=0 and x+w<=rotated['viewport'][0]+1 and y+h<=rotated['viewport'][1]+1
-                fx,fy,fw,fh = rotated['field']
-                assert x+w<=fx or x>=fx+fw or y+h<=fy or y>=fy+fh, 'A touch control overlaps the field'
+            check_touch_control_layout(rotated)
             button(page, 'resume', touch)
             wait_screen(page, 'playing')
             before_restart = state(page)['session']
@@ -1395,7 +1739,7 @@ try:
             results.append(result)
             print(json.dumps(result), flush=True)
             context.close()
-        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'cranes':cranes, 'statistics':statistics, 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
+        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'keyboard':keyboard, 'animations':animations, 'cranes':cranes, 'statistics':statistics, 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
                   'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
                   'page_errors':all_errors,'failed_requests':all_failed_requests,'checks':results}
         (BUILD/'web-check.json').write_text(json.dumps(report,indent=2)+'\n')
