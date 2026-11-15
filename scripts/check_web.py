@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 import sys
 import threading
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
 from PIL import Image
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -23,6 +23,7 @@ group.add_argument('--sprites-only', action='store_true', help='Run only frozen-
 group.add_argument('--ui-only', action='store_true', help='Run demo isolation and vibration UI regressions only')
 group.add_argument('--game-over-only', action='store_true', help='Run score-only result screen regressions and capture screenshots')
 group.add_argument('--statistics-only', action='store_true', help='Check Statistics and capture its rendered overview and history')
+group.add_argument('--cranes-only', action='store_true', help='Check crane passes and capture both playing layouts')
 args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -895,6 +896,162 @@ def statistics_legacy_profile(browser):
             'new_match_with_legacy_best':'PASS'}
 
 
+def start_crane_preview(page):
+    page.evaluate('window.stackAttackQARequest = {scenario:"cranes"}')
+    page.wait_for_function('''() => window.stackAttackQARequest == null
+        && window.stackAttackState?.crane_preview && window.stackAttackState.ticks < 30''')
+
+
+def crane_image(page, name, snapshot, dimensions):
+    width, height = dimensions
+    path = SHOTS / f'cranes-{name}-{width}x{height}.png'
+    image = Image.open(io.BytesIO(page.screenshot(path=str(path)))).convert('RGB')
+    assert image.size == dimensions
+    viewport_width, viewport_height = snapshot['viewport']
+    canvas = page.locator('canvas').bounding_box()
+    scale_x = canvas['width'] / viewport_width
+    scale_y = canvas['height'] / viewport_height
+    x, y, rail_width, rail_height = snapshot['crane_rail']
+    assert 0 <= x < x + rail_width <= viewport_width and 0 <= y < y + rail_height <= viewport_height, snapshot['crane_rail']
+    assert y + rail_height <= snapshot['field'][1], ('Rail crosses the playfield', snapshot['crane_rail'])
+    pause_x, pause_y, pause_width, pause_height = snapshot['buttons']['pause']
+    if x < pause_x + pause_width and pause_x < x + rail_width:
+        assert y >= pause_y + pause_height, ('Rail overlaps the top HUD', dimensions, snapshot['crane_rail'])
+    cell = snapshot['field'][2] / snapshot['columns']
+    for (center_x, center_y), color in zip(snapshot['crane_trolleys'], [(101,154,154), (218,148,79)]):
+        # The engine can advance by a few ticks while Chromium reads back the frame.
+        bounds = (round(canvas['x'] + (center_x-cell)*scale_x), round(canvas['y'] + (center_y-cell/3)*scale_y),
+                  round(canvas['x'] + (center_x+cell)*scale_x), round(canvas['y'] + (center_y+cell/3)*scale_y))
+        assert color in image.crop(bounds).get_flattened_data(), ('A trolley was not rendered', name, dimensions, center_x, center_y)
+    return str(path.relative_to(ROOT))
+
+
+def crane_release_frame(page):
+    for attempt in range(2):
+        try:
+            return page.wait_for_function('''() => {
+                const current = window.stackAttackState;
+                const release = current.crane_releases[0];
+                if (!release || current.ticks < release.tick + 16) return false;
+                const crate = current.visible_crates.find(crate => crate.id === release.crate_id);
+                return crate && crate.y > -.85 && crate.y < 0 && current.cranes[release.crane].open_time > 0
+                    && current.cranes[1 - release.crane].loaded ? current : false;
+            }''', timeout=5000).json_value()
+        except PlaywrightTimeoutError:
+            if attempt:
+                raise
+            # A slow frame can skip the short opening window between QA samples.
+            start_crane_preview(page)
+
+
+def crane_cycle(page, snapshot):
+    settings = snapshot['crane_settings']
+    columns = snapshot['columns']
+    margin = settings['margin']
+    speed = settings['speed']
+    releases = []
+    first_waits = [None, None]
+    released_this_pass = [False, False]
+    reentries = [0, 0]
+    opposite_sides = [(columns + margin, -margin), (-margin, columns + margin)]
+    while len(releases) < 4 or min(reentries) < 1:
+        previous = snapshot
+        snapshot = page.wait_for_function('''tick => {
+            const current = window.stackAttackState;
+            return current.ticks > tick || current.screen !== "playing" ? current : false;
+        }''', arg=previous['ticks'], timeout=5000).json_value()
+        assert snapshot['screen'] == 'playing' and snapshot['ticks'] < 2400, ('Crane cycle did not finish', snapshot)
+        elapsed = (snapshot['ticks'] - previous['ticks']) / 120
+        assert [crane['direction'] for crane in snapshot['cranes']] == [1, -1]
+        for index, (before, after) in enumerate(zip(previous['cranes'], snapshot['cranes'])):
+            exit_x, entry_x = opposite_sides[index]
+            if after['waiting']:
+                assert abs(after['x'] - exit_x) < 1e-5, ('Crane waited inside its route', after)
+                assert not after['loaded'] and 0 < after['wait_remaining'] <= settings['wait_max'] + 1e-5
+                if not before['waiting']:
+                    assert after['wait_remaining'] + elapsed >= settings['wait_min'] - 1e-5
+                    if first_waits[index] is None:
+                        first_waits[index] = snapshot['ticks'] / 120 + after['wait_remaining']
+                else:
+                    assert abs(before['wait_remaining'] - after['wait_remaining'] - elapsed) < 1e-5
+            elif before['waiting']:
+                assert after['loaded'] and abs(after['x'] - entry_x) <= speed * elapsed + 1e-5
+                released_this_pass[index] = False
+                reentries[index] += 1
+            elif elapsed < settings['wait_min']:
+                assert abs(after['x'] - before['x'] - after['direction'] * speed * elapsed) < 1e-5, (
+                    'Crane changed speed or stopped while crossing the field', before, after)
+        for release in snapshot['crane_releases'][len(releases):]:
+            index = release['crane']
+            crane = snapshot['cranes'][index]
+            column = release['column']
+            assert not released_this_pass[index], ('Crane released twice on one pass', release)
+            assert 0 <= column < columns and not crane['loaded'] and not crane['waiting']
+            assert not any((other['tick'], other['column']) == (release['tick'], column) for other in releases)
+            crates = [crate for crate in snapshot['visible_crates'] if crate['id'] == release['crate_id']]
+            assert len(crates) == 1 and abs(crates[0]['x'] - column) < 1e-5, ('Claw did not release the board crate', release, crates)
+            forward_travel = crane['direction'] * speed * (snapshot['ticks'] - release['tick']) / 120
+            assert abs(crane['x'] - (column + .5) - forward_travel) <= speed / 120 + 1e-5, (
+                'Claw position did not line up with the released crate', release, crane)
+            releases.append(release)
+            released_this_pass[index] = True
+    assert {index: sum(release['crane'] == index for release in releases) for index in range(2)} == {0:2, 1:2}
+    assert all(wait is not None for wait in first_waits) and abs(first_waits[0] - first_waits[1]) > 1 / 120
+    return releases
+
+
+def crane_checks(browser):
+    context = browser.new_context(viewport={'width':390, 'height':844}, has_touch=True, device_scale_factor=1)
+    page = context.new_page()
+    errors = []
+    page.on('pageerror', lambda value: errors.append(str(value)))
+    page.goto(URL)
+    wait_screen(page, 'menu')
+    initial_statistics = personal_statistics(state(page))
+    button(page, 'play', True)
+    wait_screen(page, 'playing')
+    shots = []
+    for dimensions in [(390,844), (320,568), (844,390)]:
+        width, height = dimensions
+        page.set_viewport_size({'width':width, 'height':height})
+        layout = 'landscape' if width > height else 'portrait'
+        page.wait_for_function('layout => window.stackAttackState.layout === layout', arg=layout)
+        start_crane_preview(page)
+        crossing = page.wait_for_function('''() => {
+            const current = window.stackAttackState;
+            const [right, left] = current.cranes;
+            return right.loaded && left.loaded && Math.abs(right.x - left.x) < .6 ? current : false;
+        }''', timeout=12000).json_value()
+        shots.append(crane_image(page, 'crossing', crossing, dimensions))
+        if dimensions == (320,568):
+            print('CRANE_SCREENSHOTS', json.dumps(shots[-1:]), flush=True)
+            continue
+        release = crane_release_frame(page)
+        shots.append(crane_image(page, 'release', release, dimensions))
+        print('CRANE_SCREENSHOTS', json.dumps(shots[-2:]), flush=True)
+
+    button(page, 'pause', True)
+    wait_screen(page, 'paused')
+    paused = state(page)
+    page.set_viewport_size({'width':390, 'height':844})
+    page.wait_for_function('window.stackAttackState.layout === "portrait"')
+    page.wait_for_timeout(300)
+    rotated = state(page)
+    for key in ['ticks', 'session', 'cranes', 'crane_releases', 'visible_crates']:
+        assert rotated[key] == paused[key], ('Pause or rotation changed the game', key)
+    assert rotated['crane_trolleys'] != paused['crane_trolleys']
+    button(page, 'resume', True)
+    wait_screen(page, 'playing')
+    start_crane_preview(page)
+    releases = crane_cycle(page, state(page))
+    assert personal_statistics(state(page)) == initial_statistics, 'Ordinary crate releases changed the match history'
+    assert not errors, errors
+    context.close()
+    return {'constant_speed_and_directions':'PASS', 'independent_waits_and_reentry':'PASS',
+            'one_crate_per_pass':'PASS', 'pause_and_resize':'PASS',
+            'releases':releases, 'screenshots':shots}
+
+
 def wooden_crates(browser):
     context = browser.new_context(viewport={'width':360,'height':800},has_touch=True,device_scale_factor=1)
     page = context.new_page()
@@ -1043,6 +1200,15 @@ try:
         browser = p.chromium.launch(**browser_options,
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
+        full_check = not any(vars(args).values())
+        cranes = crane_checks(browser) if args.cranes_only or full_check else {}
+        if cranes:
+            print('CRANES', json.dumps(cranes), flush=True)
+        if args.cranes_only:
+            (BUILD/'crane-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'renderer':'SwiftShader',
+                'checks':cranes,'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest()},indent=2)+'\n')
+            browser.close()
+            raise SystemExit(0)
         statistics = {}
         if args.statistics_only or not (args.workshop_only or args.game_over_only or args.ui_only or args.sprites_only):
             statistics = {'preview':statistics_preview(browser), 'match_flow':statistics_match_flow(browser),
@@ -1229,7 +1395,7 @@ try:
             results.append(result)
             print(json.dumps(result), flush=True)
             context.close()
-        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'statistics':statistics, 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
+        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'cranes':cranes, 'statistics':statistics, 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
                   'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
                   'page_errors':all_errors,'failed_requests':all_failed_requests,'checks':results}
         (BUILD/'web-check.json').write_text(json.dumps(report,indent=2)+'\n')

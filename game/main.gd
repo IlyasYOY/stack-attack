@@ -25,6 +25,8 @@ var qa_android_settings := false
 var qa_freeze_demo := false
 var qa_result_demo := false
 var qa_statistics_preview: StackProfile
+var qa_crane_preview := false
+var qa_crane_releases: Array[Dictionary] = []
 const CREAM := Color("f4e3ba")
 const MINT := Color("8dc6ac")
 const GOLD := Color("d7a45a")
@@ -388,6 +390,8 @@ func _update_hud_score() -> void:
 
 func _start_game() -> void:
 	qa_hero_pose = false
+	qa_crane_preview = false
+	qa_crane_releases.clear()
 	world.cosmetic_magnet = true
 	session += 1
 	model = StackSimulation.new(TUNING, Time.get_ticks_usec())
@@ -496,6 +500,12 @@ func _advance_game(delta: float) -> void:
 		match event.type:
 			"jump": sound.effect("jump")
 			"land": sound.effect("land")
+			"drop":
+				if qa_enabled:
+					qa_crane_releases.append({"crane": event.crane, "column": event.column,
+						"crate_id": event.crate_id, "tick": event.tick})
+					if qa_crane_releases.size() > 24:
+						qa_crane_releases.pop_front()
 			"line":
 				sound.effect("line")
 				world.line_effect(int(event.chain))
@@ -567,7 +577,17 @@ func _publish_qa() -> void:
 		input_rects[id] = [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
 	var visible_crates := []
 	for crate in world.model.crates:
-		visible_crates.append({"x": crate.x, "y": crate.y, "color": crate.color})
+		visible_crates.append({"id": crate.id, "x": crate.x, "y": crate.y, "color": crate.color})
+	var cranes := []
+	var trolleys := []
+	for index in range(world.model.cranes.size()):
+		var crane: Dictionary = world.model.cranes[index]
+		cranes.append({"x": crane.x, "direction": crane.direction, "loaded": crane.loaded,
+			"waiting": crane.waiting, "wait_remaining": crane.wait_remaining,
+			"release_column": crane.release_column, "open_time": crane.open_time})
+		var trolley := world.crane_trolley_center(index)
+		trolleys.append([trolley.x, trolley.y])
+	var rail := world.crane_rail
 	var status := {"ready": true, "screen": screen, "score": model.score,
 		"lines": model.lines, "loss_reason": model.loss_reason,
 		"session": session, "ticks": model.ticks, "state": model.state,
@@ -578,6 +598,10 @@ func _publish_qa() -> void:
 		"columns": model.tuning.columns, "rows": model.tuning.rows, "crates": model.crates.size(), "first_crate_x": model.crates[0].x if not model.crates.is_empty() else -1,
 		"layout": "landscape" if size.x > size.y else "portrait", "viewport": [size.x, size.y],
 		"field": [world.field.position.x, world.field.position.y, world.field.size.x, world.field.size.y], "visible_crates": visible_crates,
+		"cranes": cranes, "crane_releases": qa_crane_releases, "crane_preview": qa_crane_preview,
+		"crane_rail": [rail.position.x, rail.position.y, rail.size.x, rail.size.y], "crane_trolleys": trolleys,
+		"crane_settings": {"speed": TUNING.crane_speed, "wait_min": TUNING.crane_wait_min,
+			"wait_max": TUNING.crane_wait_max, "margin": StackSimulation.CRANE_EDGE_MARGIN},
 		"buttons": rects, "sliders": slider_rects, "controls": input_rects,
 		"missing_menu_glyphs": _missing_menu_glyphs(),
 		"panel": _panel_snapshot(),
@@ -705,6 +729,21 @@ func _qa_command() -> void:
 		return
 	if screen != "playing":
 		return
+	if str(request.get("scenario", "")) == "cranes":
+		# Reset a real simulation and start the first routes at known positions for capture.
+		qa_hero_pose = false
+		qa_crane_preview = true
+		qa_crane_releases.clear()
+		_release_controls()
+		model.reset(7481)
+		model.player.x = 4.3
+		model.cranes[0].x = -0.75
+		model.cranes[1].x = TUNING.columns + 0.75
+		model.cranes[0].release_column = 7
+		model.cranes[1].release_column = 1
+		world.particles.clear()
+		world.caption_life = 0.0
+		return
 	if str(request.get("scenario", "")) == "hero_pose":
 		var pose := str(request.get("pose", "idle"))
 		if pose not in ["idle", "walk_stride", "walk_recover", "jump", "push"]:
@@ -726,8 +765,9 @@ func _qa_command() -> void:
 	if str(request.get("scenario", "")) not in ["line", "chain", "crush", "overflow", "push", "showcase"]:
 		return
 	qa_hero_pose = false
+	qa_crane_preview = false
 	model.crates.clear()
-	model.drop_timer = 999.0
+	model.cranes_enabled = false
 	model.player_velocity = Vector2.ZERO
 	model.player = Vector2(4.3, TUNING.rows - TUNING.player_height)
 	model.state = "playing"
@@ -756,4 +796,5 @@ func _qa_command() -> void:
 			for column in [0, 9]:
 				model.add_crate(float(column), float(TUNING.rows - 3))
 			model.add_crate(5, 2, .5)
-			model.next_columns.assign([3, 6])
+			model.cranes[0].x = 3.5
+			model.cranes[1].x = 6.5

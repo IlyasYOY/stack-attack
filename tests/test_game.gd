@@ -32,7 +32,7 @@ func empty(columns: int = 10, rows: int = 11) -> StackSimulation:
 	var game := Simulation.new(config, 7481)
 	game.crates.clear()
 	game.player = Vector2(2, rows - config.player_height)
-	game.drop_timer = 9999.0
+	game.cranes_enabled = false
 	return game
 
 
@@ -46,7 +46,9 @@ func run() -> void:
 	pushing_and_danger()
 	diagonal_crate_collisions()
 	clearing()
-	loss_and_drops()
+	loss_conditions()
+	crane_cycles()
+	crane_contention()
 	storage()
 	random_sessions()
 	demo_games()
@@ -57,7 +59,7 @@ func run() -> void:
 			printerr("GAME_TEST_FAILED: " + failure)
 		quit(1)
 		return
-	print("GAME_TEST_PASS: %d assertions; physics, clears, loss, tempo, storage and screens" % assertions)
+	print("GAME_TEST_PASS: %d assertions; physics, clears, loss, cranes, storage and screens" % assertions)
 	quit(0)
 
 
@@ -77,8 +79,7 @@ func movement_and_jump() -> void:
 	var late := empty()
 	late.elapsed = 500
 	advance(late, 1, 1)
-	check(absf(late.player.x - first.player.x) < 0.001, "Difficulty must not accelerate the player")
-	check(late.interval() == late.tuning.minimum_interval, "Drop interval must have a lower bound")
+	check(absf(late.player.x - first.player.x) < 0.001, "Elapsed match time must not accelerate the player")
 	var jumping := empty()
 	var floor_y := jumping.player.y
 	jumping.advance(1.0 / 120.0, 0, true)
@@ -184,6 +185,10 @@ func diagonal_crate_collisions() -> void:
 
 func clearing() -> void:
 	var game := empty(4, 6)
+	game.cranes_enabled = true
+	game.cranes[0].x = 2.5 - game.tuning.crane_speed * Simulation.STEP
+	game.cranes[0].release_column = 2
+	var crane_positions := game.cranes.duplicate(true)
 	game.player = Vector2(2, 5 - game.tuning.player_height)
 	for column in range(4):
 		game.add_crate(column, 5)
@@ -193,7 +198,10 @@ func clearing() -> void:
 	check(game.state == "clearing", "Only a complete settled bottom row starts clearing")
 	check(game.score == 100, "A line awards exactly the configured points")
 	check(game.cleared_crates == 0, "Flashing crates must be counted only when collapse removes them")
-	advance(game, .55)
+	advance(game, .1)
+	check(game.cranes == crane_positions, "Cranes must stay still and hold cargo during a clear")
+	game.cranes_enabled = false
+	advance(game, .45)
 	check(game.crates.size() == 1 and absf(float(survivor.y) - 5) < .001, "All crates above a cleared row descend one cell")
 	check(game.cleared_crates == 4, "A collapse must count only the crates it removes")
 	check(absf(game.player.y - player_y - 1) < .001, "The character descends together with the warehouse contents")
@@ -227,7 +235,7 @@ func clearing() -> void:
 	check(upper_only.lines == 0, "A full upper row must not clear independently")
 
 
-func loss_and_drops() -> void:
+func loss_conditions() -> void:
 	var crushed := empty(4, 6)
 	crushed.player.x = 1.2
 	crushed.add_crate(1, 3, 1)
@@ -240,23 +248,95 @@ func loss_and_drops() -> void:
 	advance(crushed, .5)
 	check(crushed.ticks == final_ticks and crushed.events.is_empty(), "Game over must be emitted only once and freeze the model")
 	var full := empty(4, 6)
+	full.cranes_enabled = true
 	for row in range(6):
 		full.add_crate(0, row)
 	full.advance(1.0 / 120, 0)
 	check(full.state == "over" and full.loss_reason == "overflow", "A settled tower at full field height blocks the cranes")
-	var waves := empty()
-	waves.tuning.double_drop_chance = 1
-	for index in range(25):
-		waves.crates.clear()
-		waves._pick_next_columns()
-		waves._drop()
-		check(waves.crates.size() == 2, "A double drop must release exactly two crates")
-		check(float(waves.crates[0].x) != float(waves.crates[1].x), "A double drop must use different columns")
-	waves.tuning.double_drop_chance = 0
-	waves.crates.clear()
-	waves._pick_next_columns()
-	waves._drop()
-	check(waves.crates.size() == 1, "A single drop must release one crate")
+	check(full.cranes[0].x == -Simulation.CRANE_EDGE_MARGIN, "Overflow must stop the cranes before another release")
+
+
+func crane_cycles() -> void:
+	var game := empty()
+	game.cranes_enabled = true
+	var stride := game.tuning.crane_speed * Simulation.STEP
+	var released := [false, false]
+	var passes := [0, 0]
+	var waits := []
+	var saw_independent_entry := false
+	var wait_started := [0, 0]
+	var wait_length := [0.0, 0.0]
+	check(game.cranes.size() == 2 and game.cranes[0].direction == 1 and game.cranes[1].direction == -1,
+		"Two cranes travel on their fixed, opposite routes")
+	for tick in range(120 * 24):
+		var previous := game.cranes.duplicate(true)
+		game.advance(Simulation.STEP, 0.0)
+		var columns := []
+		for event in game.events:
+			if event.type != "drop":
+				continue
+			var crane: Dictionary = game.cranes[event.crane]
+			var crate := game.crates.back() as Dictionary
+			if crate.id != event.crate_id:
+				for added in game.crates:
+					if added.id == event.crate_id:
+						crate = added
+						break
+			check(not released[event.crane] and previous[event.crane].loaded and not crane.loaded,
+				"A pass releases its one held crate exactly once")
+			check(not columns.has(event.column) and event.column in range(game.tuning.columns),
+				"Releases in a step must use distinct columns in the board")
+			check(crate.id == event.crate_id and crate.x == event.column and crate.y == Simulation.CRATE_RELEASE_Y and crate.vy == 0.0,
+				"The released crate must enter the ordinary physics at rest and at the original height")
+			check(absf(crane.x - (event.column + 0.5)) <= stride + Simulation.EPS and crane.open_time > 0.0,
+				"The crane must open its jaws in the column at the handoff")
+			columns.append(event.column)
+			released[event.crane] = true
+			passes[event.crane] += 1
+		for index in range(2):
+			var before: Dictionary = previous[index]
+			var crane: Dictionary = game.cranes[index]
+			var entrance := -Simulation.CRANE_EDGE_MARGIN if crane.direction == 1 else game.tuning.columns + Simulation.CRANE_EDGE_MARGIN
+			var exit := game.tuning.columns - entrance
+			if not before.waiting and not crane.waiting:
+				check(is_equal_approx((crane.x - before.x) * crane.direction, stride), "The crane must keep a constant speed before and after release")
+			elif not before.waiting and crane.waiting:
+				check(released[index] and not crane.loaded and crane.x == exit, "The empty crane must travel fully past the edge before waiting")
+				check(crane.wait_remaining >= game.tuning.crane_wait_min and crane.wait_remaining <= game.tuning.crane_wait_max,
+					"Each sampled wait must be within bounds")
+				waits.append(crane.wait_remaining)
+				wait_started[index] = tick
+				wait_length[index] = crane.wait_remaining
+			elif before.waiting and not crane.waiting:
+				var waited := (tick - int(wait_started[index])) * Simulation.STEP
+				check(crane.loaded and crane.x == entrance and absf(waited - float(wait_length[index])) <= Simulation.STEP + Simulation.EPS,
+					"The next loaded pass starts offstage only after its own wait")
+				saw_independent_entry = saw_independent_entry or game.cranes[1 - index].waiting
+				released[index] = false
+			else:
+				check(crane.x == exit and not crane.loaded, "A waiting carriage holds at its hidden exit")
+		# Clear the runway after checking each actual spawn, so late cycles can be exercised without a loss.
+		game.crates.clear()
+	check(passes[0] >= 4 and passes[1] >= 4, "Both cranes must sustain repeated passes")
+	check(waits.size() >= 8 and waits.min() < waits.max() and saw_independent_entry,
+		"Return times must vary and allow one crane to re-enter while the other is still waiting")
+
+
+func crane_contention() -> void:
+	var game := empty()
+	game.cranes_enabled = true
+	var stride := game.tuning.crane_speed * Simulation.STEP
+	game.cranes[0].x = 0.5 - stride
+	game.cranes[1].x = 0.5 + stride
+	for crane in game.cranes:
+		crane.release_column = 0
+	game.advance(Simulation.STEP, 0.0)
+	check(game.crates.size() == 1 and game.crates[0].x == 0 and game.cranes[0].loaded and not game.cranes[1].loaded,
+		"The crane at its last column gets the only safe release for a shared target")
+	check(game.cranes[0].release_column == 1, "The other crane should try the next column without stopping")
+	advance(game, 1.0 / game.tuning.crane_speed)
+	check(game.crates.size() == 2 and game.crates.any(func(crate: Dictionary) -> bool: return crate.x == 1),
+		"The next column can take the second crate without overlapping the first")
 
 
 func storage() -> void:

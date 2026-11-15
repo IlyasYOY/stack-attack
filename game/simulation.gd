@@ -3,8 +3,12 @@ extends RefCounted
 ## Deterministic AABB simulation. One cell is one unit; drawing never changes it.
 const STEP := 1.0 / 120.0
 const EPS := 0.0001
+const CRANE_EDGE_MARGIN := 1.5
+const CRATE_RELEASE_Y := -0.95
 var tuning: StackTuning
 var crates: Array[Dictionary] = []
+var cranes: Array[Dictionary] = []
+var cranes_enabled := true
 var player := Vector2.ZERO
 var player_velocity := Vector2.ZERO
 var grounded := false
@@ -18,8 +22,6 @@ var ticks := 0
 var state := "playing"
 var loss_reason := ""
 var events: Array[Dictionary] = []
-var next_columns: Array[int] = []
-var drop_timer := 3.5
 var chain := 0
 var clear_elapsed := 0.0
 var accumulator := 0.0
@@ -62,11 +64,13 @@ func reset(seed_value: int) -> void:
 	clear_elapsed = 0.0
 	_clear_ids.clear()
 	_collapse_started = false
-	drop_timer = tuning.first_drop
+	cranes_enabled = true
+	cranes.assign([{"direction": 1}, {"direction": -1}])
+	for crane in cranes:
+		_enter_crane(crane)
 	for column in [0, 1, 8]:
 		if column < tuning.columns:
 			add_crate(float(column), float(tuning.rows - 1))
-	_pick_next_columns()
 
 
 func add_crate(x: float, y: float, velocity: float = 0.0) -> Dictionary:
@@ -77,8 +81,11 @@ func add_crate(x: float, y: float, velocity: float = 0.0) -> Dictionary:
 	return crate
 
 
-func interval() -> float:
-	return maxf(tuning.minimum_interval, tuning.initial_interval - elapsed * tuning.acceleration)
+func time_to_crane_release(crane: Dictionary) -> float:
+	if not cranes_enabled or crane.waiting or not crane.loaded or int(crane.release_column) < 0:
+		return INF
+	var distance := (float(crane.release_column) + 0.5 - float(crane.x)) * int(crane.direction)
+	return maxf(0.0, distance) / tuning.crane_speed
 
 
 func match_result(ended_at: String) -> Dictionary:
@@ -122,10 +129,12 @@ func _tick(axis: float) -> void:
 		if float(crate.y) <= EPS and absf(float(crate.vy)) < EPS:
 			_lose("overflow")
 			return
-	drop_timer -= STEP
-	if drop_timer <= 0.0:
-		_drop()
-		drop_timer += interval()
+	if cranes_enabled:
+		# If both reach the same column this tick, give the last chance to
+		# the crane that has no further column to try.
+		var first := 1 if cranes[1].loaded and int(cranes[1].release_column) == 0 else 0
+		_advance_crane(first)
+		_advance_crane(1 - first)
 
 
 func _overlap(a: float, aw: float, b: float, bw: float, margin: float = 0.002) -> bool:
@@ -308,30 +317,63 @@ func _advance_clear() -> void:
 			chain = 0
 
 
-func _pick_next_columns() -> void:
-	next_columns.clear()
-	next_columns.append(_rng.randi_range(0, tuning.columns - 1))
-	if _rng.randf() < tuning.double_drop_chance:
-		var second := _rng.randi_range(0, tuning.columns - 2)
-		if second >= next_columns[0]:
-			second += 1
-		next_columns.append(second)
+func _crane_entrance(direction: int) -> float:
+	return -CRANE_EDGE_MARGIN if direction > 0 else tuning.columns + CRANE_EDGE_MARGIN
 
 
-func _drop() -> void:
-	var count := 0
-	for column in next_columns:
-		var free := true
-		for crate in crates:
-			if _overlap(float(column), 1.0, float(crate.x), 1.0) and float(crate.y) < 1.0:
-				free = false
-				break
-		if free:
-			add_crate(float(column), -0.95)
-			count += 1
-	if count > 0:
-		events.append({"type": "drop", "count": count})
-	_pick_next_columns()
+func _enter_crane(crane: Dictionary) -> void:
+	crane.x = _crane_entrance(int(crane.direction))
+	crane.loaded = true
+	crane.waiting = false
+	crane.wait_remaining = 0.0
+	crane.release_column = _rng.randi_range(0, tuning.columns - 1)
+	crane.open_time = 0.0
+
+
+func _advance_crane(index: int) -> void:
+	var crane := cranes[index]
+	if crane.waiting:
+		crane.wait_remaining = maxf(0.0, float(crane.wait_remaining) - STEP)
+		if float(crane.wait_remaining) <= EPS:
+			_enter_crane(crane)
+		return
+	var direction := int(crane.direction)
+	var exit := _crane_entrance(-direction)
+	crane.x = move_toward(float(crane.x), exit, tuning.crane_speed * STEP)
+	crane.open_time = maxf(0.0, float(crane.open_time) - STEP)
+	if crane.loaded:
+		_try_crane_release(index)
+	if absf(exit - float(crane.x)) <= EPS:
+		crane.x = exit
+		crane.waiting = true
+		crane.loaded = false
+		crane.wait_remaining = _rng.randf_range(tuning.crane_wait_min, tuning.crane_wait_max)
+
+
+func _try_crane_release(index: int) -> void:
+	var crane := cranes[index]
+	var direction := int(crane.direction)
+	var column := int(crane.release_column)
+	while column >= 0 and column < tuning.columns:
+		if (float(crane.x) - (column + 0.5)) * direction < -EPS:
+			return
+		if _crane_column_is_free(column):
+			var crate := add_crate(float(column), CRATE_RELEASE_Y)
+			crane.loaded = false
+			crane.open_time = tuning.crane_open_time
+			events.append({"type": "drop", "count": 1, "crane": index,
+				"column": column, "crate_id": int(crate.id), "tick": ticks})
+			return
+		# A blocked target moves forward with the route; a crane never turns back.
+		column += direction
+		crane.release_column = column if column < tuning.columns else -1
+
+
+func _crane_column_is_free(column: int) -> bool:
+	for crate in crates:
+		if _overlap(float(column), 1.0, float(crate.x), 1.0) and float(crate.y) < 1.0:
+			return false
+	return true
 
 
 func _lose(reason: String) -> void:

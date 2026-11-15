@@ -1,11 +1,12 @@
 class_name StackWorldView
 extends Control
-## Workshop presentation only: all gameplay remains in the unchanged cell simulation.
+## Workshop presentation driven by the cell simulation.
 var model: StackSimulation
 var active := false
 var clock := 0.0
 var axis := 0.0
 var field := Rect2()
+var crane_rail := Rect2()
 var cell := 24.0
 var controls := {}
 var pressed_actions: Array[String] = []
@@ -22,6 +23,14 @@ const HERO_TEXTURES := {
 	"idle_bare": preload("res://art/hero_idle_bare.png"), "walk_bare": preload("res://art/hero_walk_bare.png"),
 	"jump_bare": preload("res://art/hero_jump_bare.png"), "push_bare": preload("res://art/hero_push_bare.png")}
 const CRATE_TEXTURE: Texture2D = preload("res://art/crate_wood.png")
+const PIXELS_PER_CELL := 24.0
+const CRANE_TRACK_Y := [-46.0, -34.0]
+const CRANE_BODY := [Color("659a9a"), Color("da944f")]
+const CRANE_LIGHT := [Color("a7c7bc"), Color("f6d18e")]
+const CRANE_METAL := [Color("355762"), Color("785132")]
+const CRANE_TOP := -52.0
+const SCORE_PANEL_RIGHT := 138.0
+const HUD_CLEARANCE_Y := 60.0
 const INK := Color("102733")
 const CREAM := Color("f4e3ba")
 const GOLD := Color("d7a45a")
@@ -42,7 +51,15 @@ func _layout() -> void:
 	var world_size := Vector2(model.tuning.columns * cell, model.tuning.rows * cell)
 	var top := 60.0 + cell * 1.1
 	if not landscape: top += maxf(0.0, (free_height - (model.tuning.rows + 2) * cell) * 0.4)
-	field = Rect2(Vector2(floorf((size.x - world_size.x) * 0.5), top), world_size)
+	var left := floorf((size.x - world_size.x) * 0.5)
+	var scale_to_view := cell / PIXELS_PER_CELL
+	var rail_margin := clampf(10.0 * scale_to_view, 0.0, maxf(0.0, left - 3.0))
+	# On the narrower layouts the headroom is shared with the score and pause plates.
+	if left - rail_margin < SCORE_PANEL_RIGHT:
+		top = maxf(top, HUD_CLEARANCE_Y - CRANE_TOP * scale_to_view)
+	field = Rect2(Vector2(left, top), world_size)
+	crane_rail = Rect2(Vector2(left - rail_margin, top + CRANE_TOP * scale_to_view),
+		Vector2(world_size.x + rail_margin * 2.0, (CRANE_TRACK_Y[1] + 6.0 - CRANE_TOP) * scale_to_view))
 	var button_size := Vector2(66, 64)
 	if landscape:
 		controls = {"left": Rect2(Vector2(12, size.y - 90), button_size), "right": Rect2(Vector2(84, size.y - 90), button_size), "jump": Rect2(Vector2(size.x - 82, size.y - 90), Vector2(70, 64))}
@@ -101,7 +118,7 @@ func _draw_scenery() -> void:
 		draw_circle(Vector2(gx, gy), 15, Color("1b3441"))
 		draw_circle(Vector2(gx, gy), 4, Color("294450"))
 	var lx := size.x * 0.5
-	var ly := minf(57, field.position.y - cell * 1.15 - 28)
+	var ly := minf(57, crane_rail.position.y - 24)
 	var beam := PackedVector2Array([Vector2(lx-17,ly+13),Vector2(lx+17,ly+13),Vector2(lx+61,ly+104),Vector2(lx-61,ly+104)])
 	draw_colored_polygon(beam, Color(0.96,0.69,0.31,0.11))
 	for glow in [28,20,13]: draw_circle(Vector2(lx,ly+13),glow,Color(1.0,0.69,0.29,0.045))
@@ -163,6 +180,113 @@ func _bracket(at: Vector2, flip: Vector2) -> void:
 	_bolt(Vector2(4,4));_bolt(Vector2(14,3));_bolt(Vector2(3,14))
 	draw_set_transform(Vector2.ZERO)
 
+func _crate_origin(column: float, row: float) -> Vector2:
+	return (Vector2(column, row) * PIXELS_PER_CELL).round()
+
+func _crane_cargo_origin(crane: Dictionary) -> Vector2:
+	return _crate_origin(float(crane.x) - 0.5, StackSimulation.CRATE_RELEASE_Y)
+
+func _crane_center(cargo: Vector2, index: int) -> Vector2:
+	return Vector2(cargo.x + PIXELS_PER_CELL * 0.5, CRANE_TRACK_Y[index])
+
+func crane_trolley_center(index: int) -> Vector2:
+	return field.position + _crane_center(_crane_cargo_origin(model.cranes[index]), index) * cell / PIXELS_PER_CELL
+
+func _draw_cranes() -> void:
+	var span := Rect2((crane_rail.position - field.position) * PIXELS_PER_CELL / cell,
+		Vector2(crane_rail.size.x * PIXELS_PER_CELL / cell, 2.0 - CRANE_TOP))
+	for index in range(CRANE_TRACK_Y.size()):
+		_draw_crane_track(span, index)
+		var crane := model.cranes[index]
+		if not bool(crane.waiting):
+			_draw_crane(span, crane, index)
+	_draw_crane_end_stops(span)
+
+func _draw_crane_track(span: Rect2, index: int) -> void:
+	var y: float = CRANE_TRACK_Y[index]
+	var body: Color = CRANE_BODY[index]
+	draw_rect(Rect2(span.position.x, y - 4.0, span.size.x, 9.0), INK)
+	draw_rect(Rect2(span.position.x, y - 3.0, span.size.x, 6.0), CRANE_METAL[index])
+	draw_rect(Rect2(span.position.x, y - 3.0, span.size.x, 1.0), body.darkened(0.25))
+	for x in range(5, int(model.tuning.columns * PIXELS_PER_CELL), 36):
+		draw_rect(Rect2(x - 1, y - 1.0, 3.0, 3.0), INK)
+		draw_rect(Rect2(x, y - 1.0, 1.0, 1.0), CRANE_LIGHT[index])
+
+func _draw_crane_end_stops(span: Rect2) -> void:
+	var width := minf(7.0, -span.position.x)
+	if width < 2.0:
+		return
+	for x in [span.position.x, span.end.x - width]:
+		draw_rect(Rect2(x, span.position.y, width, span.size.y), INK)
+		draw_rect(Rect2(x + 1.0, span.position.y + 1.0, width - 2.0, span.size.y - 3.0), Color("304d57"))
+		draw_rect(Rect2(x + 1.0, span.position.y + 1.0, 1.0, span.size.y - 3.0), Color("637d7d"))
+		for y in CRANE_TRACK_Y:
+			draw_rect(Rect2(x + 1.0, y - 2.0, width - 1.0, 4.0), Color("52696a"))
+			draw_rect(Rect2(x + 2.0, y - 1.0, 1.0, 2.0), Color("aaa78c"))
+
+func _draw_crane_rect(bounds: Rect2, span: Rect2, color: Color) -> void:
+	var visible := bounds.intersection(span)
+	if visible.has_area():
+		draw_rect(visible, color)
+
+func _draw_crane_crate(position: Vector2, span: Rect2) -> void:
+	var bounds := Rect2(position, Vector2.ONE * PIXELS_PER_CELL)
+	var visible := bounds.intersection(span)
+	if visible == bounds:
+		draw_texture_rect(CRATE_TEXTURE, bounds, false)
+	elif visible.has_area():
+		var texture_scale := CRATE_TEXTURE.get_size() / bounds.size
+		var source := Rect2((visible.position - bounds.position) * texture_scale, visible.size * texture_scale)
+		draw_texture_rect_region(CRATE_TEXTURE, visible, source)
+
+func _draw_crane(span: Rect2, crane: Dictionary, index: int) -> void:
+	var cargo := _crane_cargo_origin(crane)
+	var center := _crane_center(cargo, index)
+	var jaw_y := cargo.y - 2.0
+	var body: Color = CRANE_BODY[index]
+	var light: Color = CRANE_LIGHT[index]
+	var metal: Color = CRANE_METAL[index]
+	# The rear hoist reaches down behind the lower rail. Both jaws grip at the release height.
+	_draw_crane_rect(Rect2(center.x - 3.0, center.y + 2.0, 6.0, jaw_y - center.y), span, INK)
+	_draw_crane_rect(Rect2(center.x - 2.0, center.y + 3.0, 4.0, jaw_y - center.y - 2.0), span, metal)
+	_draw_crane_rect(Rect2(center.x - 1.0, center.y + 3.0, 1.0, jaw_y - center.y - 2.0), span, light)
+	_draw_crane_rect(Rect2(center.x - 10.0, center.y - 5.0, 20.0, 11.0), span, INK)
+	_draw_crane_rect(Rect2(center.x - 9.0, center.y - 4.0, 18.0, 9.0), span, metal)
+	_draw_crane_rect(Rect2(center.x - 8.0, center.y - 4.0, 16.0, 7.0), span, body)
+	_draw_crane_rect(Rect2(center.x - 7.0, center.y - 4.0, 14.0, 1.0), span, light)
+	for side in [-7.0, 5.0]:
+		_draw_crane_rect(Rect2(center.x + side, center.y - 1.0, 2.0, 2.0), span, metal)
+
+	if bool(crane.loaded):
+		_draw_crane_crate(cargo, span)
+	var cue := float(crane.open_time)
+	var spread := 0.0
+	if cue > 0.0:
+		var duration := model.tuning.crane_open_time
+		var opening := 0.55 + (duration - cue) / (duration * 0.25)
+		var closing := cue / (duration * 0.35)
+		spread = roundf(7.0 * clampf(minf(opening, closing), 0.0, 1.0))
+	_draw_crane_rect(Rect2(center.x - 6.0, jaw_y - 2.0, 12.0, 5.0), span, INK)
+	_draw_crane_rect(Rect2(center.x - 5.0, jaw_y - 2.0, 10.0, 3.0), span, body)
+	_draw_crane_rect(Rect2(center.x - 2.0, jaw_y - 2.0, 4.0, 1.0), span, light)
+	for side: float in [-1.0, 1.0]:
+		_draw_crane_jaw(span, Vector2(center.x, jaw_y), side, spread, body, light)
+
+func _draw_crane_jaw(span: Rect2, joint: Vector2, side: float, spread: float, body: Color, light: Color) -> void:
+	var shoulder := joint.x + 5.0 * side
+	var wrist := joint.x + (9.0 + roundf(spread * 0.6)) * side
+	var hinge := joint.x + (12.0 + spread) * side
+	var rise := roundf(spread * 0.33)
+	var palm := Rect2(minf(shoulder, wrist) - 1.0, joint.y, absf(wrist - shoulder) + 3.0, 4.0)
+	var arm := Rect2(minf(wrist, hinge) - 1.0, joint.y + 2.0, absf(hinge - wrist) + 3.0, 5.0)
+	var finger := Rect2(hinge - 2.0, joint.y + 4.0, 5.0, 7.0 - rise)
+	var toe := Rect2(hinge - (4.0 if side > 0.0 else 1.0), joint.y + 8.0 - rise, 5.0, 3.0)
+	for part: Rect2 in [palm, arm, finger, toe]:
+		_draw_crane_rect(part, span, INK)
+	for part: Rect2 in [palm, arm, finger, toe]:
+		_draw_crane_rect(part.grow(-1.0), span, body)
+	_draw_crane_rect(Rect2(wrist, joint.y + 3.0, 1.0, 1.0), span, light)
+
 func _draw_warehouse() -> void:
 	var outer := field.grow(13)
 	draw_rect(outer.grow(3),Color("0a1e28"))
@@ -185,27 +309,14 @@ func _draw_warehouse() -> void:
 	_bracket(Vector2(outer.end.x,outer.position.y),Vector2(-1,1))
 	_bracket(Vector2(outer.position.x,outer.end.y),Vector2(1,-1))
 	_bracket(outer.end,Vector2(-1,-1))
-	var rail_y := field.position.y-cell*1.15
-	draw_rect(Rect2(field.position.x-15,rail_y,field.size.x+30,8),Color("624532"))
-	draw_rect(Rect2(field.position.x-14,rail_y+1,field.size.x+28,4),Color("d39248"))
-	draw_rect(Rect2(field.position.x-14,rail_y+1,field.size.x+28,1),Color("f6d18e"))
-	for x in range(int(field.position.x),int(field.end.x),48): _bolt(Vector2(x,rail_y+4))
-	for column in model.next_columns:
-		var x := field.position.x+(column+0.5)*cell
-		draw_rect(Rect2(x-9,rail_y-7,18,19),INK)
-		draw_rect(Rect2(x-8,rail_y-6,16,17),Color("b47a3f"))
-		draw_rect(Rect2(x-7,rail_y-5,14,2),Color("f3cb80"))
-		_bolt(Vector2(x-5,rail_y-2));_bolt(Vector2(x+5,rail_y+7))
-		draw_rect(Rect2(x-3,rail_y+12,6,5),Color("655443"))
-		draw_line(Vector2(x,rail_y+17),Vector2(x,field.position.y-5),Color("b6afa0"),2)
-		draw_line(Vector2(x,field.position.y-5),Vector2(x+4,field.position.y-2),GOLD,2)
-	draw_set_transform(field.position,0.0,Vector2.ONE*cell/24.0)
+	draw_set_transform(field.position, 0.0, Vector2.ONE * cell / PIXELS_PER_CELL)
+	_draw_cranes()
 	for crate in model.crates:
-		var position := Vector2(roundf(float(crate.x)*24),roundf(float(crate.y)*24))
+		var position := _crate_origin(float(crate.x), float(crate.y))
 		if float(crate.y) < -1.0: continue
 		var tint := Color.WHITE
 		if model.state == "clearing" and model.clear_elapsed < model.tuning.clear_flash_time and float(crate.y) > model.tuning.rows-1.01: tint=Color(1.8,1.6,1.1,1.0)
-		draw_texture_rect(CRATE_TEXTURE,Rect2(position,Vector2(24,24)),false,tint)
+		draw_texture_rect(CRATE_TEXTURE,Rect2(position,Vector2.ONE * PIXELS_PER_CELL),false,tint)
 	var hero_position := Vector2(roundf(model.player.x*24),roundf(model.player.y*24))+HERO_OFFSET
 	var texture: Texture2D = HERO_TEXTURES[hero_frame() + ("" if cosmetic_magnet else "_bare")]
 	var hero_rect := Rect2(hero_position,HERO_SIZE)

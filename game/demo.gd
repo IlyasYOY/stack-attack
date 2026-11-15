@@ -91,8 +91,12 @@ func _input_step() -> bool:
 				_escape_axis = axis
 				_escape = 0.35
 				return false
-	if model.drop_timer < 0.4 and model.next_columns.has(int(floorf(center))):
-		axis = -1.0 if center > tuning.columns * 0.5 else 1.0
+	for crane in model.cranes:
+		if int(crane.release_column) == int(floorf(center)) and model.time_to_crane_release(crane) < 0.4:
+			axis = -1.0 if center > tuning.columns * 0.5 else 1.0
+			_escape_axis = axis
+			_escape = 0.35
+			return false
 	# A supported stack next to a floor gap can be spread by nudging its base,
 	# then retreating while the upper crate falls through the real simulation.
 	var best := INF
