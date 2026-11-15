@@ -10,6 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
+import sys
 import threading
 from playwright.sync_api import sync_playwright
 from PIL import Image
@@ -709,7 +710,14 @@ def menu_layouts(browser):
 
 try:
     with sync_playwright() as p:
-        browser = p.chromium.launch(executable_path=os.environ.get('CHROMIUM_BIN', '/usr/bin/chromium'),
+        browser_options = {}
+        if os.environ.get("CHROMIUM_BIN"):
+            browser_options["executable_path"] = os.environ["CHROMIUM_BIN"]
+        elif sys.platform == "darwin":
+            browser_options["channel"] = "chrome"
+        else:
+            browser_options["executable_path"] = "/usr/bin/chromium"
+        browser = p.chromium.launch(**browser_options,
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         if args.workshop_only:
