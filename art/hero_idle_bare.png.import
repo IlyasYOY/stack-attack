@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://4qkhb31ko7up"
-path="res://.godot/imported/crate_violet.png-e96ac9addf70e1fe192831ed323bc1a5.ctex"
+uid="uid://cfektbo0dd0kq"
+path="res://.godot/imported/hero_idle_bare.png-20ab2b81138cf294476093df58e4c201.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://art/crate_violet.png"
-dest_files=["res://.godot/imported/crate_violet.png-e96ac9addf70e1fe192831ed323bc1a5.ctex"]
+source_file="res://art/hero_idle_bare.png"
+dest_files=["res://.godot/imported/hero_idle_bare.png-20ab2b81138cf294476093df58e4c201.ctex"]
 
 [params]
 
