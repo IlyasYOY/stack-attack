@@ -1,5 +1,6 @@
 extends Control
 const TUNING: StackTuning = preload("res://game/prototype.tres")
+const STATISTICS_VIEW = preload("res://game/statistics_view.gd")
 var model: StackSimulation
 var demo: StackDemo
 var profile: StackProfile
@@ -15,12 +16,15 @@ var pointers := {}
 var jump_pending := false
 var session := 0
 var result_saved := false
+var first_match := 0
+var expanded_match := -1
 var qa_enabled := false
 var qa_timer := 0.0
 var qa_hero_pose := false
 var qa_android_settings := false
 var qa_freeze_demo := false
 var qa_result_demo := false
+var qa_statistics_preview: StackProfile
 const CREAM := Color("f4e3ba")
 const MINT := Color("8dc6ac")
 const GOLD := Color("d7a45a")
@@ -28,7 +32,10 @@ const GOLD := Color("d7a45a")
 
 func _ready() -> void:
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	profile = StackProfile.new()
+	if OS.has_feature("web") and OS.is_debug_build():
+		qa_enabled = bool(JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('qa') === '1'"))
+	var profile_path := StackProfile.SAVE_PATH + ".qa" if qa_enabled else StackProfile.SAVE_PATH
+	profile = StackProfile.new(profile_path)
 	model = StackSimulation.new(TUNING, 1)
 	demo = StackDemo.new(TUNING)
 	sound = StackSound.new()
@@ -46,8 +53,6 @@ func _ready() -> void:
 	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(ui)
 	resized.connect(_resize)
-	if OS.has_feature("web") and OS.is_debug_build():
-		qa_enabled = bool(JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('qa') === '1'"))
 	_show_screen("menu")
 	_resize()
 	print("STACK_ATTACK_READY")
@@ -134,6 +139,8 @@ func _clear_ui() -> void:
 func _show_screen(value: String) -> void:
 	if value != "over":
 		qa_result_demo = false
+	if value != "statistics":
+		qa_statistics_preview = null
 	var previous_focus := get_viewport().gui_get_focus_owner()
 	var focus_name := str(previous_focus.name) if previous_focus != null else ""
 	screen = value
@@ -153,7 +160,7 @@ func _show_screen(value: String) -> void:
 		"menu":
 			_heading(content, "Stack Attack", 32)
 			_button(content, "Играть", "play", _start_game)
-			_button(content, "Рекорды", "records", func(): _show_screen("records"))
+			_button(content, "Статистика", "statistics", _open_statistics)
 			_button(content, "Настройки", "settings", func(): _show_screen("settings"))
 		"paused":
 			_heading(content, "Пауза")
@@ -171,29 +178,13 @@ func _show_screen(value: String) -> void:
 			_button(actions, "Главное меню", "home", func(): _show_screen("menu"))
 			if not profile.last_error.is_empty():
 				_text(content, profile.last_error, 12)
-		"records":
-			_heading(content, "Рекорды")
-			if profile.records.is_empty():
-				_text(content, "Рекордов пока нет", 16)
-			var entries: Control = content
-			if _compact_panel() and not profile.records.is_empty():
-				var grid := GridContainer.new()
-				grid.columns = 2
-				grid.add_theme_constant_override("h_separation", 16)
-				grid.add_theme_constant_override("v_separation", 6)
-				content.add_child(grid)
-				entries = grid
-			for index in range(profile.records.size()):
-				var entry: Dictionary = profile.records[index]
-				if _compact_panel():
-					var item := _column(entries)
-					item.add_theme_constant_override("separation", 0)
-					_text(item, "%02d   %d" % [index + 1, entry.score], 14, GOLD if index == 0 else CREAM)
-					_text(item, str(entry.date), 10, MINT)
-				else:
-					_text(entries, "%02d   %s   ·   %d" % [index + 1, entry.date, entry.score], 16,
-						GOLD if index == 0 else CREAM)
-			_button(content, "Назад", "back", func(): _show_screen("menu"))
+		"statistics":
+			var display_profile := qa_statistics_preview if qa_statistics_preview != null else profile
+			var margins := panel.get_theme_stylebox("panel").get_minimum_size()
+			var available := Vector2(_panel_width(), size.y - 12) - margins
+			STATISTICS_VIEW.build(content, available, display_profile.statistics(), display_profile.matches,
+				display_profile.records, first_match, expanded_match, _button, _text, _change_statistics,
+				func(): _show_screen("menu"))
 		"settings":
 			_heading(content, "Настройки")
 			if _compact_panel():
@@ -209,6 +200,16 @@ func _show_screen(value: String) -> void:
 			_button(content, "Назад", "back", func(): _show_screen("menu"))
 	_position_panel()
 	_focus_panel.call_deferred(panel, focus_name)
+
+
+func _open_statistics() -> void:
+	_change_statistics(0, -1)
+
+
+func _change_statistics(offset: int, expanded: int) -> void:
+	first_match = offset
+	expanded_match = expanded
+	_show_screen("statistics")
 
 
 func _make_panel() -> VBoxContainer:
@@ -406,7 +407,7 @@ func _pause() -> void:
 func _end_game() -> void:
 	if not result_saved:
 		result_saved = true
-		profile.add_result(model.score)
+		profile.add_match(model.match_result(Time.get_datetime_string_from_system()))
 	_show_screen("over")
 
 
@@ -506,7 +507,7 @@ func _advance_game(delta: float) -> void:
 
 
 func _background_demo() -> bool:
-	return screen in ["menu", "settings", "records"] or (qa_enabled and qa_result_demo and screen == "over")
+	return screen in ["menu", "settings", "statistics"] or (qa_enabled and qa_result_demo and screen == "over")
 
 
 func _advance_demo(delta: float) -> void:
@@ -570,6 +571,7 @@ func _publish_qa() -> void:
 	var status := {"ready": true, "screen": screen, "score": model.score,
 		"lines": model.lines, "loss_reason": model.loss_reason,
 		"session": session, "ticks": model.ticks, "state": model.state,
+		"active_duration_ms": roundi(model.ticks * StackSimulation.STEP * 1000.0),
 		"player": [model.player.x, model.player.y], "grounded": model.grounded,
 		"player_size": [TUNING.player_width, TUNING.player_height],
 		"facing": model.facing, "hero_pose": qa_hero_pose, "hero_frame": world.hero_frame(), "cosmetic_magnet": world.cosmetic_magnet,
@@ -586,7 +588,10 @@ func _publish_qa() -> void:
 			"player": [demo.model.player.x, demo.model.player.y], "state": demo.model.state,
 			"separate_model": demo.model != model},
 		"profile": {"music": profile.music, "effects": profile.effects,
-			"records": profile.records, "vibration": profile.vibration, "vibration_visible": buttons.has("vibration")},
+			"matches": profile.matches, "statistics": profile.statistics(), "records": profile.records,
+			"vibration": profile.vibration, "vibration_visible": buttons.has("vibration")},
+		"statistics_view": {"first_match": first_match, "expanded_match": expanded_match,
+			"preview": qa_statistics_preview != null},
 		"audio": {"music_playing": sound.music_player.playing, "music_position": sound.music_player.get_playback_position(), "stream_format": sound.music_player.stream.format, "loop_end": sound.music_player.stream.loop_end, "unlocked": sound.unlocked,
 			"music_muted": AudioServer.is_bus_mute(AudioServer.get_bus_index("Music")),
 			"effects_muted": AudioServer.is_bus_mute(AudioServer.get_bus_index("Effects"))}}
@@ -595,7 +600,7 @@ func _publish_qa() -> void:
 
 func _missing_menu_glyphs() -> String:
 	var missing := ""
-	if screen == "menu":
+	if screen in ["menu", "statistics"]:
 		for label in ui.find_children("*", "Label", true, false):
 			var font: Font = label.get_theme_font("font")
 			for character in label.text:
@@ -633,6 +638,26 @@ func _button_style_snapshot(control: Control) -> Dictionary:
 				"fill": style.bg_color.to_html(true), "edge": style.border_color.to_html(true),
 				"radius": style.corner_radius_top_left, "margin": style.content_margin_left}
 	return styles
+
+
+func _qa_show_statistics() -> void:
+	qa_statistics_preview = StackProfile.new(profile.path + ".qa-preview")
+	qa_statistics_preview.matches.clear()
+	qa_statistics_preview.records.assign([{"date": "12.11.2026", "score": 1600}])
+	var results := [
+		["2026-11-15T21:47:26", 142800, 14, 4, "overflow"],
+		["2026-11-15T21:40:11", 93150, 9, 3, "crushed"],
+		["2026-11-15T21:35:59", 69600, 5, 2, "crushed"],
+		["2026-11-15T21:30:07", 55800, 6, 2, "overflow"],
+		["2026-11-15T21:25:41", 46833, 2, 1, "crushed"],
+		["2026-11-15T21:18:33", 76267, 8, 2, "overflow"],
+		["2026-11-15T21:12:36", 20942, 0, 0, "crushed"],
+	]
+	for result in results:
+		qa_statistics_preview.matches.append({"ended_at": result[0], "duration_ms": result[1],
+			"score": result[2] * 100, "lines": result[2], "crates": result[2] * TUNING.columns,
+			"best_combo": result[3], "reason": result[4]})
+	_open_statistics()
 
 
 func _qa_command() -> void:
@@ -675,11 +700,8 @@ func _qa_command() -> void:
 		demo.model.crates.clear()
 		demo.model.add_crate(floorf(demo.model.player.x), demo.model.player.y - 1.01, 6.0)
 		return
-	if str(request.get("scenario", "")) == "records_menu" and screen in ["menu", "records"]:
-		profile.records.clear()
-		for index in range(10):
-			profile.records.append({"score": 1000000 - index * 100, "date": "12.11.2026"})
-		_show_screen("records")
+	if str(request.get("scenario", "")) == "statistics_menu" and screen in ["menu", "statistics"]:
+		_qa_show_statistics()
 		return
 	if screen != "playing":
 		return

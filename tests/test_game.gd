@@ -192,8 +192,10 @@ func clearing() -> void:
 	game.advance(1.0 / 120, 0)
 	check(game.state == "clearing", "Only a complete settled bottom row starts clearing")
 	check(game.score == 100, "A line awards exactly the configured points")
+	check(game.cleared_crates == 0, "Flashing crates must be counted only when collapse removes them")
 	advance(game, .55)
 	check(game.crates.size() == 1 and absf(float(survivor.y) - 5) < .001, "All crates above a cleared row descend one cell")
+	check(game.cleared_crates == 4, "A collapse must count only the crates it removes")
 	check(absf(game.player.y - player_y - 1) < .001, "The character descends together with the warehouse contents")
 	check(game.state == "playing", "Joint descent must not cause a false crush")
 	var chain_game := empty(4, 6)
@@ -204,6 +206,19 @@ func clearing() -> void:
 	advance(chain_game, 1.2)
 	check(chain_game.lines == 2 and chain_game.score == 200, "Successive full bottom rows clear without score multipliers")
 	check(chain_game.crates.is_empty() and chain_game.state == "playing", "A chain must finish with safe descent")
+	check(chain_game.chain == 0 and chain_game.best_combo == 2, "The longest chain must survive the reset of the current chain")
+	var ended_at := "2026-11-15T22:04:35"
+	check(chain_game.match_result(ended_at).is_empty(), "An unfinished game must have no match result")
+	for row in range(chain_game.tuning.rows):
+		chain_game.add_crate(0, row)
+	chain_game.advance(Simulation.STEP, 0)
+	var result := chain_game.match_result(ended_at)
+	check(result == {"ended_at": ended_at, "duration_ms": 1208, "score": 200, "lines": 2,
+		"crates": 8, "best_combo": 2, "reason": "overflow"}, "A match result must count clear ticks and preserve the final counters and loss reason")
+	check(result.duration_ms > chain_game.elapsed * 1000, "The match duration must include time spent in clear animations")
+	chain_game.reset(7481)
+	check(chain_game.cleared_crates == 0 and chain_game.best_combo == 0 and chain_game.ticks == 0,
+		"A new match must reset crates cleared, best combo and active ticks")
 	var upper_only := empty(4, 6)
 	upper_only.player.x = 2
 	for column in range(4):
@@ -218,6 +233,9 @@ func loss_and_drops() -> void:
 	crushed.add_crate(1, 3, 1)
 	advance(crushed, 1)
 	check(crushed.state == "over" and crushed.loss_reason == "crushed", "A crate falling on the head must end the party")
+	var crush_result := crushed.match_result("2026-11-15T21:52:35")
+	check(crush_result.reason == "crushed" and crush_result.score == 0 and crush_result.crates == 0,
+		"An immediate crush must preserve its reason and zero-score result")
 	var final_ticks := crushed.ticks
 	advance(crushed, .5)
 	check(crushed.ticks == final_ticks and crushed.events.is_empty(), "Game over must be emitted only once and freeze the model")
@@ -243,25 +261,67 @@ func loss_and_drops() -> void:
 
 func storage() -> void:
 	var path := "user://test-profile-%d.json" % Time.get_ticks_usec()
-	var original := Profile.new(path)
-	original.music = .2
-	original.effects = 0
-	original.vibration = false
-	original.add_result(300)
-	original.add_result(100)
+	var legacy_records := [{"score": 600, "date": "12.11.2026"}, {"score": 100, "date": "13.11.2026"}]
+	var version_one := JSON.stringify({"version": 1, "music": .2, "effects": 0,
+		"vibration": false, "records": legacy_records})
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(version_one)
+	file.close()
 	var loaded := Profile.new(path)
 	check(is_equal_approx(loaded.music, .2) and loaded.effects == 0 and not loaded.vibration,
-		"Sound and vibration settings must survive a new profile instance")
-	check(loaded.records.size() == 2 and int(loaded.records[0].score) == 300,
-		"Local scores must survive reload and be sorted")
+		"Migration must preserve legacy sound and vibration settings")
+	check(loaded.records == legacy_records and loaded.matches.is_empty(), "Migration must preserve legacy scores and dates without creating matches")
+	check(FileAccess.get_file_as_string(path) == version_one, "A read-only profile load must preserve the legacy file")
+	check(loaded.statistics() == {"played": 0, "best_score": 600,
+		"total_lines": 0, "total_crates": 0, "max_lines": 0, "best_combo": 0,
+		"crushed": 0, "overflow": 0, "average_duration_ms": 0, "max_duration_ms": 0},
+		"Legacy scores may set the best score without affecting any match statistics")
+	var first := {"ended_at": "2026-11-15T19:30:20", "duration_ms": 8100, "score": 200,
+		"lines": 2, "crates": 20, "best_combo": 1, "reason": "crushed"}
+	var second := {"ended_at": "2026-11-15T18:00:42", "duration_ms": 12601, "score": 400,
+		"lines": 4, "crates": 40, "best_combo": 3, "reason": "overflow"}
+	loaded.add_match(first)
+	loaded.add_match(second)
+	check(loaded.statistics() == {"played": 2, "best_score": 600,
+		"total_lines": 6, "total_crates": 60, "max_lines": 4, "best_combo": 3,
+		"crushed": 1, "overflow": 1, "average_duration_ms": 10351, "max_duration_ms": 12601},
+		"Aggregates must use all finished matches and a rounded average duration")
+	var migrated: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(path))
+	check(migrated.version == 2, "The next save must upgrade the existing profile file")
+	var migrated_profile := Profile.new(path)
+	check(is_equal_approx(migrated_profile.music, .2) and migrated_profile.effects == 0 and not migrated_profile.vibration,
+		"The upgraded save must retain the legacy settings on reload")
+	check(migrated_profile.records == legacy_records and migrated_profile.matches == [second, first],
+		"The upgraded save must preserve legacy rows and round-trip new rows in completion order, even if the clock goes backward")
+	var latest := first.duplicate()
 	for index in range(15):
-		loaded.add_result(index * 100)
-	check(loaded.records.size() == 10 and int(loaded.records[0].score) == 1400, "Only the ten best local scores are retained")
-	var file := FileAccess.open(path, FileAccess.WRITE)
+		latest.score = index * 100
+		migrated_profile.add_match(latest)
+	var with_history := Profile.new(path)
+	check(with_history.matches.size() == 17 and with_history.matches.front() == latest and with_history.matches.back() == first,
+		"Full history must retain older and zero-score matches beyond the old records limit")
+	check(with_history.statistics().best_score == 1400, "A new score may exceed the legacy high score")
+	var malformed: Dictionary = first.duplicate()
+	malformed.lines = -1
+	var fractional: Dictionary = first.duplicate()
+	fractional.duration_ms = 2.5
+	var wrong_reason: Dictionary = first.duplicate()
+	wrong_reason.reason = "abandoned"
+	var wrong_date: Dictionary = first.duplicate()
+	wrong_date.ended_at = "2026-02-31T19:30:20"
+	var partial: Dictionary = first.duplicate()
+	partial.erase("crates")
+	migrated.matches = ["invalid", malformed, second, wrong_reason, wrong_date, fractional, partial, first]
+	file = FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(JSON.stringify(migrated))
+	file.close()
+	check(Profile.new(path).matches == [second, first], "Malformed saved matches must not affect valid history")
+	file = FileAccess.open(path, FileAccess.WRITE)
 	file.store_string("broken-json")
 	file.close()
 	var recovered := Profile.new(path)
-	check(recovered.records.is_empty() and not recovered.last_error.is_empty(), "Corrupt storage must fall back safely")
+	check(recovered.records.is_empty() and recovered.matches.is_empty() and not recovered.last_error.is_empty(),
+		"Corrupt storage must fall back safely")
 	DirAccess.remove_absolute(path)
 
 
@@ -321,11 +381,15 @@ func vibration_toggle() -> void:
 
 func app_flow() -> void:
 	check(ProjectSettings.get_setting("application/config/name") == "Stack Attack · Ночная смена", "Visual changes must preserve the existing user data namespace")
+	var path := "user://test-match-flow-%d.json" % Time.get_ticks_usec()
 	var app = load("res://game/main.tscn").instantiate()
 	root.add_child(app)
 	await process_frame
+	app.profile = Profile.new(path)
+	app.sound.profile = app.profile
+	app.sound.apply_volumes()
 	check(app.sound.music_player.stream.loop_mode == AudioStreamWAV.LOOP_FORWARD and app.sound.music_player.stream.loop_end > 300000, "Music must loop over decoded frames on every platform")
-	check(app.screen == "menu" and app.buttons.has("play") and app.buttons.has("settings"), "Main menu must offer the agreed screens")
+	check(app.screen == "menu" and app.buttons.has("play") and app.buttons.has("settings") and app.buttons.has("statistics"), "Main menu must offer the agreed screens")
 	var art_model = app.world.model
 	var art_snapshot := [art_model.player, art_model.score, art_model.crates.duplicate(true), art_model._rng.state, art_model.ticks]
 	for equipped in [false, true]:
@@ -336,23 +400,25 @@ func app_flow() -> void:
 		check(app.world.HERO_TEXTURES[pose].get_size() == Vector2(32, 48), "All workshop poses must preserve the same full sprite canvas")
 	check(app.world.CRATE_TEXTURE.get_size() == Vector2(48, 48) and app.world.CRATE_TEXTURE.resource_path == "res://art/crate_wood.png", "All crates must use the one existing wooden appearance")
 	check(app._missing_menu_glyphs().is_empty(), "The original workshop bitmap face must cover the visible menu text")
-	var initial_records: Array = app.profile.records.duplicate(true)
 	var personal = app.model
 	var random_before: int = personal._rng.state
-	var path_exists := FileAccess.file_exists(app.profile.path)
-	var file_before := FileAccess.get_file_as_string(app.profile.path) if path_exists else ""
-	app._advance_demo(5.0)
+	var demo_losses: int = app.demo.losses
+	app.demo._restart()
+	for row in range(app.demo.model.tuning.rows - 1):
+		app.demo.model.add_crate(0, row)
+	app._advance_demo(.1)
+	check(app.demo.losses == demo_losses + 1, "The isolation test must exercise a real demo loss")
 	check(app.model == personal and personal.ticks == 0 and personal._rng.state == random_before, "Menu demo must not advance or replace the personal game")
-	check(app.session == 0 and app.profile.records == initial_records, "Demo cannot create personal sessions or records")
-	check(FileAccess.file_exists(app.profile.path) == path_exists and (not path_exists or FileAccess.get_file_as_string(app.profile.path) == file_before), "Demo must not write the profile file")
-	var saved_records: Array = app.profile.records.duplicate(true)
-	app.profile.records.clear()
+	check(app.session == 0 and app.profile.matches.is_empty() and not FileAccess.file_exists(path),
+		"Losing the demo cannot create personal sessions, history rows or a profile file")
 	for index in range(10):
 		app.profile.records.append({"score": 1000000 - index * 100, "date": "12.11.2026"})
+	app.profile.matches.append({"ended_at": "2026-11-15T20:04:05", "duration_ms": 3651000,
+		"score": 100000000, "lines": 1000000, "crates": 10000000, "best_combo": 11, "reason": "overflow"})
 	for dimensions in [Vector2i(320, 568), Vector2i(568, 320), Vector2i(390, 844), Vector2i(844, 390),
 			Vector2i(344, 882), Vector2i(882, 344), Vector2i(768, 1004), Vector2i(1004, 768), Vector2i(360, 360)]:
 		root.size = dimensions
-		for menu in ["menu", "settings", "records", "paused", "over"]:
+		for menu in ["menu", "settings", "statistics", "paused", "over"]:
 			app._show_screen(menu)
 			if menu == "settings" and not OS.has_feature("android"):
 				# Include the real Android-only row when checking the smallest layouts.
@@ -373,7 +439,8 @@ func app_flow() -> void:
 					check(viewport.encloses(control.get_global_rect()), "%s content must remain visible at %s: %s" % [menu, dimensions, control.name])
 			var focused := root.gui_get_focus_owner()
 			check(focused != null and app.panel.is_ancestor_of(focused), "Focus must start inside each menu panel")
-	app.profile.records = saved_records
+	app.profile.records.clear()
+	app.profile.matches.clear()
 	for reason in ["crushed", "overflow"]:
 		app.model.loss_reason = reason
 		app.model.score = 200
@@ -423,12 +490,51 @@ func app_flow() -> void:
 			check(not app.world.field.intersects(rect), "Touch controls must not cover the field")
 	app._show_screen("settings")
 	check(app.sliders.has("music") and app.sliders.has("effects"), "Music and effects need separate sliders")
-	app._show_screen("records")
-	check(app.buttons.has("back"), "Records must provide a return path")
+	app._show_screen("statistics")
+	check(app.buttons.has("back"), "Statistics must provide a return path")
+	app.set_process(false)
+	# Exercise button callbacks without starting audio in the headless lifecycle test.
+	app.sound.unlocked = true
+	app.sound.sounds.clear()
 	app._start_game()
 	check(app.session == 2 and app.model.score == 0, "Restart must start a fresh party")
+	app._pause()
+	app.buttons.restart.pressed.emit()
+	await process_frame
+	check(app.session == 3 and app.profile.matches.is_empty() and not FileAccess.file_exists(path),
+		"Restarting an unfinished match must discard it without saving")
+	app._pause()
+	app.buttons.home.pressed.emit()
+	await process_frame
+	check(app.screen == "menu" and app.profile.matches.is_empty() and not FileAccess.file_exists(path),
+		"Leaving an unfinished match must discard it without saving")
+	app.buttons.play.pressed.emit()
+	await process_frame
+	app._advance_game(1.0)
+	app._pause()
+	app._advance_game(30.0)
+	check(app.model.ticks == 120, "Paused wall time must not add active match ticks")
+	app.buttons.resume.pressed.emit()
+	await process_frame
+	app.model.crates.clear()
+	for row in range(app.model.tuning.rows):
+		app.model.add_crate(0, row)
+	app._advance_game(Simulation.STEP)
+	check(app.screen == "over" and app.profile.matches.size() == 1, "The normal loss path must save exactly one personal match")
+	if app.profile.matches.size() == 1:
+		var result: Dictionary = app.profile.matches[0]
+		check(result.duration_ms == 1008 and result.reason == "overflow" and result.score == 0,
+			"The saved zero-score loss must count active ticks and exclude the pause")
+		check(Profile.new(path).matches == [result], "The completed match must survive loading the actual profile file")
+	app._end_game()
+	check(app.profile.matches.size() == 1, "Re-entering the result screen must not duplicate the completed match")
+	app.buttons.again.pressed.emit()
+	await process_frame
+	check(app.screen == "playing", "Playing again after a loss must start a new unfinished match")
 	app.queue_free()
 	await process_frame
+	check(Profile.new(path).matches.size() == 1, "Closing during a new match must leave completed history unchanged")
+	DirAccess.remove_absolute(path)
 
 
 func random_sessions() -> void:

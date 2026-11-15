@@ -11,6 +11,8 @@ var grounded := false
 var facing := 1
 var score := 0
 var lines := 0
+var cleared_crates := 0
+var best_combo := 0
 var elapsed := 0.0
 var ticks := 0
 var state := "playing"
@@ -47,6 +49,8 @@ func reset(seed_value: int) -> void:
 	facing = 1
 	score = 0
 	lines = 0
+	cleared_crates = 0
+	best_combo = 0
 	elapsed = 0.0
 	ticks = 0
 	state = "playing"
@@ -75,6 +79,14 @@ func add_crate(x: float, y: float, velocity: float = 0.0) -> Dictionary:
 
 func interval() -> float:
 	return maxf(tuning.minimum_interval, tuning.initial_interval - elapsed * tuning.acceleration)
+
+
+func match_result(ended_at: String) -> Dictionary:
+	if state != "over" or loss_reason not in ["crushed", "overflow"]:
+		return {}
+	return {"ended_at": ended_at, "duration_ms": roundi(ticks * STEP * 1000.0),
+		"score": score, "lines": lines, "crates": cleared_crates, "best_combo": best_combo,
+		"reason": loss_reason}
 
 
 func advance(delta: float, axis: float, jump_pressed: bool = false) -> void:
@@ -263,6 +275,7 @@ func _begin_clear_if_full() -> bool:
 	clear_elapsed = 0.0
 	_collapse_started = false
 	chain += 1
+	best_combo = maxi(best_combo, chain)
 	lines += 1
 	score += tuning.points_per_line
 	events.append({"type": "line", "chain": chain, "score": score})
@@ -274,7 +287,9 @@ func _advance_clear() -> void:
 	if clear_elapsed < tuning.clear_flash_time:
 		return
 	if not _collapse_started:
+		var crate_count := crates.size()
 		crates = crates.filter(func(crate: Dictionary) -> bool: return not _clear_ids.has(int(crate.id)))
+		cleared_crates += crate_count - crates.size()
 		for crate in crates:
 			crate.clear_y = float(crate.y)
 			crate.vy = 0.0

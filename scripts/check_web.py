@@ -3,6 +3,7 @@
 import functools
 import argparse
 import base64
+from datetime import datetime
 import hashlib
 import http.server
 import html
@@ -21,6 +22,7 @@ group.add_argument('--workshop-only', action='store_true', help='Capture and val
 group.add_argument('--sprites-only', action='store_true', help='Run only frozen-pose rendered sprite regressions')
 group.add_argument('--ui-only', action='store_true', help='Run demo isolation and vibration UI regressions only')
 group.add_argument('--game-over-only', action='store_true', help='Run score-only result screen regressions and capture screenshots')
+group.add_argument('--statistics-only', action='store_true', help='Check Statistics and capture its rendered overview and history')
 args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -383,8 +385,8 @@ def uniform_action_buttons(browser, viewports=((390,844),(844,390),(768,1004))):
             shots.append(screenshot(page,f'unified-{tag}-{width}x{height}.png'))
 
         inspect_actions()
-        button(page,'records',True)
-        wait_screen(page,'records')
+        button(page,'statistics',True)
+        wait_screen(page,'statistics')
         inspect_actions()
         button(page,'back',True)
         wait_screen(page,'menu')
@@ -497,7 +499,7 @@ def ui_batch_checks(browser):
     labels = [item['text'] for item in first['panel']['items'] if item['kind'] == 'Label']
     assert labels == ['Stack Attack'], ('Unexpected menu description/subtitle', labels)
     assert first['demo']['active'] and first['demo']['separate_model']
-    records = first['profile']['records']
+    initial_statistics = personal_statistics(first)
     positions = []
     for _ in range(16):
         page.wait_for_timeout(250)
@@ -505,7 +507,7 @@ def ui_batch_checks(browser):
     moving = state(page)
     assert max(positions)-min(positions) > .5 and moving['demo']['jumps'] > 0 and moving['demo']['drops'] > 0
     assert moving['ticks'] == first['ticks'] == 0 and moving['session'] == 0 and moving['score'] == 0
-    assert moving['profile']['records'] == records
+    assert personal_statistics(moving) == initial_statistics
     menu_shot = screenshot(page, 'live-menu-390x844.png')
     for _ in range(3):
         button(page, 'settings', True)
@@ -519,7 +521,8 @@ def ui_batch_checks(browser):
     page.wait_for_function('value => window.stackAttackState.demo.losses > value', arg=before_loss['demo']['losses'])
     page.wait_for_function('value => window.stackAttackState.demo.rounds > value', arg=before_loss['demo']['rounds'])
     after_loss = state(page)
-    assert after_loss['session'] == 0 and after_loss['ticks'] == 0 and after_loss['profile']['records'] == records
+    assert after_loss['session'] == 0 and after_loss['ticks'] == 0
+    assert personal_statistics(after_loss) == initial_statistics
     button(page, 'play', True)
     wait_screen(page, 'playing')
     stopped_demo = state(page)['demo']['ticks']
@@ -532,7 +535,7 @@ def ui_batch_checks(browser):
     wait_screen(page, 'menu')
     page.wait_for_timeout(350)
     assert state(page)['ticks'] == paused['ticks'] and state(page)['player'] == paused['player']
-    assert state(page)['demo']['ticks'] > stopped_demo and state(page)['profile']['records'] == records
+    assert state(page)['demo']['ticks'] > stopped_demo and personal_statistics(state(page)) == initial_statistics
     # Exercise the exact Android-only control in an explicit Web QA fixture.
     # This verifies pixels/input, not Android hardware or haptic strength.
     scenario(page, 'android_settings')
@@ -564,14 +567,332 @@ def ui_batch_checks(browser):
     assert Image.open(io.BytesIO(on)).crop(bounds).tobytes() == Image.open(io.BytesIO(blurred)).crop(bounds).tobytes()
     page.reload()
     wait_screen(page, 'menu')
-    assert state(page)['profile']['records'] == records and state(page)['profile']['vibration']
+    assert personal_statistics(state(page)) == initial_statistics and state(page)['profile']['vibration']
     assert not errors, errors
     context.close()
-    result = {'demo_motion':'PASS','real_loss_restart':'PASS','personal_game_and_records_isolation':'PASS',
+    result = {'demo_motion':'PASS','real_loss_restart':'PASS','personal_game_and_statistics_isolation':'PASS',
               'repeated_settings':'PASS','vibration_pixels_and_focus':'PASS','web_vibration_hidden':'PASS',
               'screenshots':[menu_shot,toggle_shot]}
     print('UI_BATCH',json.dumps(result),flush=True)
     return result
+
+
+def personal_statistics(snapshot):
+    profile = snapshot['profile']
+    return {name: profile[name] for name in ('matches', 'statistics', 'records')}
+
+
+def statistics_items(page):
+    return {item['name']: item['text'] for item in state(page)['panel']['items']}
+
+
+def focus_button(page, name):
+    panel = state(page)['panel']
+    assert name in {item['name'] for item in panel['items'] if item['focusable']}
+    for _ in panel['items']:
+        if state(page)['panel']['focus'] == name:
+            return
+        tab(page)
+    raise AssertionError(f'No keyboard focus for {name}')
+
+
+def wait_expanded_match(page, index):
+    page.wait_for_function('index => window.stackAttackState.statistics_view?.expanded_match === index', arg=index)
+
+
+def visible_match_indexes(page):
+    return sorted(int(name.removeprefix('match_')) for name in state(page)['buttons'] if name.startswith('match_'))
+
+
+def statistics_preview(browser):
+    context = browser.new_context(viewport={'width':390, 'height':844}, has_touch=True, device_scale_factor=1)
+    page = context.new_page()
+    errors = []
+    page.on('pageerror', lambda value: errors.append(str(value)))
+    page.goto(URL)
+    wait_screen(page, 'menu')
+    original = personal_statistics(state(page))
+    scenario(page, 'statistics_menu')
+    wait_screen(page, 'statistics')
+    assert state(page)['statistics_view']['preview']
+    shots = [screenshot(page, 'statistics-overview-390x844.png')]
+    collapsed_count = len(visible_match_indexes(page))
+    button(page, 'match_0', True)
+    wait_expanded_match(page, 0)
+    shots.append(screenshot(page, 'statistics-history-390x844.png'))
+    print('STATISTICS_SCREENSHOTS', json.dumps(shots), flush=True)
+    assert collapsed_count >= 4, 'Tall portrait leaves room for multiple visible matches'
+    fixed_panel(page)
+    assert personal_statistics(state(page)) == original
+
+    for width, height in [(320,568), (568,320), (844,390), (390,844)]:
+        page.set_viewport_size({'width':width, 'height':height})
+        page.wait_for_timeout(400)
+        assert state(page)['statistics_view']['expanded_match'] == 0
+        assert state(page)['panel']['focus'] == 'match_0', 'Resize lost expanded match focus'
+        assert 'match_0_duration' in statistics_items(page)
+        fixed_panel(page)
+        if (width, height) == (568, 320):
+            shots.append(screenshot(page, 'statistics-history-568x320.png'))
+
+    page.keyboard.press('Enter')
+    wait_expanded_match(page, -1)
+    assert 'match_0_duration' not in statistics_items(page)
+    page.set_viewport_size({'width':320, 'height':568})
+    page.wait_for_timeout(400)
+    first_page = visible_match_indexes(page)
+    button(page, 'match_0', True)
+    wait_expanded_match(page, 0)
+    assert visible_match_indexes(page) == first_page, 'Expanding a match changed the page boundaries'
+    focus_button(page, 'history_next')
+    page.keyboard.press('Enter')
+    page.wait_for_function('window.stackAttackState.statistics_view.first_match > 0')
+    second_page = visible_match_indexes(page)
+    assert second_page[0] == first_page[-1] + 1
+    assert state(page)['statistics_view']['expanded_match'] == -1
+    fixed_panel(page)
+    button(page, 'history_previous', True)
+    page.wait_for_function('window.stackAttackState.statistics_view.first_match === 0')
+    viewed = visible_match_indexes(page)
+    assert viewed == first_page
+    while 'history_next' in state(page)['buttons']:
+        button(page, 'history_next', True)
+        next_page = visible_match_indexes(page)
+        assert next_page[0] > viewed[-1], 'History pagination did not advance'
+        viewed.extend(next_page)
+    assert viewed == list(range(8)), 'Some preview history rows cannot be reached'
+    button(page, 'back', True)
+    wait_screen(page, 'menu')
+    button(page, 'statistics', True)
+    wait_screen(page, 'statistics')
+    assert not state(page)['statistics_view']['preview']
+    assert statistics_items(page)['empty_history'] == 'Партий пока нет'
+    assert personal_statistics(state(page)) == original
+    assert not errors, errors
+    context.close()
+    return {'responsive_expanded_history':'PASS', 'keyboard_and_touch_navigation':'PASS',
+            'fixture_isolation':'PASS', 'screenshots':shots}
+
+
+def match_duration(duration_ms):
+    minutes, seconds = divmod(duration_ms // 1000, 60)
+    hours, minutes = divmod(minutes, 60)
+    return (f'{hours}:' if hours else '') + f'{minutes:02d}:{seconds:02d}'
+
+
+def check_match_details(page, index, match):
+    items = statistics_items(page)
+    prefix = f'match_{index}_'
+    ended_at = datetime.fromisoformat(match['ended_at'])
+    assert ended_at.strftime('%d.%m.%Y %H:%M:%S') in items[prefix+'date']
+    assert str(match['score']) in items[prefix+'score']
+    assert items[prefix+'duration'] == f"Длительность {match_duration(match['duration_ms'])}"
+    assert items[prefix+'reason'] == {'crushed':'Придавило ящиком', 'overflow':'Склад переполнен'}[match['reason']]
+    assert items[prefix+'lines'] == f"Ряды {match['lines']}"
+    assert items[prefix+'crates'] == f"Ящики {match['crates']}"
+    assert items[prefix+'combo'] == f"Лучшее комбо x{match['best_combo']}"
+
+
+def statistics_match_flow(browser):
+    context = browser.new_context(viewport={'width':390, 'height':844}, has_touch=True, device_scale_factor=1)
+    page = context.new_page()
+    errors = []
+    page.on('pageerror', lambda value: errors.append(str(value)))
+    page.goto(URL)
+    wait_screen(page, 'menu')
+    initial = personal_statistics(state(page))
+    assert initial['matches'] == initial['records'] == []
+    assert all(value == 0 for value in initial['statistics'].values())
+
+    button(page, 'play', True)
+    wait_screen(page, 'playing')
+    scenario(page, 'chain')
+    page.wait_for_function('window.stackAttackState.score === 200 && window.stackAttackState.state === "playing"')
+    button(page, 'pause', True)
+    wait_screen(page, 'paused')
+    paused = state(page)
+    assert paused['active_duration_ms'] > 0
+    page.wait_for_timeout(1250)
+    still_paused = state(page)
+    assert still_paused['ticks'] == paused['ticks']
+    assert still_paused['active_duration_ms'] == paused['active_duration_ms'], 'Paused wall time was added to play time'
+    assert personal_statistics(still_paused) == initial
+    button(page, 'resume', True)
+    wait_screen(page, 'playing')
+    scenario(page, 'crush')
+    wait_screen(page, 'over')
+    result = state(page)
+    scored, = result['profile']['matches']
+    assert {key:scored[key] for key in ('score', 'lines', 'crates', 'best_combo', 'reason')} == {
+        'score':200, 'lines':2, 'crates':20, 'best_combo':2, 'reason':'crushed'}
+    assert scored['duration_ms'] > paused['active_duration_ms']
+    assert scored['duration_ms'] == result['active_duration_ms']
+    assert abs(scored['duration_ms'] - result['ticks'] * 1000 / 120) <= 0.5 + 1e-9
+    score_only_result(page)
+
+    button(page, 'again', True)
+    wait_screen(page, 'playing')
+    scenario(page, 'line')
+    page.wait_for_function('window.stackAttackState.score === 100 && window.stackAttackState.state === "playing"')
+    button(page, 'pause', True)
+    wait_screen(page, 'paused')
+    button(page, 'restart', True)
+    wait_screen(page, 'playing')
+    assert state(page)['score'] == 0 and state(page)['profile']['matches'] == [scored]
+    scenario(page, 'overflow')
+    wait_screen(page, 'over')
+    result = state(page)
+    overflow, previous = result['profile']['matches']
+    assert previous == scored and overflow['ended_at'] >= scored['ended_at']
+    assert {key:overflow[key] for key in ('score', 'lines', 'crates', 'best_combo', 'reason')} == {
+        'score':0, 'lines':0, 'crates':0, 'best_combo':0, 'reason':'overflow'}
+    assert overflow['duration_ms'] == result['active_duration_ms']
+    assert overflow['duration_ms'] > 0
+    score_only_result(page)
+    saved_statistics = personal_statistics(result)
+    total_duration = scored['duration_ms'] + overflow['duration_ms']
+    assert saved_statistics['statistics'] == {
+        'played':2, 'best_score':200, 'total_lines':2, 'total_crates':20,
+        'max_lines':2, 'best_combo':2, 'crushed':1, 'overflow':1,
+        'average_duration_ms':(total_duration+1)//2, 'max_duration_ms':max(scored['duration_ms'], overflow['duration_ms'])}
+
+    button(page, 'home', True)
+    wait_screen(page, 'menu')
+    button(page, 'play', True)
+    wait_screen(page, 'playing')
+    scenario(page, 'line')
+    page.wait_for_function('window.stackAttackState.score === 100 && window.stackAttackState.state === "playing"')
+    button(page, 'pause', True)
+    wait_screen(page, 'paused')
+    button(page, 'home', True)
+    wait_screen(page, 'menu')
+    assert personal_statistics(state(page)) == saved_statistics, 'Abandoned match changed statistics'
+    button(page, 'statistics', True)
+    wait_screen(page, 'statistics')
+    assert not state(page)['statistics_view']['preview']
+    items = statistics_items(page)
+    assert items['match_0_score'] == '0' and items['match_1_score'] == '200'
+    assert items['match_0_status'] == 'Склад переполнен' and items['match_1_status'] == 'Придавило ящиком'
+    stats = saved_statistics['statistics']
+    expected_items = {
+        'played':'Сыграно', 'played_value':'2', 'best_score_value':'200', 'lines_crates_value':'2 / 20',
+        'max_lines_value':'2', 'best_combo_value':'x2', 'crushed':'Придавило ящиком 1', 'overflow':'Склад переполнен 1',
+        'duration_value':f"{match_duration(stats['average_duration_ms'])} / {match_duration(stats['max_duration_ms'])}",
+    }
+    assert {name:items[name] for name in expected_items} == expected_items
+    assert all('поражения' not in label.lower() for label in items.values())
+    button(page, 'match_0', True)
+    wait_expanded_match(page, 0)
+    check_match_details(page, 0, overflow)
+    button(page, 'match_0', True)
+    wait_expanded_match(page, -1)
+    focus_button(page, 'match_1')
+    page.keyboard.press('Enter')
+    wait_expanded_match(page, 1)
+    check_match_details(page, 1, scored)
+    completed_shot = screenshot(page, 'statistics-completed-matches-390x844.png')
+    before_demo = state(page)['demo']['losses']
+    scenario(page, 'demo_crush')
+    page.wait_for_function('count => window.stackAttackState.demo.losses > count', arg=before_demo)
+    assert personal_statistics(state(page)) == saved_statistics, 'Demo loss changed statistics'
+
+    button(page, 'back', True)
+    wait_screen(page, 'menu')
+    button(page, 'settings', True)
+    wait_screen(page, 'settings')
+    slider(page, 'music', .2)
+    slider(page, 'effects', .3)
+    page.wait_for_timeout(2800)  # Godot synchronizes user:// to IndexedDB asynchronously.
+    page.reload()
+    wait_screen(page, 'menu')
+    loaded = state(page)
+    assert personal_statistics(loaded) == saved_statistics
+    assert abs(loaded['profile']['music']-.2) < .001 and abs(loaded['profile']['effects']-.3) < .001
+    assert not errors, errors
+    context.close()
+    return {'both_losses':'PASS', 'newest_first':'PASS', 'aggregates_and_match_details':'PASS',
+            'pause_excluded':'PASS', 'abandoned_restart_and_demo_isolation':'PASS',
+            'settings_and_statistics_reload':'PASS', 'screenshots':[completed_shot]}
+
+
+def seed_legacy_profile(page, payload):
+    # Replace the save in this disposable context after the engine has shut down.
+    page.goto(URL.rsplit('/', 1)[0] + '/build-source.json')
+    page.evaluate('''payload => new Promise((resolve, reject) => {
+        const open = indexedDB.open('/userfs');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+            const db = open.result;
+            const tx = db.transaction('FILE_DATA', 'readwrite');
+            const entries = tx.objectStore('FILE_DATA').openCursor();
+            let found = false;
+            let normalSave = false;
+            entries.onsuccess = () => {
+                const cursor = entries.result;
+                if (!cursor) return;
+                if (cursor.key.endsWith('/stack-attack-profile-v1.json')) normalSave = true;
+                if (cursor.key.endsWith('/stack-attack-profile-v1.json.qa')) {
+                    const contents = new TextEncoder().encode(JSON.stringify(payload));
+                    cursor.update({...cursor.value, contents, timestamp: new Date()});
+                    found = true;
+                }
+                cursor.continue();
+            };
+            tx.oncomplete = () => {
+                db.close();
+                if (normalSave) reject(new Error('QA Web wrote the normal Godot profile'));
+                else if (!found) reject(new Error('QA Web profile missing in IndexedDB'));
+                else resolve();
+            };
+            tx.onerror = () => reject(tx.error);
+        };
+    })''', payload)
+
+
+def statistics_legacy_profile(browser):
+    context = browser.new_context(viewport={'width':390, 'height':844}, has_touch=True, device_scale_factor=1)
+    page = context.new_page()
+    errors = []
+    page.on('pageerror', lambda value: errors.append(str(value)))
+    page.goto(URL)
+    wait_screen(page, 'menu')
+    button(page, 'settings', True)
+    wait_screen(page, 'settings')
+    slider(page, 'music', .35)
+    page.wait_for_timeout(2800)  # Wait for a real Godot save entry to replace.
+    old_records = [{'score':1800, 'date':'12.11.2026'}]
+    seed_legacy_profile(page, {'version':1, 'music':.25, 'effects':.8, 'vibration':False, 'records':old_records})
+    page.goto(URL)
+    wait_screen(page, 'menu')
+    initial = state(page)['profile']
+    assert initial['records'] == old_records and initial['matches'] == []
+    assert initial['statistics']['best_score'] == 1800
+    assert all(value == 0 for key, value in initial['statistics'].items() if key != 'best_score')
+    assert abs(initial['music']-.25) < .001 and abs(initial['effects']-.8) < .001 and not initial['vibration']
+
+    button(page, 'play', True)
+    wait_screen(page, 'playing')
+    scenario(page, 'overflow')
+    wait_screen(page, 'over')
+    button(page, 'home', True)
+    wait_screen(page, 'menu')
+    button(page, 'statistics', True)
+    wait_screen(page, 'statistics')
+    loaded = state(page)['profile']
+    assert loaded['records'] == old_records and len(loaded['matches']) == 1
+    assert loaded['statistics']['played'] == loaded['statistics']['overflow'] == 1
+    assert loaded['statistics']['best_score'] == 1800
+    button(page, 'match_1', True)
+    wait_expanded_match(page, 1)
+    items = statistics_items(page)
+    assert items['match_1_date'] == old_records[0]['date'] and items['match_1_score'] == '1800'
+    assert items['match_1_legacy'] == 'Старый рекорд'
+    assert 'Сохранены дата и счёт' in items['match_1_legacy_details']
+    assert not {'match_1_duration', 'match_1_reason', 'match_1_lines', 'match_1_crates', 'match_1_combo'} & items.keys()
+    assert not errors, errors
+    context.close()
+    return {'real_version_one_save':'PASS', 'qa_save_isolation':'PASS', 'only_known_legacy_details':'PASS',
+            'new_match_with_legacy_best':'PASS'}
 
 
 def wooden_crates(browser):
@@ -682,11 +1003,13 @@ def menu_layouts(browser):
         shots.append(screenshot(page, f'fixed-settings-{dimensions[0]}x{dimensions[1]}.png'))
         button(page, 'back', True)
         wait_screen(page, 'menu')
-        scenario(page, 'records_menu')
-        wait_screen(page, 'records')
-        assert len(state(page)['profile']['records']) == 10
+        original = personal_statistics(state(page))
+        scenario(page, 'statistics_menu')
+        wait_screen(page, 'statistics')
+        assert state(page)['statistics_view']['preview'] and 'match_0' in state(page)['buttons']
+        assert personal_statistics(state(page)) == original
         fixed_panel(page)
-        shots.append(screenshot(page, f'fixed-records-{dimensions[0]}x{dimensions[1]}.png'))
+        shots.append(screenshot(page, f'fixed-statistics-{dimensions[0]}x{dimensions[1]}.png'))
         button(page, 'back', True)
         wait_screen(page, 'menu')
         button(page, 'play', True)
@@ -701,7 +1024,7 @@ def menu_layouts(browser):
         fixed_panel(page)
         button(page, 'home', True)
         wait_screen(page, 'menu')
-        results.append({'viewport':list(dimensions), 'fixed_panels':'PASS', 'wheel_and_swipe':'PASS', 'focus_and_transitions':'PASS', 'ten_records':'PASS', 'screenshots':shots})
+        results.append({'viewport':list(dimensions), 'fixed_panels':'PASS', 'wheel_and_swipe':'PASS', 'focus_and_transitions':'PASS', 'statistics_preview':'PASS', 'screenshots':shots})
         print('MENU_LAYOUT', json.dumps(results[-1]), flush=True)
     assert not errors, errors
     context.close()
@@ -720,6 +1043,16 @@ try:
         browser = p.chromium.launch(**browser_options,
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
+        statistics = {}
+        if args.statistics_only or not (args.workshop_only or args.game_over_only or args.ui_only or args.sprites_only):
+            statistics = {'preview':statistics_preview(browser), 'match_flow':statistics_match_flow(browser),
+                          'legacy_profile':statistics_legacy_profile(browser)}
+            print('STATISTICS', json.dumps(statistics), flush=True)
+        if args.statistics_only:
+            (BUILD/'statistics-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'renderer':'SwiftShader',
+                'checks':statistics,'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest()},indent=2)+'\n')
+            browser.close()
+            raise SystemExit(0)
         if args.workshop_only:
             crates = wooden_crates(browser)
             checks = workshop_screens(browser)
@@ -826,7 +1159,7 @@ try:
             game_shot = screenshot(page, f'game-{other[0]}x{other[1]}.png')
             scenario(page, 'crush')
             wait_screen(page, 'over')
-            assert state(page)['profile']['records'][0]['score'] == 200
+            assert state(page)['profile']['matches'][0]['score'] == 200
             previous_session = state(page)['session']
             button(page, 'again', touch)
             wait_screen(page, 'playing')
@@ -835,9 +1168,10 @@ try:
             wait_screen(page, 'over')
             button(page, 'home', touch)
             wait_screen(page, 'menu')
-            button(page, 'records', touch)
-            wait_screen(page, 'records')
-            assert state(page)['profile']['records'][0]['score'] == 200
+            button(page, 'statistics', touch)
+            wait_screen(page, 'statistics')
+            assert [match['score'] for match in state(page)['profile']['matches']] == [0, 200]
+            assert state(page)['profile']['statistics']['best_score'] == 200
             button(page, 'back', touch)
             wait_screen(page, 'menu')
             button(page, 'play', touch)
@@ -880,7 +1214,8 @@ try:
             wait_screen(page, 'menu')
             saved = state(page)['profile']
             assert abs(saved['music']-.2)<.001 and abs(saved['effects']-.3)<.001, saved
-            assert saved['records'][0]['score']==200, saved
+            assert [match['score'] for match in saved['matches']] == [0, 200], saved
+            assert saved['statistics']['best_score'] == 200, saved
             assert not errors, errors
             assert not failed, failed
             assert not console_errors, console_errors
@@ -889,12 +1224,12 @@ try:
             result = {'viewport':list(dimensions), 'rotated':list(other),
                       'input':'multitouch' if touch else 'keyboard + mouse',
                       'menu_glyphs':'PASS', 'pause':'PASS', 'line_chain':'PASS', 'both_losses':'PASS', 'restart':'PASS',
-                      'settings_and_records_reload':'PASS', 'muted_rms':silent_rms, 'audible_rms':audible_rms, 'effects_rms':max(effect_samples),
+                      'settings_and_statistics_reload':'PASS', 'muted_rms':silent_rms, 'audible_rms':audible_rms, 'effects_rms':max(effect_samples),
                       'screenshots':[menu_shot,game_shot]}
             results.append(result)
             print(json.dumps(result), flush=True)
             context.close()
-        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
+        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'statistics':statistics, 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
                   'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
                   'page_errors':all_errors,'failed_requests':all_failed_requests,'checks':results}
         (BUILD/'web-check.json').write_text(json.dumps(report,indent=2)+'\n')
