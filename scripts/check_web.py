@@ -26,6 +26,7 @@ group.add_argument('--statistics-only', action='store_true', help='Check Statist
 group.add_argument('--cranes-only', action='store_true', help='Check crane passes and capture both playing layouts')
 group.add_argument('--animations-only', action='store_true', help='Check row clear and crush transitions and capture their rendered phases')
 group.add_argument('--keyboard-only', action='store_true', help='Check jump keys and menu keyboard isolation')
+group.add_argument('--boots-only', action='store_true', help='Check equipment offers, air jumps and responsive boots UI')
 args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1386,6 +1387,319 @@ def keyboard_jump_checks(browser):
     return {'menu_isolation':'PASS', 'pause_isolation':'PASS', 'jump_rise_cells':jumps}
 
 
+def assert_boots(snapshot, equipped, charges, rows=0, pending=False):
+    expected = (equipped, charges, rows, pending)
+    actual = tuple(snapshot[key] for key in
+                   ('boots_equipped', 'boots_charges', 'equipment_rows', 'equipment_pending'))
+    assert actual == expected, ('Unexpected equipment state', snapshot['screen'], snapshot['lines'], actual, expected)
+
+
+def clear_boots_rows(page, count, expect_offer):
+    before = state(page)
+    seeded = animation_request(page, 'boots_rows', count=count, animation_hold=True)
+    assert seeded['animation_held'] and seeded['lines'] == before['lines']
+    current = animation_step(page, 1)
+    assert current['lines'] == before['lines'] + 1 and current['state'] == 'clearing'
+    assert current['screen'] == 'playing', 'Equipment interrupted the clear animation'
+    for _ in range(count):
+        if current['state'] != 'clearing':
+            break
+        current = animation_step(page, 60)
+    assert current['lines'] == before['lines'] + count, 'Equipment interrupted a combo'
+    assert current['score'] == before['score'] + 100 * count and current['state'] == 'playing'
+    assert current['clear_animation']['phase'] == 'none'
+    assert current['screen'] == ('equipment' if expect_offer else 'playing')
+    if expect_offer:
+        wait_screen(page, 'equipment')
+    return state(page)
+
+
+def check_boots_rect(snapshot, rect):
+    width, height = snapshot['viewport']
+    x, y, w, h = rect
+    assert -1 <= x and -1 <= y and w > 0 and h > 0 and x + w <= width + 1 and y + h <= height + 1, (
+        'Equipment content is outside the viewport', snapshot['screen'], snapshot['viewport'], rect)
+
+
+def check_boots_panel(snapshot, actions):
+    panel = snapshot['panel']
+    check_boots_rect(snapshot, panel['rect'])
+    assert panel['scroll_containers'] == 0
+    assert {item['name'] for item in panel['items'] if item['focusable']} == actions
+    assert panel['focus'] in actions
+    button_rects = []
+    for item in panel['items']:
+        check_boots_rect(snapshot, item['rect'])
+        if item['name'] in actions:
+            x, y, w, h = item['rect']
+            assert w >= 48 and h >= 48, ('Undersized equipment action', item)
+            for ax, ay, aw, ah in button_rects:
+                assert x + w <= ax or ax + aw <= x or y + h <= ay or ay + ah <= y, (
+                    'Equipment actions overlap', item)
+            button_rects.append(item['rect'])
+    return {item['name']: item['text'] for item in panel['items']}
+
+
+def check_boots_hud(snapshot, charges):
+    hud = snapshot['boots_hud']
+    if charges is None:
+        assert not hud, ('Unequipped boots showing in HUD', hud)
+        return
+    assert hud['text'] == str(charges), ('Incorrect charge counter', hud, charges)
+    check_boots_rect(snapshot, hud['rect'])
+    if 'pause' in snapshot['buttons']:
+        assert hud['rect'][0] + hud['rect'][2] <= snapshot['buttons']['pause'][0], (
+            'Boots HUD overlaps pause', hud, snapshot['buttons']['pause'])
+
+
+def check_boots_pause(snapshot, charges):
+    slots = check_boots_panel(snapshot, {'resume', 'restart', 'home'})
+    assert slots['slot_head'] == slots['slot_hands'] == '—', slots
+    assert slots['slot_feet'] == f'{charges} / 10', slots
+    check_boots_hud(snapshot, charges)
+
+
+def resize_boots_view(page, dimensions):
+    width, height = dimensions
+    page.set_viewport_size({'width':width, 'height':height})
+    page.wait_for_function('([w, h]) => { const [x, y] = window.stackAttackState.viewport; '
+                           'return Math.abs(x * h - y * w) < 2 * Math.max(w, h); }',
+                           arg=dimensions)
+    page.wait_for_timeout(160)
+    return state(page)
+
+
+def boots_shot(page, phase, shots):
+    size = page.viewport_size
+    name = f'boots-{phase}-{size["width"]}x{size["height"]}.png'
+    shots.append(screenshot(page, name))
+
+
+def select_boots_action(page, action, touch):
+    if touch:
+        button(page, action, True)
+    else:
+        focus_button(page, action)
+        page.keyboard.press('Enter')
+    wait_screen(page, 'playing')
+    return state(page)
+
+
+def press_boots_jump(page, touch):
+    if touch:
+        page.touchscreen.tap(*point(page, state(page)['controls']['jump']))
+    else:
+        page.keyboard.press('ArrowUp')
+
+
+def hold_boots_jump(page, touch):
+    if touch:
+        controls = state(page)['controls']
+        x, y = point(page, controls['jump'])
+        left_x, left_y = point(page, controls['left'])
+        cdp = page.context.new_cdp_session(page)
+        try:
+            cdp.send('Input.dispatchTouchEvent', {'type':'touchStart', 'touchPoints':[{'x':x, 'y':y, 'id':1}]})
+            first = animation_step(page, 34)
+            cdp.send('Input.dispatchTouchEvent',
+                     {'type':'touchMove', 'touchPoints':[{'x':left_x, 'y':left_y, 'id':1}]})
+            dragged = animation_step(page, 1)
+            assert dragged['player'][0] < first['player'][0], 'Dragging onto Left did not move the hero'
+            cdp.send('Input.dispatchTouchEvent', {'type':'touchMove', 'touchPoints':[{'x':x, 'y':y, 'id':1}]})
+            return animation_step(page, 1)
+        finally:
+            cdp.send('Input.dispatchTouchEvent', {'type':'touchEnd', 'touchPoints':[]})
+            cdp.detach()
+    page.keyboard.down('Space')
+    try:
+        animation_step(page, 17)
+        page.keyboard.down('Space')  # Playwright sends an auto-repeat for a key already held down.
+        return animation_step(page, 17)
+    finally:
+        page.keyboard.up('Space')
+
+
+def use_air_jump(page, touch, shots, *, held=False, capture=False):
+    before = state(page)
+    charges = before['boots_charges']
+    rows = before['equipment_rows']
+    assert before['grounded'] and charges > 0
+    if held:
+        first = hold_boots_jump(page, touch)
+    else:
+        press_boots_jump(page, touch)
+        first = animation_step(page, 34)
+    assert_boots(first, True, charges, rows)
+    assert not first['grounded'] and first['player'][1] < before['player'][1] - .5
+    press_boots_jump(page, touch)
+    boosted = animation_step(page, 1)
+    assert_boots(boosted, True, charges - 1, rows)
+    assert not boosted['grounded'] and boosted['player_velocity'][1] < first['player_velocity'][1] - 2
+    check_boots_hud(boosted, charges - 1)
+    if capture:
+        airborne = animation_step(page, 5)
+        phase = 'last-air-jump' if charges == 1 else 'air-jump'
+        boots_shot(page, phase, shots)
+        if charges == 1:
+            size = page.viewport_size
+            original = (size['width'], size['height'])
+            rotated = resize_boots_view(page, original[::-1])
+            assert_frozen_animation(airborne, rotated)
+            assert rotated['player_velocity'] == airborne['player_velocity']
+            assert_boots(rotated, True, 0, rows)
+            check_touch_control_layout(rotated)
+            check_boots_hud(rotated, 0)
+            boots_shot(page, phase, shots)
+            resize_boots_view(page, original)
+    press_boots_jump(page, touch)
+    again = animation_step(page, 1)
+    assert_boots(again, True, charges - 1, rows)
+    assert again['player_velocity'][1] > boosted['player_velocity'][1], 'A third press granted another air jump'
+    if charges == 1:
+        descending = animation_step(page, 48)
+        assert not descending['grounded'] and descending['player_velocity'][1] > 0
+        assert_boots(descending, True, 0, rows)
+        check_boots_hud(descending, 0)
+    landed = animation_step(page, 180)
+    assert landed['grounded'] and landed['player'] == [first['player'][0], before['player'][1]]
+    assert_boots(landed, charges > 1, charges - 1, rows)
+    check_boots_hud(landed, charges - 1 if charges > 1 else None)
+    if capture and charges == 1:
+        boots_shot(page, 'last-landing', shots)
+
+
+def open_boots_game(browser, dimensions, errors):
+    width, height = dimensions
+    context = browser.new_context(viewport={'width':width, 'height':height}, has_touch=True, device_scale_factor=1)
+    page = context.new_page()
+    page.on('pageerror', lambda value: errors.append(str(value)))
+    page.on('requestfailed', lambda request: errors.append(request.url))
+    page.on('console', lambda message: errors.append(message.text) if message.type == 'error' else None)
+    page.goto(URL)
+    wait_screen(page, 'menu')
+    button(page, 'play', True)
+    wait_screen(page, 'playing')
+    assert_boots(state(page), False, 0)
+    check_boots_hud(state(page), None)
+    check_touch_control_layout(state(page))
+    return context, page
+
+
+def boots_checks(browser):
+    portrait, landscape = (390, 844), (844, 390)
+    shots, errors = [], []
+    context, page = open_boots_game(browser, portrait, errors)
+    initial_stats = personal_statistics(state(page))
+    assert_boots(clear_boots_rows(page, 4, False), False, 0, 4)
+    choice = clear_boots_rows(page, 2, True)
+    assert_boots(choice, False, 0, 1, True)
+    check_boots_panel(choice, {'equip', 'skip'})
+    boots_shot(page, 'choice', shots)
+    animation_step(page, 0, animation_hold=False)
+    page.keyboard.press('ArrowRight')
+    page.keyboard.press('ArrowUp')
+    still_open = animation_step(page, 0)
+    assert still_open['screen'] == 'equipment' and not still_open['jump_pending']
+    assert_frozen_animation(choice, still_open)
+    rotated = resize_boots_view(page, landscape)
+    assert_frozen_animation(choice, rotated)
+    assert_boots(rotated, False, 0, 1, True)
+    assert not rotated['jump_pending']
+    check_boots_panel(rotated, {'equip', 'skip'})
+    boots_shot(page, 'choice', shots)
+    animation_step(page, 0, animation_hold=True)
+    equipped = select_boots_action(page, 'equip', False)
+    assert_boots(equipped, True, 10, 1)
+    check_boots_hud(equipped, 10)
+    check_touch_control_layout(equipped)
+    boots_shot(page, 'hud', shots)
+
+    assert_boots(clear_boots_rows(page, 4, False), True, 10)
+    animation_request(page, 'boots_jump', animation_hold=True)
+    animation_step(page, 1)
+    use_air_jump(page, False, shots, held=True, capture=True)
+    use_air_jump(page, True, shots, held=True)
+    use_air_jump(page, False, shots)
+    before_pause = state(page)
+    assert_boots(before_pause, True, 7)
+    button(page, 'pause', True)
+    wait_screen(page, 'paused')
+    animation_step(page, 0, animation_hold=False)
+    for dimensions in (landscape, portrait):
+        paused = resize_boots_view(page, dimensions)
+        assert paused['screen'] == 'paused'
+        assert_frozen_animation(before_pause, paused)
+        assert_boots(paused, True, 7)
+        check_boots_pause(paused, 7)
+        boots_shot(page, 'pause', shots)
+    animation_step(page, 0, animation_hold=True)
+    button(page, 'resume', True)
+    wait_screen(page, 'playing')
+    assert_frozen_animation(before_pause, state(page))
+    boots_shot(page, 'hud', shots)
+
+    offered = clear_boots_rows(page, 5, True)
+    assert_boots(offered, True, 7, pending=True)
+    labels = check_boots_panel(offered, {'equip', 'skip'})
+    assert labels['equipment_old_charges'] == '7' and labels['equipment_new_charges'] == '10', labels
+    boots_shot(page, 'replacement', shots)
+    assert_boots(select_boots_action(page, 'skip', True), True, 7)
+    offered = clear_boots_rows(page, 5, True)
+    assert_boots(offered, True, 7, pending=True)
+    offered = resize_boots_view(page, landscape)
+    check_boots_panel(offered, {'equip', 'skip'})
+    boots_shot(page, 'replacement', shots)
+    assert_boots(select_boots_action(page, 'equip', True), True, 10)
+
+    animation_request(page, 'boots_jump', animation_hold=True)
+    animation_step(page, 1)
+    page.keyboard.down('ArrowLeft')
+    try:
+        assert animation_step(page, 1)['facing'] == -1
+    finally:
+        page.keyboard.up('ArrowLeft')
+    for remaining in range(10, 0, -1):
+        use_air_jump(page, False, shots, capture=remaining == 1)
+    choice = clear_boots_rows(page, 6, True)
+    assert_boots(choice, False, 0, 1, True)
+    equipped = select_boots_action(page, 'equip', False)
+    assert_boots(equipped, True, 10, 1)
+    page.keyboard.press('Escape')
+    wait_screen(page, 'paused')
+    button(page, 'restart', True)
+    wait_screen(page, 'playing')
+    restarted = state(page)
+    assert restarted['session'] == equipped['session'] + 1 and restarted['score'] == restarted['lines'] == 0
+    assert_boots(restarted, False, 0)
+    check_boots_hud(restarted, None)
+    assert personal_statistics(restarted) == initial_stats
+    context.close()
+
+    for dimensions in ((320, 568), (568, 320), (360, 360)):
+        context, page = open_boots_game(browser, dimensions, errors)
+        choice = clear_boots_rows(page, 5, True)
+        assert_boots(choice, False, 0, pending=True)
+        check_boots_panel(choice, {'equip', 'skip'})
+        boots_shot(page, 'choice', shots)
+        equipped = select_boots_action(page, 'equip', True)
+        assert_boots(equipped, True, 10)
+        check_boots_hud(equipped, 10)
+        check_touch_control_layout(equipped)
+        boots_shot(page, 'hud', shots)
+        button(page, 'pause', True)
+        wait_screen(page, 'paused')
+        paused = state(page)
+        assert_frozen_animation(equipped, paused)
+        check_boots_pause(paused, 10)
+        boots_shot(page, 'pause', shots)
+        context.close()
+    assert not errors, errors
+    return {'offer_after_five_and_combo_surplus':'PASS', 'full_charge_suppression':'PASS',
+            'pause_and_offer_resize':'PASS', 'skip_and_replacement':'PASS', 'keyboard_and_touch':'PASS',
+            'separate_press_and_one_air_jump_per_landing':'PASS', 'last_charge_and_restart':'PASS',
+            'screenshots':shots, 'screenshot_sha256':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in shots}}
+
+
 def wooden_crates(browser):
     context = browser.new_context(viewport={'width':360,'height':800},has_touch=True,device_scale_factor=1)
     page = context.new_page()
@@ -1535,6 +1849,14 @@ try:
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         full_check = not any(vars(args).values())
+        boots = boots_checks(browser) if args.boots_only or full_check else {}
+        if boots:
+            print('BOOTS', json.dumps(boots), flush=True)
+        if args.boots_only:
+            (BUILD/'boots-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'renderer':'SwiftShader',
+                'checks':boots,'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest()},indent=2)+'\n')
+            browser.close()
+            raise SystemExit(0)
         keyboard = keyboard_jump_checks(browser) if args.keyboard_only or full_check else {}
         if keyboard:
             print('KEYBOARD', json.dumps(keyboard), flush=True)
@@ -1739,7 +2061,7 @@ try:
             results.append(result)
             print(json.dumps(result), flush=True)
             context.close()
-        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'keyboard':keyboard, 'animations':animations, 'cranes':cranes, 'statistics':statistics, 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
+        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'boots':boots, 'keyboard':keyboard, 'animations':animations, 'cranes':cranes, 'statistics':statistics, 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
                   'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
                   'page_errors':all_errors,'failed_requests':all_failed_requests,'checks':results}
         (BUILD/'web-check.json').write_text(json.dumps(report,indent=2)+'\n')

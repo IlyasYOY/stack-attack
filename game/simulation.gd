@@ -5,6 +5,8 @@ const STEP := 1.0 / 120.0
 const EPS := 0.0001
 const CRANE_EDGE_MARGIN := 1.5
 const CRATE_RELEASE_Y := -0.95
+const ROWS_PER_EQUIPMENT := 5
+const BOOTS_MAX_CHARGES := 10
 var tuning: StackTuning
 var crates: Array[Dictionary] = []
 var cranes: Array[Dictionary] = []
@@ -26,10 +28,17 @@ var events: Array[Dictionary] = []
 var chain := 0
 var clear_elapsed := 0.0
 var accumulator := 0.0
+var equipment_enabled := false
+var equipment_rows := 0
+var equipment_pending := false
+var boots_equipped := false
+var boots_charges := 0
 var _rng := RandomNumberGenerator.new()
 var _next_id := 0
 var _jump_buffer := 0.0
 var _coyote := 0.0
+var _air_jump_available := false
+var _air_jump_requested := false
 var _clear_ids: Array[int] = []
 var _collapse_started := false
 var _player_clear_start := Vector2.ZERO
@@ -61,8 +70,14 @@ func reset(seed_value: int) -> void:
 	impact_crate_id = -1
 	chain = 0
 	accumulator = 0.0
+	equipment_rows = 0
+	equipment_pending = false
+	boots_equipped = false
+	boots_charges = 0
 	_jump_buffer = 0.0
 	_coyote = 0.0
+	_air_jump_available = false
+	_air_jump_requested = false
 	clear_elapsed = 0.0
 	_clear_ids.clear()
 	_collapse_started = false
@@ -104,17 +119,42 @@ func match_result(ended_at: String) -> Dictionary:
 
 func advance(delta: float, axis: float, jump_pressed: bool = false) -> void:
 	events.clear()
-	if state == "over":
+	if state == "over" or equipment_pending:
 		return
 	if jump_pressed:
-		_jump_buffer = 0.12
+		if state == "playing" and _air_jump_available and not grounded and boots_charges > 0:
+			_air_jump_requested = true
+		else:
+			_jump_buffer = 0.12
 	accumulator += maxf(delta, 0.0)
 	while accumulator + EPS * 0.01 >= STEP:
 		accumulator -= STEP
 		_tick(clampf(axis, -1.0, 1.0))
-		if state == "over":
+		if state == "over" or equipment_pending:
 			accumulator = 0.0
 			break
+
+
+func resolve_equipment(accept: bool) -> void:
+	if not equipment_pending:
+		return
+	equipment_pending = false
+	if accept:
+		boots_equipped = true
+		boots_charges = BOOTS_MAX_CHARGES
+	_offer_equipment_if_due()
+
+
+func _offer_equipment_if_due() -> void:
+	if equipment_rows < ROWS_PER_EQUIPMENT:
+		return
+	if boots_charges == BOOTS_MAX_CHARGES:
+		equipment_rows %= ROWS_PER_EQUIPMENT
+		return
+	equipment_rows -= ROWS_PER_EQUIPMENT
+	equipment_pending = true
+	_jump_buffer = 0.0
+	_air_jump_requested = false
 
 
 func _tick(axis: float) -> void:
@@ -171,20 +211,24 @@ func _move_player(axis: float) -> void:
 		grounded = false
 		_coyote = 0.0
 		_jump_buffer = 0.0
+		_air_jump_available = equipment_enabled
 		events.append({"type": "jump"})
+	elif _air_jump_requested:
+		player_velocity.y = -tuning.jump_speed
+		boots_charges -= 1
+		_air_jump_available = false
+		events.append({"type": "air_jump"})
+	_air_jump_requested = false
 	player_velocity.y = minf(player_velocity.y + tuning.gravity * STEP, 12.0)
 	var proposed_y := player.y + player_velocity.y * STEP
 	grounded = false
 	if player_velocity.y >= 0.0:
-		var support := float(tuning.rows)
-		for crate in crates:
-			if _overlap(player.x, width, float(crate.x), 1.0, 0.04):
-				if player.y + height <= float(crate.y) + 0.025:
-					support = minf(support, float(crate.y))
+		var support := _player_support()
 		if proposed_y + height >= support:
 			proposed_y = support - height
 			player_velocity.y = 0.0
 			grounded = true
+			_land_player()
 	else:
 		for crate in crates:
 			if _overlap(player.x, width, float(crate.x), 1.0, 0.03):
@@ -193,6 +237,21 @@ func _move_player(axis: float) -> void:
 					proposed_y = maxf(proposed_y, underside)
 					player_velocity.y = 0.0
 	player.y = maxf(-1.0, proposed_y)
+
+
+func _player_support() -> float:
+	var support := float(tuning.rows)
+	for crate in crates:
+		if _overlap(player.x, tuning.player_width, float(crate.x), 1.0, 0.04):
+			if player.y + tuning.player_height <= float(crate.y) + 0.025:
+				support = minf(support, float(crate.y))
+	return support
+
+
+func _land_player() -> void:
+	_air_jump_available = false
+	if boots_charges == 0:
+		boots_equipped = false
 
 
 func _try_push(crate: Dictionary, direction: int) -> bool:
@@ -293,6 +352,8 @@ func _begin_clear_if_full() -> bool:
 	chain += 1
 	best_combo = maxi(best_combo, chain)
 	lines += 1
+	if equipment_enabled:
+		equipment_rows += 1
 	score += tuning.points_per_line
 	events.append({"type": "line", "chain": chain, "score": score})
 	return true
@@ -320,8 +381,11 @@ func _advance_clear() -> void:
 	if fraction >= 1.0:
 		state = "playing"
 		grounded = false
+		if equipment_enabled and player.y + tuning.player_height + EPS >= _player_support():
+			_land_player()
 		if not _begin_clear_if_full():
 			chain = 0
+			_offer_equipment_if_due()
 
 
 func _crane_entrance(direction: int) -> float:

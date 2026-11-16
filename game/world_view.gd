@@ -12,11 +12,17 @@ var controls := {}
 var pressed_actions: Array[String] = []
 var line_caption := ""
 var caption_life := 0.0
+var hud_right := SCORE_PANEL_RIGHT
 var cosmetic_magnet := true
 var crush_progress := -1.0
+var boots_spark_life := 0.0
+var boots_spark_origin := Vector2.ZERO
 const FONT: Font = preload("res://art/workshop_font.fnt")
 const HERO_SIZE := Vector2(16, 24)
 const HERO_OFFSET := Vector2(-1, -2)
+const HERO_FRAME_PIXELS := Vector2(32, 48)
+const HERO_FRAME_COLUMNS := {"idle": 0, "walk": 1, "jump": 2, "push": 3}
+const HERO_BOOTS_ATLAS: Texture2D = preload("res://art/hero_spring_boots.png")
 const HERO_TEXTURES := {
 	"idle": preload("res://art/hero_idle.png"), "walk": preload("res://art/hero_walk.png"),
 	"jump": preload("res://art/hero_jump.png"), "push": preload("res://art/hero_push.png"),
@@ -40,6 +46,7 @@ const CLEAR_GLOW_FRACTION := 0.30
 const CLEAR_LIP_TIME := 0.08
 const EFFECT_AMBER := Color("ffc276")
 const EFFECT_DUST := Color("e9c598")
+const BOOTS_SPARK_TIME := 0.20
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -76,8 +83,8 @@ func _layout() -> void:
 		left = clampf(left, left_limit, maxf(left_limit, right_limit - world_size.x))
 	var scale_to_view := cell / PIXELS_PER_CELL
 	var rail_margin := clampf(10.0 * scale_to_view, 0.0, maxf(0.0, left - 3.0))
-	# On the narrower layouts the headroom is shared with the score and pause plates.
-	if left - rail_margin < SCORE_PANEL_RIGHT:
+	# Keep the crane rail clear of the HUD on the narrower layouts.
+	if left - rail_margin < hud_right:
 		top = maxf(top, HUD_CLEARANCE_Y - CRANE_TOP * scale_to_view)
 	field = Rect2(Vector2(left, top), world_size)
 	crane_rail = Rect2(Vector2(left - rail_margin, top + CRANE_TOP * scale_to_view),
@@ -87,7 +94,13 @@ func _layout() -> void:
 func animate(delta: float) -> void:
 	clock += delta
 	caption_life = maxf(0.0, caption_life - delta)
+	boots_spark_life = maxf(0.0, boots_spark_life - delta)
 	queue_redraw()
+
+func boots_jump_effect() -> void:
+	var bounds := _hero_bounds()
+	boots_spark_origin = Vector2(bounds.get_center().x, bounds.end.y)
+	boots_spark_life = BOOTS_SPARK_TIME
 
 func line_effect(chain: int) -> void:
 	caption_life = 1.4
@@ -107,7 +120,7 @@ func _draw() -> void:
 	if model == null: return
 	_draw_warehouse()
 	if active: _draw_controls()
-	if caption_life > 0.0 and active and model.state != "over":
+	if caption_life > 0.0 and active and model.state != "over" and not model.equipment_pending:
 		var width := FONT.get_string_size(line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
 		var at := Vector2(size.x * 0.5 - width * 0.5, field.position.y + field.size.y * 0.3)
 		draw_string_outline(FONT, at, line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, 3, INK)
@@ -371,10 +384,41 @@ func _hero_bounds() -> Rect2:
 	return Rect2(at + HERO_OFFSET, HERO_SIZE)
 
 func _draw_hero(bounds: Rect2, frame: String) -> void:
-	var texture: Texture2D = HERO_TEXTURES[frame + ("" if cosmetic_magnet else "_bare")]
 	if model.facing < 0:
 		bounds.size.x = -bounds.size.x
-	draw_texture_rect(texture, bounds, false)
+	if model.boots_equipped:
+		draw_texture_rect_region(HERO_BOOTS_ATLAS, bounds, _boots_region(frame, cosmetic_magnet))
+	else:
+		var texture: Texture2D = HERO_TEXTURES[frame + ("" if cosmetic_magnet else "_bare")]
+		draw_texture_rect(texture, bounds, false)
+
+static func pause_portrait(boots_equipped: bool) -> Texture2D:
+	if not boots_equipped:
+		return HERO_TEXTURES.idle
+	var portrait := AtlasTexture.new()
+	portrait.atlas = HERO_BOOTS_ATLAS
+	portrait.region = _boots_region("idle", true)
+	portrait.filter_clip = true
+	return portrait
+
+static func _boots_region(frame: String, with_magnet: bool) -> Rect2:
+	var column: int = HERO_FRAME_COLUMNS[frame]
+	var row := 0 if with_magnet else 1
+	return Rect2(Vector2(column, row) * HERO_FRAME_PIXELS, HERO_FRAME_PIXELS)
+
+func _draw_boots_sparks(floor_y: float) -> void:
+	if boots_spark_life <= 0.0 or not model.equipment_enabled:
+		return
+	var progress := 1.0 - boots_spark_life / BOOTS_SPARK_TIME
+	for side in [-1.0, 0.0, 1.0]:
+		var at := (boots_spark_origin + Vector2(side * (4.0 + 6.0 * progress), 2.0 + 7.0 * progress)).round()
+		if side == 0.0:
+			at.y += 4.0
+		if at.y >= floor_y:
+			continue
+		var tint := Color(MINT if side == 0.0 else EFFECT_AMBER, 1.0 - progress)
+		draw_rect(Rect2(at + Vector2(-1, 0), Vector2(3, 1)), tint)
+		draw_rect(Rect2(at + Vector2(0, -1), Vector2(1, 3)), tint)
 
 func crush_geometry(impact: Dictionary) -> Dictionary[String, Rect2]:
 	var strength: float = smoothstep(0.0, 0.39, crush_progress)
@@ -497,6 +541,7 @@ func _draw_field_objects() -> void:
 		draw_texture_rect(CRATE_TEXTURE, Rect2(position, Vector2.ONE * PIXELS_PER_CELL), false)
 	if impact.is_empty():
 		_draw_hero(_hero_bounds(), hero_frame())
+		_draw_boots_sparks(floor_y)
 	else:
 		_draw_crush(impact, width)
 	if phase == "collapse":

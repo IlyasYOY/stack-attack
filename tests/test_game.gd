@@ -46,6 +46,8 @@ func run() -> void:
 	pushing_and_danger()
 	diagonal_crate_collisions()
 	clearing()
+	equipment_rewards()
+	spring_boots_jumps()
 	loss_conditions()
 	crush_beside_support()
 	crane_cycles()
@@ -60,7 +62,7 @@ func run() -> void:
 			printerr("GAME_TEST_FAILED: " + failure)
 		quit(1)
 		return
-	print("GAME_TEST_PASS: %d assertions; physics, clears, loss, cranes, storage and screens" % assertions)
+	print("GAME_TEST_PASS: %d assertions; physics, clears, equipment, loss, cranes, storage and screens" % assertions)
 	quit(0)
 
 
@@ -264,6 +266,137 @@ func clearing() -> void:
 	upper_only.advance(1.0 / 120, 0)
 	check(upper_only.lines == 0 and not upper_only.is_clearing_crate(int(upper_only.crates[0].id)),
 		"A full upper row must not clear independently")
+
+
+func add_full_rows(game: StackSimulation, count: int) -> void:
+	var top := game.tuning.rows - count
+	game.player.y = top - game.tuning.player_height
+	for row in range(top, game.tuning.rows):
+		for column in range(game.tuning.columns):
+			game.add_crate(column, row)
+
+
+func equipment_rewards() -> void:
+	var disabled := empty(4)
+	add_full_rows(disabled, 5)
+	disabled.advance(10.0, 0)
+	check(disabled.lines == 5 and disabled.ticks == 1200 and not disabled.equipment_pending
+		and disabled.equipment_rows == 0, "Simulations without equipment must ignore reward thresholds")
+
+	var game := empty(4)
+	game.equipment_enabled = true
+	game.resolve_equipment(true)
+	check(not game.boots_equipped, "Resolving equipment without an offer must have no effect")
+	add_full_rows(game, 4)
+	game.advance(3.0, 0)
+	check(game.lines == 4 and game.equipment_rows == 4 and not game.equipment_pending,
+		"Four rows must carry toward the first equipment offer")
+	var start := game.ticks
+	add_full_rows(game, 8)
+	game.advance(Simulation.STEP, 0)
+	check(game.lines == 5 and game.state == "clearing" and not game.equipment_pending,
+		"Reaching a threshold must leave the whole clear animation available to play")
+	game.advance(2.0, 0)
+	check(game.lines > 5 and game.chain > 1 and game.state == "clearing" and not game.equipment_pending,
+		"A reward must wait while later rows in the same combo are clearing")
+	game.advance(10.0, 1)
+	var clear_ticks := ceili((game.tuning.clear_flash_time + game.tuning.collapse_time) / Simulation.STEP)
+	check(game.lines == 12 and game.cleared_crates == 48 and game.best_combo == 8 and game.chain == 0
+		and game.state == "playing" and game.ticks == start + 1 + 8 * clear_ticks,
+		"A long frame must stop on the first playable boundary after the final collapse")
+	check(game.equipment_pending and game.equipment_rows == 7 and game.accumulator == 0.0,
+		"Opening the first offer must preserve the second threshold and surplus, and discard leftover frame time")
+	var frozen := [game.ticks, game.elapsed, game.player, game.player_velocity, game.cranes.duplicate(true), game._rng.state]
+	game.advance(20.0, 1, true)
+	check(frozen == [game.ticks, game.elapsed, game.player, game.player_velocity, game.cranes, game._rng.state],
+		"An open offer must ignore elapsed wall time, movement and jumps")
+	game.resolve_equipment(false)
+	check(game.equipment_pending and not game.boots_equipped and game.equipment_rows == 2 and game.ticks == frozen[0],
+		"Skipping the first offer must immediately present the next one from the same combo")
+	game.resolve_equipment(true)
+	check(not game.equipment_pending and game.boots_equipped and game.boots_charges == Simulation.BOOTS_MAX_CHARGES,
+		"Accepting an offer must equip ten charges")
+	game.advance(Simulation.STEP, 0)
+	check(game.ticks == frozen[0] + 1 and game.grounded and game.events.is_empty(),
+		"Play must resume on a fresh tick without input or time carried through the reward")
+
+	start = game.ticks
+	add_full_rows(game, 9)
+	game.advance(5.0, 0)
+	check(not game.equipment_pending and game.equipment_rows == 1 and game.boots_charges == 10
+		and game.ticks == start + 600, "Full boots must silently consume every crossed threshold and retain surplus")
+	game.advance(Simulation.STEP, 0, true)
+	game.advance(Simulation.STEP, 0, true)
+	game.advance(1.0, 0)
+	add_full_rows(game, 4)
+	game.advance(3.0, 0)
+	check(game.equipment_pending and game.equipment_rows == 0 and game.boots_charges == 9,
+		"Partially spent boots must get an offer at the next threshold")
+	game.resolve_equipment(false)
+	check(not game.equipment_pending and game.boots_equipped and game.boots_charges == 9,
+		"Skipping a replacement must keep the equipped pair and its remaining charges")
+	add_full_rows(game, 10)
+	game.advance(5.0, 0)
+	check(game.equipment_pending and game.equipment_rows == 5, "An earlier skip must not prevent future offers")
+	game.resolve_equipment(true)
+	check(not game.equipment_pending and game.equipment_rows == 0 and game.boots_charges == 10,
+		"A replacement must restore ten charges and silently consume the next threshold at full capacity")
+	game.reset(7481)
+	check(game.equipment_enabled and not game.equipment_pending and not game.boots_equipped
+		and game.boots_charges == 0 and game.equipment_rows == 0, "Reset must retain the opt-in and clear the run's equipment")
+
+
+func spring_boots_jumps() -> void:
+	var game := empty(4)
+	game.equipment_enabled = true
+	add_full_rows(game, 5)
+	game.advance(3.0, 0)
+	game.resolve_equipment(true)
+	game.advance(Simulation.STEP, 0)
+	for charges in range(Simulation.BOOTS_MAX_CHARGES, 0, -1):
+		game.advance(Simulation.STEP, 0, true)
+		var jump_velocity := game.player_velocity.y
+		check(game.events == [{"type": "jump"}] and game.boots_charges == charges,
+			"The ordinary jump must not spend a charge")
+		game.advance(50 * Simulation.STEP, 0)
+		check(game.player_velocity.y > 0.0 and not game.grounded and game.boots_charges == charges,
+			"Without a second press, the original jump must continue into descent")
+		game.advance(Simulation.STEP * .25, 0, true)
+		check(game.boots_charges == charges, "A press before a fixed tick must wait for that tick")
+		game.advance(Simulation.STEP * .75, 0)
+		check(game.events == [{"type": "air_jump"}] and game.boots_charges == charges - 1
+			and game.player_velocity.y == jump_velocity and game.boots_equipped,
+			"One separate airborne press must spend one charge and launch a full jump, including the last charge")
+		game.advance(Simulation.STEP, 0, true)
+		check(game.events.is_empty() and game.boots_charges == charges - 1 and game.player_velocity.y > jump_velocity,
+			"Additional presses before landing must not launch another air jump")
+		game.advance(1.0, 0)
+		check(game.grounded and game.boots_equipped == (charges > 1),
+			"Landing must end the flight and remove the boots when the last charge is spent")
+	add_full_rows(game, 5)
+	game.advance(3.0, 0)
+	check(game.equipment_pending, "A new offer must be available after the boots are exhausted")
+	game.resolve_equipment(true)
+
+	for row in range(7, game.tuning.rows):
+		game.add_crate(2, row)
+	var ledge := Vector2(2.94, 7 - game.tuning.player_height)
+	game.player = ledge
+	game.advance(Simulation.STEP, 0)
+	game.advance(Simulation.STEP, 1)
+	game.advance(.11, 1)
+	game.advance(Simulation.STEP, 0, true)
+	check(not game.grounded and game.player_velocity.y > 0.0 and game.events.is_empty() and game.boots_charges == 10,
+		"Walking off a ledge must not grant an air jump after coyote time expires")
+	game.advance(1.0, 0)
+	game.player = ledge
+	game.advance(Simulation.STEP, 1)
+	game.advance(Simulation.STEP, 0, true)
+	check(game.events == [{"type": "jump"}] and game.boots_charges == 10,
+		"Coyote takeoff must still use an ordinary jump")
+	game.advance(Simulation.STEP, 0, true)
+	check(game.events == [{"type": "air_jump"}] and game.boots_charges == 9,
+		"Coyote takeoff must qualify for the second jump")
 
 
 func loss_conditions() -> void:
