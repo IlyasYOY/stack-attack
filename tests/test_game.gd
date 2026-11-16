@@ -47,7 +47,7 @@ func run() -> void:
 	diagonal_crate_collisions()
 	clearing()
 	equipment_rewards()
-	spring_boots_jumps()
+	equipment_jumps()
 	loss_conditions()
 	crush_beside_support()
 	crane_cycles()
@@ -346,7 +346,7 @@ func equipment_rewards() -> void:
 		and game.boots_charges == 0 and game.equipment_rows == 0, "Reset must retain the opt-in and clear the run's equipment")
 
 
-func spring_boots_jumps() -> void:
+func equipment_jumps() -> void:
 	var game := empty(4)
 	game.equipment_enabled = true
 	add_full_rows(game, 5)
@@ -681,10 +681,11 @@ func app_flow() -> void:
 	var art_model = app.world.model
 	var art_snapshot := [art_model.player, art_model.score, art_model.crates.duplicate(true), art_model._rng.state, art_model.ticks]
 	for equipped in [false, true]:
-		app.world.cosmetic_magnet = equipped
-		app.world.hero_frame()
-		check(art_snapshot == [art_model.player, art_model.score, art_model.crates, art_model._rng.state, art_model.ticks], "Cosmetic equipment and pose selection must never mutate gameplay")
-	for pose in ["idle", "walk", "jump", "push", "idle_bare", "walk_bare", "jump_bare", "push_bare"]:
+		check(StackWorldView.pause_portrait(equipped).get_size() == Vector2(32, 48),
+			"The pause portrait must preserve the full hero sprite canvas")
+		check(art_snapshot == [art_model.player, art_model.score, art_model.crates, art_model._rng.state, art_model.ticks],
+			"Equipment portraits must never mutate gameplay")
+	for pose in ["idle", "walk", "jump", "push"]:
 		check(app.world.HERO_TEXTURES[pose].get_size() == Vector2(32, 48), "All workshop poses must preserve the same full sprite canvas")
 	check(app.world.CRATE_TEXTURE.get_size() == Vector2(48, 48) and app.world.CRATE_TEXTURE.resource_path == "res://art/crate_wood.png", "All crates must use the one existing wooden appearance")
 	check(app._missing_menu_glyphs().is_empty(), "The original workshop bitmap face must cover the visible menu text")

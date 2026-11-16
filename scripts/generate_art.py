@@ -31,79 +31,128 @@ d.line((10, 41, 43, 8), fill='#a76030')
 for x, y in [(5, 5), (42, 5), (5, 42), (42, 42)]:
     bolt(d, x, y)
 image.save(ROOT / 'crate_wood.png')
-for frame in ['idle', 'walk', 'jump', 'push']:
-    for equipped in [False, True]:
-        image = Image.new('RGBA', (32, 48))
-        d = ImageDraw.Draw(image)
-        d.rectangle((9, 37, 23, 41), fill=INK)
-        if frame == 'walk':
-            legs = [(8, 40, 13, 45), (20, 41, 25, 46)]
-            boots = [(6, 44, 14, 47), (20, 45, 27, 47)]
-        elif frame == 'jump':
-            legs = [(7, 39, 13, 43), (19, 39, 25, 43)]
-            boots = [(5, 42, 14, 45), (19, 42, 27, 45)]
-        else:
-            legs = [(10, 40, 14, 46), (18, 40, 22, 46)]
-            boots = [(8, 45, 15, 47), (18, 45, 25, 47)]
-        for box in legs:
-            d.rectangle(box, fill='#254a57')
-            d.line((box[0] + 1, box[1], box[0] + 1, box[3]), fill='#4b7880')
-        for box in boots:
+
+ROCKET_BOOT_PIXELS = [
+    ".######.....",
+    "#bbbbbT#....",
+    "#HssTTT#....",
+    "#HsTTTd#....",
+    "#HsTTTd#....",
+    "#ssdddt####.",
+    "#TTTddTbccH#",
+    "#Hssssssssc#",
+    ".##bccb####.",
+    "..#too#.....",
+    "..#toO#.....",
+    ".#bocco#....",
+    ".#cocoO#....",
+    "..#####.....",
+]
+ROCKET_BOOT_PALETTE = {
+    '#': INK,
+    'H': '#d9e4ca',
+    's': '#95c2b2',
+    'T': '#62a79d',
+    't': '#457b7a',
+    'd': '#32595f',
+    'b': '#8a5140',
+    'c': '#e39a53',
+    'o': '#b06543',
+    'O': '#633c2b',
+}
+
+
+def draw_rocket_boot(draw, at):
+    for y, row in enumerate(ROCKET_BOOT_PIXELS):
+        for x, pixel in enumerate(row):
+            if pixel != '.':
+                draw.point((at[0] + x, at[1] + y), fill=ROCKET_BOOT_PALETTE[pixel])
+
+
+def hero_frame(frame, rocket_boots=False):
+    image = Image.new('RGBA', (32, 48))
+    d = ImageDraw.Draw(image)
+    d.rectangle((9, 37, 23, 41), fill=INK)
+    if frame == 'walk':
+        legs = [(8, 40, 13, 45), (20, 41, 25, 46)]
+        shoes = [(6, 44, 14, 47), (20, 45, 27, 47)]
+        rocket_positions = [(3, 34), (17, 34)]
+    elif frame == 'jump':
+        legs = [(7, 39, 13, 43), (19, 39, 25, 43)]
+        shoes = [(5, 42, 14, 45), (19, 42, 27, 45)]
+        rocket_positions = [(3, 32), (17, 32)]
+    else:
+        legs = [(10, 40, 14, 46), (18, 40, 22, 46)]
+        shoes = [(8, 45, 15, 47), (18, 45, 25, 47)]
+        rocket_positions = [(5, 34), (16, 34)]
+    for box in legs:
+        d.rectangle(box, fill='#254a57')
+        d.line((box[0] + 1, box[1], box[0] + 1, box[3]), fill='#4b7880')
+    if rocket_boots:
+        for at in rocket_positions:
+            draw_rocket_boot(d, at)
+    else:
+        for box in shoes:
             d.rectangle(box, fill='#172a34')
             d.line((box[0] + 1, box[1], box[2] - 1, box[1]), fill='#a17b50')
-        d.rectangle((8, 24, 23, 39), fill=INK)
-        d.rectangle((10, 25, 21, 36), fill='#dfcba0')
-        d.rectangle((11, 26, 13, 34), fill='#fff0bf')
-        d.rectangle((20, 26, 21, 35), fill='#a49c84')
-        d.line((16, 26, 16, 34), fill='#9f9274')
-        d.point((17, 29), fill='#765e40')
-        d.point((17, 33), fill='#765e40')
-        d.rectangle((9, 36, 22, 39), fill='#584532')
-        d.rectangle((14, 36, 18, 39), fill='#d9aa55')
-        d.rectangle((15, 37, 17, 38), fill='#705237')
-        d.rectangle((6, 26, 9, 35), fill='#ac936d')
-        d.rectangle((7, 27, 8, 32), fill='#e2cfa0')
-        arm = (23, 28, 28, 34) if frame == 'push' else (22, 27, 25, 36)
-        d.rectangle(arm, fill='#9a825f')
-        d.rectangle((arm[0], arm[1], arm[2] - 1, arm[1] + 3), fill='#d4c59f')
-        d.rectangle((arm[0], arm[3] - 1, min(31, arm[2] + 1), arm[3] + 3), fill='#f1bb83')
-        d.line((arm[0], arm[3] + 3, min(31, arm[2] + 1), arm[3] + 3), fill='#81573f')
-        d.rectangle((8, 21, 23, 25), fill='#8f4232')
-        d.rectangle((9, 22, 22, 24), fill='#e97843')
-        d.line((10, 22, 21, 22), fill='#ffb46b')
-        d.polygon([(7, 23), (8, 24), (5, 29), (3, 28)], fill='#b95536')
-        d.rectangle((5, 10, 26, 21), fill=INK)
-        d.rectangle((7, 11, 24, 20), fill='#f0ba84')
-        d.rectangle((6, 14, 8, 18), fill='#c17c58')
-        d.line((10, 20, 23, 20), fill='#ad6d4c')
-        d.rectangle((13, 15, 14, 17), fill='#1a2c32')
-        d.rectangle((22, 15, 23, 17), fill='#1a2c32')
-        d.rectangle((25, 15, 27, 18), fill='#e5a674')
-        d.point((18, 19), fill='#b67352')
-        d.rectangle((7, 1, 23, 4), fill=INK)
-        d.rectangle((5, 4, 25, 10), fill=INK)
-        d.rectangle((8, 2, 21, 3), fill='#5ea9a3')
-        d.rectangle((6, 5, 24, 9), fill='#277b82')
-        d.line((8, 4, 21, 4), fill='#77c1b1')
-        d.rectangle((7, 9, 28, 11), fill='#123f50')
-        d.line((9, 9, 27, 9), fill='#65b0a7')
-        for x in [13, 21]:
-            d.rectangle((x, 5, x + 5, 9), fill='#634934')
-            d.rectangle((x + 1, 5, x + 4, 8), fill='#d1a159')
-            d.rectangle((x + 2, 6, x + 3, 7), fill='#e5f2da')
-        d.rectangle((19, 6, 20, 7), fill='#987047')
-        if equipped:
-            d.rectangle((0, 31, 3, 39), fill=INK)
-            d.rectangle((9, 31, 12, 39), fill=INK)
-            d.rectangle((2, 38, 10, 42), fill=INK)
-            d.rectangle((1, 32, 3, 38), fill='#d74338')
-            d.rectangle((9, 32, 11, 38), fill='#a82e33')
-            d.rectangle((3, 38, 9, 40), fill='#d74338')
-            d.line((3, 38, 9, 38), fill='#ff8160')
-            d.rectangle((1, 30, 3, 33), fill='#d8e0c9')
-            d.rectangle((9, 30, 11, 33), fill='#a7c5be')
-        d.rectangle((9, 28, 12, 30) if equipped else (6, 29, 9, 32), fill='#f2be88')
-        image.save(ROOT / f"hero_{frame}{('' if equipped else '_bare')}.png")
+    d.rectangle((8, 24, 23, 39), fill=INK)
+    d.rectangle((10, 25, 21, 36), fill='#dfcba0')
+    d.rectangle((11, 26, 13, 34), fill='#fff0bf')
+    d.rectangle((20, 26, 21, 35), fill='#a49c84')
+    d.line((16, 26, 16, 34), fill='#9f9274')
+    d.point((17, 29), fill='#765e40')
+    d.point((17, 33), fill='#765e40')
+    d.rectangle((9, 36, 22, 39), fill='#584532')
+    d.rectangle((14, 36, 18, 39), fill='#d9aa55')
+    d.rectangle((15, 37, 17, 38), fill='#705237')
+    d.rectangle((6, 26, 9, 35), fill='#ac936d')
+    d.rectangle((7, 27, 8, 32), fill='#e2cfa0')
+    arm = (23, 28, 28, 34) if frame == 'push' else (22, 27, 25, 36)
+    d.rectangle(arm, fill='#9a825f')
+    d.rectangle((arm[0], arm[1], arm[2] - 1, arm[1] + 3), fill='#d4c59f')
+    d.rectangle((arm[0], arm[3] - 1, min(31, arm[2] + 1), arm[3] + 3), fill='#f1bb83')
+    d.line((arm[0], arm[3] + 3, min(31, arm[2] + 1), arm[3] + 3), fill='#81573f')
+    d.rectangle((8, 21, 23, 25), fill='#8f4232')
+    d.rectangle((9, 22, 22, 24), fill='#e97843')
+    d.line((10, 22, 21, 22), fill='#ffb46b')
+    d.polygon([(7, 23), (8, 24), (5, 29), (3, 28)], fill='#b95536')
+    d.rectangle((5, 10, 26, 21), fill=INK)
+    d.rectangle((7, 11, 24, 20), fill='#f0ba84')
+    d.rectangle((6, 14, 8, 18), fill='#c17c58')
+    d.line((10, 20, 23, 20), fill='#ad6d4c')
+    d.rectangle((13, 15, 14, 17), fill='#1a2c32')
+    d.rectangle((22, 15, 23, 17), fill='#1a2c32')
+    d.rectangle((25, 15, 27, 18), fill='#e5a674')
+    d.point((18, 19), fill='#b67352')
+    d.rectangle((7, 1, 23, 4), fill=INK)
+    d.rectangle((5, 4, 25, 10), fill=INK)
+    d.rectangle((8, 2, 21, 3), fill='#5ea9a3')
+    d.rectangle((6, 5, 24, 9), fill='#277b82')
+    d.line((8, 4, 21, 4), fill='#77c1b1')
+    d.rectangle((7, 9, 28, 11), fill='#123f50')
+    d.line((9, 9, 27, 9), fill='#65b0a7')
+    for x in [13, 21]:
+        d.rectangle((x, 5, x + 5, 9), fill='#634934')
+        d.rectangle((x + 1, 5, x + 4, 8), fill='#d1a159')
+        d.rectangle((x + 2, 6, x + 3, 7), fill='#e5f2da')
+    d.rectangle((19, 6, 20, 7), fill='#987047')
+    d.rectangle((6, 29, 9, 32), fill='#f2be88')
+    return image
+
+
+frames = ['idle', 'walk', 'jump', 'push']
+atlas = Image.new('RGBA', (32 * len(frames), 48))
+for column, frame in enumerate(frames):
+    hero_frame(frame).save(ROOT / f'hero_{frame}.png')
+    atlas.paste(hero_frame(frame, rocket_boots=True), (column * 32, 0))
+atlas.save(ROOT / 'hero_rocket_boots.png')
+
+image = Image.new('RGBA', (32, 32))
+d = ImageDraw.Draw(image)
+draw_rocket_boot(d, (4, 6))
+draw_rocket_boot(d, (17, 12))
+image.save(ROOT / 'rocket_boots.png')
+
 image = Image.new('RGBA', (10, 18))
 d = ImageDraw.Draw(image)
 d.rectangle((0, 0, 9, 17), fill=INK)

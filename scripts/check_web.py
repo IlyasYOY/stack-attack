@@ -14,7 +14,7 @@ from pathlib import Path
 import sys
 import threading
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
-from PIL import Image, ImageStat
+from PIL import Image, ImageChops, ImageStat
 
 parser = argparse.ArgumentParser(description=__doc__)
 group = parser.add_mutually_exclusive_group()
@@ -36,6 +36,14 @@ WEB_LAYOUT_VIEWPORTS = (
     (390, 844), (844, 390), (320, 568), (568, 320), (344, 882), (882, 344),
     (768, 1004), (1004, 768), (360, 360),
 )
+HERO_FRAMES = ('idle', 'walk', 'jump', 'push')
+HERO_FRAME_SIZE = (32, 48)
+FORMER_MAGNET_COLORS = {(215, 67, 56), (168, 46, 51), (255, 129, 96)}
+NOZZLE_COLORS = {(227, 154, 83), (176, 101, 67)}
+ROCKET_BOOT_COLORS = {(98, 167, 157), (217, 228, 202)} | NOZZLE_COLORS
+JUMP_NOZZLES = (7.5, 21.5)
+EXHAUST_FLAME = (255, 128, 63)
+EXHAUST_CORE = (255, 230, 160)
 SHOTS.mkdir(exist_ok=True)
 
 
@@ -203,13 +211,75 @@ def fixed_panel(page, touch=True):
     assert state(page)['panel']['focus'] == start
 
 
+def hero_sprite_crop(image, snapshot, player, facing, bounds):
+    """Project source sprite pixels onto the actual rendered hero."""
+    fx, fy, fw, _ = snapshot['field']
+    cell = fw / snapshot['columns']
+    scale = image.width / snapshot['viewport'][0]
+    px, py = player
+    origin_x = fx + (int(px * 24 + .5) - 1) * cell / 24
+    origin_y = fy + (int(py * 24 + .5) - 2) * cell / 24
+    left, top, right, bottom = bounds
+    if facing < 0:
+        left, right = HERO_FRAME_SIZE[0] - right, HERO_FRAME_SIZE[0] - left
+    return image.crop((round((origin_x + left * cell / 48) * scale),
+                       round((origin_y + top * cell / 48) * scale),
+                       round((origin_x + right * cell / 48) * scale),
+                       round((origin_y + bottom * cell / 48) * scale)))
+
+
+def color_pixels(image, colors, tolerance=0):
+    return sum(count for count, rgb in image.getcolors(image.width * image.height)
+               if any(max(abs(actual - expected) for actual, expected in zip(rgb, color)) <= tolerance
+                      for color in colors))
+
+
+def menu_shaded_colors(colors):
+    shade = (.02, .06, .09)
+    opacity = .38
+    return {tuple(round(component * (1 - opacity) + tint * 255 * opacity)
+                  for component, tint in zip(color, shade)) for color in colors}
+
+
+def check_hero_hand(image, snapshot, player, facing):
+    hand = hero_sprite_crop(image, snapshot, player, facing, (0, 28, 13, 43))
+    glove_colors, magnet_colors = {(242, 190, 136)}, FORMER_MAGNET_COLORS
+    tolerance = 0
+    if snapshot['screen'] == 'menu':
+        glove_colors = menu_shaded_colors(glove_colors)
+        magnet_colors = menu_shaded_colors(magnet_colors)
+        tolerance = 1  # The full-screen shade is alpha-composited before the menu controls.
+    assert color_pixels(hand, glove_colors, tolerance) > 0, (
+        'The rendered hand is obscured', snapshot['screen'], snapshot['viewport'], facing, player)
+    red = color_pixels(hand, magnet_colors, tolerance)
+    assert red == 0, ('Former U magnet pixel rendered at the hand', snapshot['screen'], snapshot['viewport'], facing, red)
+    return red
+
+
+def check_menu_hero(page, dimensions):
+    checks = []
+    layout = state(page)
+    right_edge = layout['columns'] - layout['player_size'][0]
+    # Keep the relevant hand left or right of the buttons in each orientation.
+    for facing, direction, player_x in [(1, 'right', 0), (-1, 'left', right_edge)]:
+        snapshot = animation_request(page, 'crate_appearance', facing=facing, player_x=player_x)
+        assert snapshot['demo']['facing'] == facing
+        path = SHOTS / f'hero-menu-{direction}-{dimensions[0]}x{dimensions[1]}.png'
+        image = Image.open(io.BytesIO(page.screenshot(path=str(path)))).convert('RGB')
+        red = check_hero_hand(image, snapshot, snapshot['demo']['player'], facing)
+        checks.append({'facing':facing, 'magnet_pixels':red, 'screenshot':str(path.relative_to(ROOT))})
+    return checks
+
+
 def sprite_comparison(browser, check):
     width, height = check['viewport']
-    commit = json.loads((BUILD/'web/build-source.json').read_text())['commit']
+    source = json.loads((BUILD/'web/build-source.json').read_text())
+    commit = html.escape(source['commit'][:12])
+    revision = f'commit {commit}' if source['source_clean'] else f'рабочие изменения поверх {commit}'
     cells = []
     for pose, label in [('idle','Покой'), ('walk_stride','Шаг'), ('walk_recover','Возврат'), ('jump','Прыжок'), ('push','Толкание')]:
         for facing, direction in [(1,'Вправо'), (-1,'Влево')]:
-            sample = next(p for p in check['poses'] if p['pose'] == pose and p['facing'] == facing and p['magnet'])
+            sample = next(p for p in check['poses'] if p['pose'] == pose and p['facing'] == facing and p['boots_equipped'])
             left, top, right, bottom = sample['crop_bounds']
             raw = (ROOT/sample['screenshot']).read_bytes()
             src = 'data:image/png;base64,' + base64.b64encode(raw).decode()
@@ -221,8 +291,8 @@ def sprite_comparison(browser, check):
         'p{color:#9eafa5;font-size:13px;margin:6px 0}main{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}'
         'h2{font-size:16px;margin:0 0 8px}section{min-width:0}.crop{position:relative;overflow:hidden;outline:1px solid #617b7b}'
         'img{position:absolute;max-width:none;image-rendering:pixelated}</style>'
-        f'<h1>Одна позиция · {width}×{height}</h1><p>Web / Chromium · реальные кадры, увеличение 4×</p>'
-        f'<p>Позиция коллизии: (4.3, 10.12) · commit {html.escape(commit[:12])}</p>'
+        f'<h1>Ботинки-ракеты · {width}×{height}</h1><p>Web / Chromium · реальные кадры, увеличение 4×</p>'
+        f'<p>Позиция коллизии: (4.3, 10.12) · {revision}</p>'
         '<p>Одинаковая область кадра для всех направлений и фаз.</p><main>'+''.join(cells)+'</main></html>')
     page.wait_for_function('Array.from(document.images).every(image => image.complete && image.naturalWidth > 0)')
     path = SHOTS/f'hero-comparison-{width}x{height}.png'
@@ -234,15 +304,23 @@ def sprite_comparison(browser, check):
 def sprite_poses(browser):
     checks = []
     failures = []
-    source = Image.open(ROOT / 'art/hero_idle.png').convert('RGBA')
-    marker = source.getpixel((9, 23))[:3]  # Symmetric scarf band, fixed to the torso in both frames.
+    marker = Image.open(ROOT / 'art/hero_idle.png').convert('RGB').getpixel((9, 23))
+    frame_width, frame_height = HERO_FRAME_SIZE
     alpha = {}
-    for frame in ['idle','walk','jump','push','idle_bare','walk_bare','jump_bare','push_bare']:
-        with Image.open(ROOT / f'art/hero_{frame}.png') as image:
-            alpha[frame] = {'canvas':image.size, 'used':image.getbbox()}
-            assert image.size == (32,48) and image.getpixel((0,0))[3] == 0, 'Workshop sprite canvas/padding changed; recheck reflection axis'
-            band = [x for y in [23,24] for x in range(image.width) if image.getpixel((x,y)) == (*marker,255)]
-            assert band and (min(band)+max(band)+1)/2 == image.width/2, 'Torso band is not centered in the sprite canvas'
+    with Image.open(ROOT / 'art/hero_rocket_boots.png') as atlas:
+        assert atlas.size == (frame_width * len(HERO_FRAMES), frame_height)
+        for column, frame in enumerate(HERO_FRAMES):
+            with Image.open(ROOT / f'art/hero_{frame}.png') as image:
+                normal = image.convert('RGBA')
+            rocket = atlas.crop((column * frame_width, 0, (column + 1) * frame_width, frame_height)).convert('RGBA')
+            changed = ImageChops.difference(normal, rocket).getbbox(alpha_only=False)
+            assert changed and changed[1] >= 32, ('Rocket boots changed pixels above the lower legs', frame, changed)
+            for label, image in [(frame, normal), (f'{frame}_rocket', rocket)]:
+                alpha[label] = {'canvas':image.size, 'used':image.getbbox()}
+                assert image.size == HERO_FRAME_SIZE and image.getpixel((0,0))[3] == 0, (
+                    'Workshop sprite canvas/padding changed; recheck reflection axis', label)
+                band = [x for y in (23,24) for x in range(image.width) if image.getpixel((x,y)) == (*marker,255)]
+                assert band and (min(band)+max(band)+1)/2 == image.width/2, 'Torso band is not centered in the sprite canvas'
     for dimensions in [(390,844), (844,390)]:
         context = browser.new_context(viewport={'width':dimensions[0], 'height':dimensions[1]}, device_scale_factor=1)
         page = context.new_page()
@@ -250,53 +328,60 @@ def sprite_poses(browser):
         page.on('pageerror', lambda value: errors.append(str(value)))
         page.goto(URL)
         wait_screen(page, 'menu')
+        menu = check_menu_hero(page, dimensions)
         button(page, 'play')
         wait_screen(page, 'playing')
         poses = []
-        for pose,magnet in [(p,m) for m in [True,False] for p in ['idle','walk_stride','walk_recover','jump','push']]:
-            for facing in [1, -1]:
-                page.evaluate('value => window.stackAttackQARequest = value', {'scenario':'hero_pose', 'pose':pose, 'facing':facing, 'magnet':magnet})
-                page.wait_for_function('value => window.stackAttackState.hero_pose && window.stackAttackState.facing === value', arg=facing)
-                page.wait_for_timeout(180)
-                snapshot = state(page)
-                frame = {'walk_stride':'walk','jump':'jump','push':'push'}.get(pose,'idle')
-                assert snapshot['hero_frame'] == frame
-                path = SHOTS / f'hero-{pose}-{"magnet" if magnet else "bare"}-{"right" if facing == 1 else "left"}-{dimensions[0]}x{dimensions[1]}.png'
-                raw = page.screenshot(path=str(path))
-                image = Image.open(io.BytesIO(raw)).convert('RGB')
-                fx, fy, fw, fh = snapshot['field']
-                cell = fw / snapshot['columns']
-                scale = page.locator('canvas').bounding_box()['width'] / snapshot['viewport'][0]
-                px, py = snapshot['player']
-                left, top = round((fx+(px-.5)*cell)*scale), round((fy+(py-.1)*cell)*scale)
-                right, bottom = round((fx+(px+1.5)*cell)*scale), round((fy+(py+1)*cell)*scale)
-                points = [(x,y) for y in range(top,bottom) for x in range(left,right) if image.getpixel((x,y)) == marker]
-                assert points, ('Torso marker was not rendered', dimensions, pose, facing)
-                xs, ys = zip(*points)
-                center = (min(xs)+max(xs)+1)/2
-                expected_center = (fx+(px+snapshot['player_size'][0]/2)*cell)*scale
-                crop_hash = hashlib.sha256(image.crop((left,top,right,bottom)).tobytes()).hexdigest()
-                red = sum(image.getpixel((x,y)) == (215,67,56) for y in range(top,bottom) for x in range(left,right))
-                assert (red > 0) == magnet, ('Cosmetic magnet is not readable/isolated',dimensions,pose,facing,magnet,red)
-                assert snapshot['cosmetic_magnet'] == magnet
-                poses.append({'pose':pose,'magnet':magnet,'magnet_pixels':red,'facing':facing,'frame':frame,'player':snapshot['player'],
-                              'torso_center_x':center,'marker_bounds':[min(xs),min(ys),max(xs)+1,max(ys)+1],
-                              'expected_center_x':expected_center,'crop_sha256':crop_hash,'crop_bounds':[left,top,right,bottom],
-                              'screenshot':str(path.relative_to(ROOT))})
-                assert abs(center-expected_center) <= max(1,cell*scale/24), ('Torso is not centered on the collision body', dimensions, pose, facing, center, expected_center)
+        for equipped in (True, False):
+            for pose in ('idle', 'walk_stride', 'walk_recover', 'jump', 'push'):
+                for facing, direction in [(1, 'right'), (-1, 'left')]:
+                    snapshot = animation_request(page, 'hero_pose', pose=pose, facing=facing, boots=equipped)
+                    frame = {'walk_stride':'walk','jump':'jump','push':'push'}.get(pose,'idle')
+                    assert snapshot['hero_pose'] and snapshot['facing'] == facing and snapshot['hero_frame'] == frame
+                    assert snapshot['boots_equipped'] == equipped
+                    gear = 'rocket-boots' if equipped else 'regular-boots'
+                    path = SHOTS / f'hero-{pose}-{gear}-{direction}-{dimensions[0]}x{dimensions[1]}.png'
+                    image = Image.open(io.BytesIO(page.screenshot(path=str(path)))).convert('RGB')
+                    fx, fy, fw, _ = snapshot['field']
+                    cell = fw / snapshot['columns']
+                    scale = page.locator('canvas').bounding_box()['width'] / snapshot['viewport'][0]
+                    px, py = snapshot['player']
+                    left, top = round((fx+(px-.5)*cell)*scale), round((fy+(py-.1)*cell)*scale)
+                    right, bottom = round((fx+(px+1.5)*cell)*scale), round((fy+(py+1)*cell)*scale)
+                    points = [(x,y) for y in range(top,bottom) for x in range(left,right) if image.getpixel((x,y)) == marker]
+                    assert points, ('Torso marker was not rendered', dimensions, pose, facing)
+                    xs, ys = zip(*points)
+                    center = (min(xs)+max(xs)+1)/2
+                    expected_center = (fx+(px+snapshot['player_size'][0]/2)*cell)*scale
+                    crop_hash = hashlib.sha256(image.crop((left,top,right,bottom)).tobytes()).hexdigest()
+                    red = check_hero_hand(image, snapshot, snapshot['player'], facing)
+                    feet = hero_sprite_crop(image, snapshot, snapshot['player'], facing, (0, 32, 32, 48))
+                    rocket_pixels = color_pixels(feet, ROCKET_BOOT_COLORS)
+                    assert (rocket_pixels > 0) == equipped, (
+                        'Rocket boots did not render at the feet as expected', dimensions, pose, facing, equipped, rocket_pixels)
+                    poses.append({'pose':pose,'boots_equipped':equipped,'magnet_pixels':red,'rocket_boot_pixels':rocket_pixels,
+                                  'facing':facing,'frame':frame,'player':snapshot['player'],
+                                  'torso_center_x':center,'marker_bounds':[min(xs),min(ys),max(xs)+1,max(ys)+1],
+                                  'expected_center_x':expected_center,'crop_sha256':crop_hash,'crop_bounds':[left,top,right,bottom],
+                                  'screenshot':str(path.relative_to(ROOT))})
+                    assert abs(center-expected_center) <= max(1,cell*scale/24), ('Torso is not centered on the collision body', dimensions, pose, facing, center, expected_center)
         fixed_player = poses[0]['player']
+        floor_position = (4.3, snapshot['rows'] - snapshot['player_size'][1])
+        assert all(abs(actual - expected) < 1e-5 for actual, expected in zip(fixed_player, floor_position))
         for sample in poses:
             assert sample['player'] == fixed_player, 'Direction or animation changed the fixture collision position'
             assert sample['marker_bounds'][1::2] == poses[0]['marker_bounds'][1::2], 'Turning or animation moved the torso vertically'
             if abs(sample['torso_center_x']-poses[0]['torso_center_x']) > 1:
                 failures.append({'viewport':dimensions, 'pose':sample['pose'], 'facing':sample['facing'],
                                  'drift_pixels':sample['torso_center_x']-poses[0]['torso_center_x']})
-        for facing in [1,-1]:
-            samples = {sample['pose']:sample for sample in poses if sample['facing'] == facing and sample['magnet']}
-            assert samples['idle']['crop_sha256'] != samples['walk_stride']['crop_sha256'], 'Walking did not render its second animation frame'
-            assert samples['idle']['crop_sha256'] == samples['walk_recover']['crop_sha256'], 'Walking recovery did not return to the centered idle frame'
+        for facing in (1, -1):
+            for equipped in (True, False):
+                samples = {sample['pose']:sample for sample in poses
+                           if sample['facing'] == facing and sample['boots_equipped'] == equipped}
+                assert samples['idle']['crop_sha256'] != samples['walk_stride']['crop_sha256'], 'Walking did not render its second animation frame'
+                assert samples['idle']['crop_sha256'] == samples['walk_recover']['crop_sha256'], 'Walking recovery did not return to the centered idle frame'
         assert not errors, errors
-        checks.append({'viewport':list(dimensions),'alpha':alpha,'poses':poses})
+        checks.append({'viewport':list(dimensions),'alpha':alpha,'menu':menu,'poses':poses})
         print('SPRITE_POSES', json.dumps(checks[-1]), flush=True)
         context.close()
     assert not failures, ('Turning or animation displaced the rendered torso', failures)
@@ -1437,7 +1522,10 @@ def check_boots_panel(snapshot, actions):
                 assert x + w <= ax or ax + aw <= x or y + h <= ay or ay + ah <= y, (
                     'Equipment actions overlap', item)
             button_rects.append(item['rect'])
-    return {item['name']: item['text'] for item in panel['items']}
+    labels = {item['name']: item['text'] for item in panel['items']}
+    if 'equip' in actions:
+        assert labels['equipment_title'] == 'Ботинки-ракеты' and snapshot['missing_menu_glyphs'] == '', labels
+    return labels
 
 
 def check_boots_hud(snapshot, charges):
@@ -1472,7 +1560,23 @@ def resize_boots_view(page, dimensions):
 def boots_shot(page, phase, shots):
     size = page.viewport_size
     name = f'boots-{phase}-{size["width"]}x{size["height"]}.png'
-    shots.append(screenshot(page, name))
+    shot = screenshot(page, name)
+    shots.append(shot)
+    return shot
+
+
+def check_boots_exhaust(image, snapshot, emitting):
+    for nozzle_x in JUMP_NOZZLES:
+        nozzle = hero_sprite_crop(image, snapshot, snapshot['player'], snapshot['facing'],
+                                  (nozzle_x - 5, 38, nozzle_x + 5, 47))
+        exhaust = hero_sprite_crop(image, snapshot, snapshot['player'], snapshot['facing'],
+                                   (nozzle_x - 5, 46, nozzle_x + 5, 62))
+        assert color_pixels(nozzle, NOZZLE_COLORS) > 0, (
+            'Jump nozzle was not rendered', snapshot['viewport'], snapshot['facing'], nozzle_x)
+        core = color_pixels(exhaust, {EXHAUST_CORE})
+        flame = color_pixels(exhaust, {EXHAUST_FLAME})
+        assert (core > 0) == (flame > 0) == emitting, (
+            'Incorrect rocket exhaust at the jump nozzle', snapshot['viewport'], snapshot['facing'], nozzle_x, core, flame)
 
 
 def select_boots_action(page, action, touch):
@@ -1531,6 +1635,9 @@ def use_air_jump(page, touch, shots, *, held=False, capture=False):
         first = animation_step(page, 34)
     assert_boots(first, True, charges, rows)
     assert not first['grounded'] and first['player'][1] < before['player'][1] - .5
+    if capture:
+        shot = boots_shot(page, 'first-jump' if charges > 1 else 'last-first-jump', shots)
+        check_boots_exhaust(Image.open(ROOT / shot).convert('RGB'), first, False)
     press_boots_jump(page, touch)
     boosted = animation_step(page, 1)
     assert_boots(boosted, True, charges - 1, rows)
@@ -1539,7 +1646,8 @@ def use_air_jump(page, touch, shots, *, held=False, capture=False):
     if capture:
         airborne = animation_step(page, 5)
         phase = 'last-air-jump' if charges == 1 else 'air-jump'
-        boots_shot(page, phase, shots)
+        shot = boots_shot(page, phase, shots)
+        check_boots_exhaust(Image.open(ROOT / shot).convert('RGB'), airborne, True)
         if charges == 1:
             size = page.viewport_size
             original = (size['width'], size['height'])
@@ -1549,7 +1657,8 @@ def use_air_jump(page, touch, shots, *, held=False, capture=False):
             assert_boots(rotated, True, 0, rows)
             check_touch_control_layout(rotated)
             check_boots_hud(rotated, 0)
-            boots_shot(page, phase, shots)
+            shot = boots_shot(page, phase, shots)
+            check_boots_exhaust(Image.open(ROOT / shot).convert('RGB'), rotated, True)
             resize_boots_view(page, original)
     press_boots_jump(page, touch)
     again = animation_step(page, 1)
@@ -1560,6 +1669,8 @@ def use_air_jump(page, touch, shots, *, held=False, capture=False):
         assert not descending['grounded'] and descending['player_velocity'][1] > 0
         assert_boots(descending, True, 0, rows)
         check_boots_hud(descending, 0)
+        if capture:
+            check_boots_exhaust(Image.open(io.BytesIO(page.screenshot())).convert('RGB'), descending, False)
     landed = animation_step(page, 180)
     assert landed['grounded'] and landed['player'] == [first['player'][0], before['player'][1]]
     assert_boots(landed, charges > 1, charges - 1, rows)
@@ -1697,6 +1808,7 @@ def boots_checks(browser):
     return {'offer_after_five_and_combo_surplus':'PASS', 'full_charge_suppression':'PASS',
             'pause_and_offer_resize':'PASS', 'skip_and_replacement':'PASS', 'keyboard_and_touch':'PASS',
             'separate_press_and_one_air_jump_per_landing':'PASS', 'last_charge_and_restart':'PASS',
+            'rocket_exhaust_on_second_jump':'PASS',
             'screenshots':shots, 'screenshot_sha256':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in shots}}
 
 
@@ -1754,15 +1866,12 @@ def workshop_screens(browser):
         snapshot = state(page)
         assert snapshot['columns'] == 10 and snapshot['rows'] == 11
         assert set(snapshot['buttons']) == {'pause'}, 'Visual slice must not add tool/ability UI'
-        assert snapshot['cosmetic_magnet']
-        raw = page.screenshot()
-        image = Image.open(io.BytesIO(raw)).convert('RGB')
+        assert not snapshot['boots_equipped']
+        game = screenshot(page,f'workshop-game-{width}x{height}.png')
+        image = Image.open(ROOT / game).convert('RGB')
+        red = check_hero_hand(image, snapshot, snapshot['player'], snapshot['facing'])
         fx,fy,fw,_ = snapshot['field'];px,py=snapshot['player']
         cell=fw/snapshot['columns'];scale=page.locator('canvas').bounding_box()['width']/snapshot['viewport'][0]
-        area=(round((fx+(px-.25)*cell)*scale),round((fy+(py-.15)*cell)*scale),round((fx+(px+1)*cell)*scale),round((fy+(py+1)*cell)*scale))
-        red=sum(image.getpixel((x,y)) == (215,67,56) for y in range(area[1],area[3]) for x in range(area[0],area[2]))
-        assert red >= 2, ('Cosmetic U magnet must be visible at real game scale',width,height,red)
-        game = screenshot(page,f'workshop-game-{width}x{height}.png')
         hero_crop = [round((fx+(px-1/24)*cell)*scale)-2,round((fy+(py-2/24)*cell)*scale)-2,
                      round((fx+(px+15/24)*cell)*scale)+2,round((fy+(py+22/24)*cell)*scale)+2]
         button(page,'pause',True)
@@ -1773,7 +1882,7 @@ def workshop_screens(browser):
         button(page,'home',True)
         wait_screen(page,'menu')
         assert not errors,errors
-        checks.append({'viewport':[width,height],'reference_style':'workshop','cosmetic_magnet_pixels':red,'unchanged_grid':[10,11],
+        checks.append({'viewport':[width,height],'reference_style':'workshop','magnet_pixels':red,'unchanged_grid':[10,11],
                        'no_tool_slots':'PASS','live_menu':'PASS','pause_home':'PASS','hero_crop':hero_crop,'screenshots':[menu,game,paused],
                        'screenshot_sha256':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in [menu,game,paused]}})
         print('WORKSHOP',json.dumps(checks[-1]),flush=True)

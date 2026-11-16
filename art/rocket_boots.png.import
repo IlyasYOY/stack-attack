@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bstgt38s0qwhn"
-path="res://.godot/imported/hero_jump_bare.png-cdbcc01dbd3a1c88b2d43b7714531545.ctex"
+uid="uid://ckjoyfhyk2270"
+path="res://.godot/imported/rocket_boots.png-916b96f262b7ccc74e7bec0aca4a4808.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://art/hero_jump_bare.png"
-dest_files=["res://.godot/imported/hero_jump_bare.png-cdbcc01dbd3a1c88b2d43b7714531545.ctex"]
+source_file="res://art/rocket_boots.png"
+dest_files=["res://.godot/imported/rocket_boots.png-916b96f262b7ccc74e7bec0aca4a4808.ctex"]
 
 [params]
 

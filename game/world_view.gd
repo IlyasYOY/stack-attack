@@ -13,21 +13,17 @@ var pressed_actions: Array[String] = []
 var line_caption := ""
 var caption_life := 0.0
 var hud_right := SCORE_PANEL_RIGHT
-var cosmetic_magnet := true
 var crush_progress := -1.0
-var boots_spark_life := 0.0
-var boots_spark_origin := Vector2.ZERO
+var boots_exhaust_life := 0.0
 const FONT: Font = preload("res://art/workshop_font.fnt")
 const HERO_SIZE := Vector2(16, 24)
 const HERO_OFFSET := Vector2(-1, -2)
 const HERO_FRAME_PIXELS := Vector2(32, 48)
 const HERO_FRAME_COLUMNS := {"idle": 0, "walk": 1, "jump": 2, "push": 3}
-const HERO_BOOTS_ATLAS: Texture2D = preload("res://art/hero_spring_boots.png")
+const HERO_BOOTS_ATLAS: Texture2D = preload("res://art/hero_rocket_boots.png")
 const HERO_TEXTURES := {
 	"idle": preload("res://art/hero_idle.png"), "walk": preload("res://art/hero_walk.png"),
-	"jump": preload("res://art/hero_jump.png"), "push": preload("res://art/hero_push.png"),
-	"idle_bare": preload("res://art/hero_idle_bare.png"), "walk_bare": preload("res://art/hero_walk_bare.png"),
-	"jump_bare": preload("res://art/hero_jump_bare.png"), "push_bare": preload("res://art/hero_push_bare.png")}
+	"jump": preload("res://art/hero_jump.png"), "push": preload("res://art/hero_push.png")}
 const CRATE_TEXTURE: Texture2D = preload("res://art/crate_wood.png")
 const PIXELS_PER_CELL := 24.0
 const CRANE_TRACK_Y := [-46.0, -34.0]
@@ -41,12 +37,15 @@ const LANDSCAPE_FRAME_CLEARANCE := 18.0
 const INK := Color("102733")
 const CREAM := Color("f4e3ba")
 const GOLD := Color("d7a45a")
-const MINT := Color("8dc6ac")
 const CLEAR_GLOW_FRACTION := 0.30
 const CLEAR_LIP_TIME := 0.08
 const EFFECT_AMBER := Color("ffc276")
 const EFFECT_DUST := Color("e9c598")
-const BOOTS_SPARK_TIME := 0.20
+const BOOTS_EXHAUST_TIME := 0.20
+const EXHAUST_FLAME := Color("ff803f")
+const EXHAUST_CORE := Color("ffe6a0")
+# The nozzle centers at the bottom of the jumping sprite in atlas pixels.
+const JUMP_NOZZLES := [Vector2(7.5, 46), Vector2(21.5, 46)]
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -94,13 +93,11 @@ func _layout() -> void:
 func animate(delta: float) -> void:
 	clock += delta
 	caption_life = maxf(0.0, caption_life - delta)
-	boots_spark_life = maxf(0.0, boots_spark_life - delta)
+	boots_exhaust_life = maxf(0.0, boots_exhaust_life - delta)
 	queue_redraw()
 
 func boots_jump_effect() -> void:
-	var bounds := _hero_bounds()
-	boots_spark_origin = Vector2(bounds.get_center().x, bounds.end.y)
-	boots_spark_life = BOOTS_SPARK_TIME
+	boots_exhaust_life = BOOTS_EXHAUST_TIME
 
 func line_effect(chain: int) -> void:
 	caption_life = 1.4
@@ -387,38 +384,42 @@ func _draw_hero(bounds: Rect2, frame: String) -> void:
 	if model.facing < 0:
 		bounds.size.x = -bounds.size.x
 	if model.boots_equipped:
-		draw_texture_rect_region(HERO_BOOTS_ATLAS, bounds, _boots_region(frame, cosmetic_magnet))
+		draw_texture_rect_region(HERO_BOOTS_ATLAS, bounds, _boots_region(frame))
 	else:
-		var texture: Texture2D = HERO_TEXTURES[frame + ("" if cosmetic_magnet else "_bare")]
-		draw_texture_rect(texture, bounds, false)
+		draw_texture_rect(HERO_TEXTURES[frame], bounds, false)
 
 static func pause_portrait(boots_equipped: bool) -> Texture2D:
 	if not boots_equipped:
 		return HERO_TEXTURES.idle
 	var portrait := AtlasTexture.new()
 	portrait.atlas = HERO_BOOTS_ATLAS
-	portrait.region = _boots_region("idle", true)
+	portrait.region = _boots_region("idle")
 	portrait.filter_clip = true
 	return portrait
 
-static func _boots_region(frame: String, with_magnet: bool) -> Rect2:
+static func _boots_region(frame: String) -> Rect2:
 	var column: int = HERO_FRAME_COLUMNS[frame]
-	var row := 0 if with_magnet else 1
-	return Rect2(Vector2(column, row) * HERO_FRAME_PIXELS, HERO_FRAME_PIXELS)
+	return Rect2(Vector2(column * HERO_FRAME_PIXELS.x, 0), HERO_FRAME_PIXELS)
 
-func _draw_boots_sparks(floor_y: float) -> void:
-	if boots_spark_life <= 0.0 or not model.equipment_enabled:
+func _draw_boots_exhaust(bounds: Rect2, floor_y: float) -> void:
+	if boots_exhaust_life <= 0.0 or model.grounded or not model.boots_equipped:
 		return
-	var progress := 1.0 - boots_spark_life / BOOTS_SPARK_TIME
-	for side in [-1.0, 0.0, 1.0]:
-		var at := (boots_spark_origin + Vector2(side * (4.0 + 6.0 * progress), 2.0 + 7.0 * progress)).round()
-		if side == 0.0:
-			at.y += 4.0
-		if at.y >= floor_y:
+	var progress := 1.0 - boots_exhaust_life / BOOTS_EXHAUST_TIME
+	var opacity: float = 1.0 - smoothstep(0.35, 1.0, progress)
+	for nozzle: Vector2 in JUMP_NOZZLES:
+		if model.facing < 0:
+			nozzle.x = HERO_FRAME_PIXELS.x - nozzle.x
+		var at := (bounds.position + nozzle / HERO_FRAME_PIXELS * bounds.size).round()
+		var length := minf(roundf(lerpf(8.0, 2.0, progress)), floor_y - at.y)
+		if length < 2.0:
 			continue
-		var tint := Color(MINT if side == 0.0 else EFFECT_AMBER, 1.0 - progress)
-		draw_rect(Rect2(at + Vector2(-1, 0), Vector2(3, 1)), tint)
-		draw_rect(Rect2(at + Vector2(0, -1), Vector2(1, 3)), tint)
+		var shoulder := length / 3.0
+		var taper := length * 0.8
+		var flame := PackedVector2Array([at + Vector2(-1, 0), at + Vector2(1, 0),
+			at + Vector2(2, shoulder), at + Vector2(1, taper), at + Vector2(0, length),
+			at + Vector2(-1, taper), at + Vector2(-2, shoulder)])
+		draw_colored_polygon(flame, Color(EXHAUST_FLAME, opacity))
+		draw_rect(Rect2(at + Vector2(-1, 0), Vector2(2, roundf(shoulder))), Color(EXHAUST_CORE, opacity))
 
 func crush_geometry(impact: Dictionary) -> Dictionary[String, Rect2]:
 	var strength: float = smoothstep(0.0, 0.39, crush_progress)
@@ -540,8 +541,9 @@ func _draw_field_objects() -> void:
 		var position := _crate_origin(float(crate.x), float(crate.y))
 		draw_texture_rect(CRATE_TEXTURE, Rect2(position, Vector2.ONE * PIXELS_PER_CELL), false)
 	if impact.is_empty():
-		_draw_hero(_hero_bounds(), hero_frame())
-		_draw_boots_sparks(floor_y)
+		var bounds := _hero_bounds()
+		_draw_boots_exhaust(bounds, floor_y)
+		_draw_hero(bounds, hero_frame())
 	else:
 		_draw_crush(impact, width)
 	if phase == "collapse":

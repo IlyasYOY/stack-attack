@@ -55,14 +55,14 @@ label('АЛЬБОМ',24,1148);put(landscape['screenshots'][1],24,1180)
 label('ГЕРОЙ · РЕАЛЬНЫЕ КАДРЫ X4',902,1148)
 poses=report['sprite_poses'][0]['poses']
 for index,equipped in enumerate([True,False]):
-    pose=next(p for p in poses if p['pose']=='idle' and p['facing']==1 and p['magnet']==equipped)
+    pose=next(p for p in poses if p['pose']=='idle' and p['facing']==1 and p['boots_equipped']==equipped)
     image=Image.open(ROOT/pose['screenshot']).convert('RGB').crop(pose['crop_bounds'])
     assert hashlib.sha256(image.tobytes()).hexdigest()==pose['crop_sha256']
     image=image.resize((image.width*4,image.height*4),Image.Resampling.NEAREST)
     x=902+index*360
-    label('С МАГНИТОМ' if equipped else 'БЕЗ МАГНИТА',x,1200)
+    label('БОТИНКИ-РАКЕТЫ' if equipped else 'ОБЫЧНАЯ ОБУВЬ',x,1200)
     canvas.paste(image,(x,1236))
-label('МАГНИТ КОСМЕТИЧЕСКИЙ · ПРАВИЛА И УПРАВЛЕНИЕ ПРЕЖНИЕ',24,1596,2,'#8dc6ac')
+label('БОТИНКИ-РАКЕТЫ · ДОПОЛНИТЕЛЬНЫЙ ПРЫЖОК В ВОЗДУХЕ',24,1596,2,'#8dc6ac')
 out=build/'showcase'
 out.mkdir(exist_ok=True)
 path=out/f'stack-attack-workshop-{sha[:12]}.png'

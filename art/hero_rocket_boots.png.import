@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cfektbo0dd0kq"
-path="res://.godot/imported/hero_idle_bare.png-20ab2b81138cf294476093df58e4c201.ctex"
+uid="uid://dye542atkp0an"
+path="res://.godot/imported/hero_rocket_boots.png-8eb01d6062093a29ffef271bd31c9b54.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://art/hero_idle_bare.png"
-dest_files=["res://.godot/imported/hero_idle_bare.png-20ab2b81138cf294476093df58e4c201.ctex"]
+source_file="res://art/hero_rocket_boots.png"
+dest_files=["res://.godot/imported/hero_rocket_boots.png-8eb01d6062093a29ffef271bd31c9b54.ctex"]
 
 [params]
 

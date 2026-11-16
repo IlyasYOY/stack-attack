@@ -1,7 +1,7 @@
 extends RefCounted
 
-const BOOTS_ICON: Texture2D = preload("res://art/spring_boots.png")
-const BOOTS_NAME := "Пружинные ботинки"
+const BOOTS_ICON: Texture2D = preload("res://art/rocket_boots.png")
+const BOOTS_NAME := "Ботинки-ракеты"
 const BOOTS_EFFECT := "Двойной прыжок"
 const CREAM := Color("f4e3ba")
 const GOLD := Color("e7b46b")

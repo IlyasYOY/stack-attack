@@ -422,13 +422,12 @@ func _start_game() -> void:
 	qa_crane_releases.clear()
 	qa_animation_held = false
 	crush_elapsed = -1.0
-	world.cosmetic_magnet = true
 	session += 1
 	model = StackSimulation.new(TUNING, Time.get_ticks_usec())
 	model.equipment_enabled = true
 	world.model = model
 	world.caption_life = 0.0
-	world.boots_spark_life = 0.0
+	world.boots_exhaust_life = 0.0
 	world._layout()
 	result_saved = false
 	_show_screen("playing")
@@ -686,7 +685,7 @@ func _publish_qa() -> void:
 		"player": [model.player.x, model.player.y], "grounded": model.grounded,
 		"player_velocity": [model.player_velocity.x, model.player_velocity.y],
 		"player_size": [TUNING.player_width, TUNING.player_height],
-		"facing": model.facing, "hero_pose": qa_hero_pose, "hero_frame": world.hero_frame(), "cosmetic_magnet": world.cosmetic_magnet,
+		"facing": model.facing, "hero_pose": qa_hero_pose, "hero_frame": world.hero_frame(),
 		"columns": model.tuning.columns, "rows": model.tuning.rows, "crates": model.crates.size(), "first_crate_x": model.crates[0].x if not model.crates.is_empty() else -1,
 		"layout": "landscape" if size.x > size.y else "portrait", "viewport": [size.x, size.y],
 		"field": [world.field.position.x, world.field.position.y, world.field.size.x, world.field.size.y], "visible_crates": visible_crates,
@@ -701,7 +700,8 @@ func _publish_qa() -> void:
 		"vibration_styles": vibration_styles,
 		"demo": {"active": _background_demo(), "rounds": demo.rounds, "ticks": demo.total_ticks,
 			"jumps": demo.jumps, "drops": demo.drops, "lines": demo.lines, "losses": demo.losses,
-			"player": [demo.model.player.x, demo.model.player.y], "state": demo.model.state,
+			"player": [demo.model.player.x, demo.model.player.y], "facing": demo.model.facing,
+			"state": demo.model.state,
 			"separate_model": demo.model != model},
 		"profile": {"music": profile.music, "effects": profile.effects,
 			"matches": profile.matches, "statistics": profile.statistics(), "records": profile.records,
@@ -799,9 +799,11 @@ func _qa_command() -> void:
 		var target := demo.model if screen == "menu" else model
 		target.crates.clear()
 		target.state = "playing"
-		target.player = Vector2(8.4, TUNING.rows - TUNING.player_height)
+		var player_x := clampf(float(request.get("player_x", 8.4)), 0.0, TUNING.columns - TUNING.player_width)
+		target.player = Vector2(player_x, TUNING.rows - TUNING.player_height)
 		target.player_velocity = Vector2.ZERO
 		target.grounded = true
+		target.facing = -1 if int(request.get("facing", target.facing)) < 0 else 1
 		for index in range(3):
 			var crate := target.add_crate(float(1 + index * 3), 2.0)
 			crate.color = index
@@ -860,7 +862,10 @@ func _qa_command() -> void:
 		model.grounded = pose != "jump"
 		model.facing = -1 if int(request.get("facing", 1)) < 0 else 1
 		world.axis = 0.0 if pose in ["idle", "jump"] else float(model.facing)
-		world.cosmetic_magnet = bool(request.get("magnet", true))
+		model.boots_equipped = bool(request.get("boots", false))
+		model.boots_charges = StackSimulation.BOOTS_MAX_CHARGES if model.boots_equipped else 0
+		world.boots_exhaust_life = 0.0
+		EQUIPMENT_VIEW.update_hud(boots_count, model.boots_equipped, model.boots_charges)
 		if pose == "push":
 			model.add_crate(model.player.x + TUNING.player_width if model.facing > 0 else model.player.x - 1, float(TUNING.rows - 1))
 		world.clock = 0.15 if pose == "walk_recover" else 0.0
