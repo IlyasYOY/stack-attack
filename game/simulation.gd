@@ -7,6 +7,7 @@ const CRANE_EDGE_MARGIN := 1.5
 const CRATE_RELEASE_Y := -0.95
 const ROWS_PER_EQUIPMENT := 5
 const BOOTS_MAX_CHARGES := 10
+const HELMET_MAX_CHARGES := 3
 var tuning: StackTuning
 var crates: Array[Dictionary] = []
 var cranes: Array[Dictionary] = []
@@ -33,6 +34,7 @@ var equipment_rows := 0
 var equipment_pending := false
 var boots_equipped := false
 var boots_charges := 0
+var helmet_charges := 0
 var _rng := RandomNumberGenerator.new()
 var _next_id := 0
 var _jump_buffer := 0.0
@@ -74,6 +76,7 @@ func reset(seed_value: int) -> void:
 	equipment_pending = false
 	boots_equipped = false
 	boots_charges = 0
+	helmet_charges = 0
 	_jump_buffer = 0.0
 	_coyote = 0.0
 	_air_jump_available = false
@@ -135,20 +138,32 @@ func advance(delta: float, axis: float, jump_pressed: bool = false) -> void:
 			break
 
 
-func resolve_equipment(accept: bool) -> void:
-	if not equipment_pending:
+func equipment_options() -> Array[String]:
+	var options: Array[String] = []
+	if boots_charges < BOOTS_MAX_CHARGES:
+		options.append("boots")
+	if helmet_charges < HELMET_MAX_CHARGES:
+		options.append("helmet")
+	return options
+
+
+func resolve_equipment(item: String) -> void:
+	if not equipment_pending or (not item.is_empty() and not equipment_options().has(item)):
 		return
 	equipment_pending = false
-	if accept:
-		boots_equipped = true
-		boots_charges = BOOTS_MAX_CHARGES
+	match item:
+		"boots":
+			boots_equipped = true
+			boots_charges = BOOTS_MAX_CHARGES
+		"helmet":
+			helmet_charges = HELMET_MAX_CHARGES
 	_offer_equipment_if_due()
 
 
 func _offer_equipment_if_due() -> void:
 	if equipment_rows < ROWS_PER_EQUIPMENT:
 		return
-	if boots_charges == BOOTS_MAX_CHARGES:
+	if equipment_options().is_empty():
 		equipment_rows %= ROWS_PER_EQUIPMENT
 		return
 	equipment_rows -= ROWS_PER_EQUIPMENT
@@ -230,13 +245,28 @@ func _move_player(axis: float) -> void:
 			grounded = true
 			_land_player()
 	else:
-		for crate in crates:
-			if _overlap(player.x, width, float(crate.x), 1.0, 0.03):
-				var underside := float(crate.y) + 1.0
-				if player.y >= underside - EPS and proposed_y < underside:
-					proposed_y = maxf(proposed_y, underside)
-					player_velocity.y = 0.0
+		proposed_y = _move_player_up(proposed_y)
 	player.y = maxf(-1.0, proposed_y)
+
+
+func _move_player_up(proposed_y: float) -> float:
+	var contacts: Array[Dictionary] = []
+	var sweep_y := maxf(-1.0, proposed_y) if helmet_charges > 0 else proposed_y
+	for crate in crates:
+		var underside := float(crate.y) + 1.0
+		if player.y >= underside - EPS and sweep_y < underside and _overlap(
+				player.x, tuning.player_width, float(crate.x), 1.0, 0.03):
+			contacts.append(crate)
+	# A larger y is closer to a rising player, regardless of storage order.
+	contacts.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a.id) < int(b.id) if float(a.y) == float(b.y) else float(a.y) > float(b.y))
+	for crate in contacts:
+		var underside := float(crate.y) + 1.0
+		if helmet_charges <= 0:
+			player_velocity.y = 0.0
+			return underside
+		_break_crate_with_helmet(crate, float(crate.y), underside, "jump")
+	return proposed_y
 
 
 func _player_support() -> float:
@@ -297,7 +327,9 @@ func _move_crate_horizontally(crate: Dictionary) -> void:
 func _move_crates() -> void:
 	crates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return float(a.y) > float(b.y) if not is_equal_approx(float(a.y), float(b.y)) else int(a.id) < int(b.id))
-	for crate in crates:
+	var index := 0
+	while index < crates.size():
+		var crate := crates[index]
 		_move_crate_horizontally(crate)
 		var old_bottom := float(crate.y) + 1.0
 		crate.vy = minf(float(crate.vy) + tuning.crate_gravity * STEP, tuning.crate_fall_speed)
@@ -311,19 +343,34 @@ func _move_crates() -> void:
 			if _overlap(float(crate.x), 1.0, float(other.x), 1.0, 0.0):
 				if old_bottom <= float(other.y) + EPS:
 					support = minf(support, float(other.y))
-		if new_y + 1.0 >= support:
+		var landed := new_y + 1.0 >= support
+		if landed:
 			new_y = support - 1.0
+		var hits_head := (new_y + 1.0 > old_bottom + EPS and old_bottom <= player.y + 0.08
+			and new_y + 1.0 >= player.y + 0.02 and _overlap(
+				float(crate.x), 1.0, player.x, tuning.player_width, 0.055))
+		if hits_head and helmet_charges > 0:
+			var contact_y := clampf(player.y - 1.0, float(crate.y), new_y)
+			_break_crate_with_helmet(crate, contact_y, player.y, "fall")
+			continue
+		if landed:
 			if float(crate.vy) > 1.0:
 				events.append({"type": "land", "x": float(crate.x), "y": new_y})
 			crate.vy = 0.0
-		if new_y + 1.0 > old_bottom + EPS and old_bottom <= player.y + 0.08:
-			if new_y + 1.0 >= player.y + 0.02 and _overlap(
-				float(crate.x), 1.0, player.x, tuning.player_width, 0.055):
-				crate.y = new_y
-				impact_crate_id = int(crate.id)
-				_lose("crushed")
-				return
 		crate.y = new_y
+		if hits_head:
+			impact_crate_id = int(crate.id)
+			_lose("crushed")
+			return
+		index += 1
+
+
+func _break_crate_with_helmet(crate: Dictionary, crate_y: float, player_y: float, direction: String) -> void:
+	helmet_charges -= 1
+	crates.erase(crate)
+	events.append({"type": "helmet_hit", "crate_id": int(crate.id), "x": float(crate.x),
+		"y": crate_y, "player_x": player.x, "player_y": player_y, "direction": direction,
+		"helmet_broke": helmet_charges == 0, "charges": helmet_charges, "tick": ticks})
 
 
 func _bottom_line() -> Array[int]:

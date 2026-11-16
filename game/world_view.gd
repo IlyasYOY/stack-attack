@@ -15,12 +15,14 @@ var caption_life := 0.0
 var hud_right := SCORE_PANEL_RIGHT
 var crush_progress := -1.0
 var boots_exhaust_life := 0.0
+var helmet_impacts: Array[Dictionary] = []
 const FONT: Font = preload("res://art/workshop_font.fnt")
 const HERO_SIZE := Vector2(16, 24)
 const HERO_OFFSET := Vector2(-1, -2)
 const HERO_FRAME_PIXELS := Vector2(32, 48)
 const HERO_FRAME_COLUMNS := {"idle": 0, "walk": 1, "jump": 2, "push": 3}
 const HERO_BOOTS_ATLAS: Texture2D = preload("res://art/hero_rocket_boots.png")
+const HERO_HELMET_ATLAS: Texture2D = preload("res://art/hero_helmet.png")
 const HERO_TEXTURES := {
 	"idle": preload("res://art/hero_idle.png"), "walk": preload("res://art/hero_walk.png"),
 	"jump": preload("res://art/hero_jump.png"), "push": preload("res://art/hero_push.png")}
@@ -46,6 +48,14 @@ const EXHAUST_FLAME := Color("ff803f")
 const EXHAUST_CORE := Color("ffe6a0")
 # The nozzle centers at the bottom of the jumping sprite in atlas pixels.
 const JUMP_NOZZLES := [Vector2(7.5, 46), Vector2(21.5, 46)]
+const HELMET_FLASH_TIME := 0.11
+const HELMET_WOOD_TIME := 0.48
+const HELMET_SHELL_TIME := 0.58
+const HELMET_FRAGMENTS: Texture2D = preload("res://art/helmet_fragments.png")
+const FRAGMENT_TILE := Vector2(20, 16)
+# Horizontal flight, initial lift, and width in board pixels.
+const WOOD_FLIGHT := [Vector3(-29, -21, 15), Vector3(30, -16, 14),
+	Vector3(-42, -6, 6), Vector3(38, -2, 5), Vector3(14, -32, 6), Vector3(-11, -34, 4)]
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -94,10 +104,25 @@ func animate(delta: float) -> void:
 	clock += delta
 	caption_life = maxf(0.0, caption_life - delta)
 	boots_exhaust_life = maxf(0.0, boots_exhaust_life - delta)
+	for index in range(helmet_impacts.size() - 1, -1, -1):
+		var impact := helmet_impacts[index]
+		impact.age += delta
+		if impact.age >= (HELMET_SHELL_TIME if impact.broke else HELMET_WOOD_TIME):
+			helmet_impacts.remove_at(index)
 	queue_redraw()
 
 func boots_jump_effect() -> void:
 	boots_exhaust_life = BOOTS_EXHAUST_TIME
+
+func helmet_hit(event: Dictionary) -> void:
+	var crate := _crate_origin(float(event.x), float(event.y))
+	var player := _crate_origin(float(event.player_x), float(event.player_y))
+	var head := player + HERO_OFFSET + Vector2(HERO_SIZE.x * 0.5, 1.0)
+	var contact := Vector2(clampf(head.x, crate.x + 1.0, crate.x + PIXELS_PER_CELL - 1.0), head.y)
+	helmet_impacts.append({"age": 0.0, "crate": crate + Vector2(12, 13),
+		"head": head, "contact": contact,
+		"jump": event.direction == "jump", "broke": bool(event.helmet_broke),
+		"facing_left": model.facing < 0})
 
 func line_effect(chain: int) -> void:
 	caption_life = 1.4
@@ -383,23 +408,88 @@ func _hero_bounds() -> Rect2:
 func _draw_hero(bounds: Rect2, frame: String) -> void:
 	if model.facing < 0:
 		bounds.size.x = -bounds.size.x
-	if model.boots_equipped:
-		draw_texture_rect_region(HERO_BOOTS_ATLAS, bounds, _boots_region(frame))
+	var atlas := _hero_atlas(model.boots_equipped, model.helmet_charges > 0)
+	if atlas != null:
+		draw_texture_rect_region(atlas, bounds, _hero_region(frame, model.boots_equipped, model.helmet_charges > 0))
 	else:
 		draw_texture_rect(HERO_TEXTURES[frame], bounds, false)
 
-static func pause_portrait(boots_equipped: bool) -> Texture2D:
-	if not boots_equipped:
+static func pause_portrait(boots_equipped: bool, helmet_equipped: bool = false) -> Texture2D:
+	var atlas := _hero_atlas(boots_equipped, helmet_equipped)
+	if atlas == null:
 		return HERO_TEXTURES.idle
 	var portrait := AtlasTexture.new()
-	portrait.atlas = HERO_BOOTS_ATLAS
-	portrait.region = _boots_region("idle")
+	portrait.atlas = atlas
+	portrait.region = _hero_region("idle", boots_equipped, helmet_equipped)
 	portrait.filter_clip = true
 	return portrait
 
-static func _boots_region(frame: String) -> Rect2:
+static func _hero_atlas(boots_equipped: bool, helmet_equipped: bool) -> Texture2D:
+	if helmet_equipped:
+		return HERO_HELMET_ATLAS
+	return HERO_BOOTS_ATLAS if boots_equipped else null
+
+static func _hero_region(frame: String, boots_equipped: bool, helmet_equipped: bool) -> Rect2:
 	var column: int = HERO_FRAME_COLUMNS[frame]
-	return Rect2(Vector2(column * HERO_FRAME_PIXELS.x, 0), HERO_FRAME_PIXELS)
+	var row := 1 if boots_equipped and helmet_equipped else 0
+	return Rect2(Vector2(column, row) * HERO_FRAME_PIXELS, HERO_FRAME_PIXELS)
+
+func _draw_helmet_impacts(width: float, floor_y: float) -> void:
+	for impact in helmet_impacts:
+		var age := float(impact.age)
+		if age < HELMET_WOOD_TIME:
+			_draw_wood_fragments(impact.crate, age, bool(impact.jump), width, floor_y)
+		if bool(impact.broke):
+			_draw_helmet_shell(impact.head, age, bool(impact.facing_left), width, floor_y)
+		if age < HELMET_FLASH_TIME:
+			_draw_helmet_flash(impact.contact, age, width)
+
+func _draw_wood_fragments(origin: Vector2, age: float, jumped: bool, width: float, floor_y: float) -> void:
+	var progress := age / HELMET_WOOD_TIME
+	var travel := 1.0 - (1.0 - progress) * (1.0 - progress)
+	var opacity: float = smoothstep(0.015, 0.045, age) * (1.0 - smoothstep(0.64, 1.0, progress))
+	var lift := 5.0 if jumped else 0.0
+	for index in range(WOOD_FLIGHT.size()):
+		var flight: Vector3 = WOOD_FLIGHT[index]
+		var offset := Vector2(flight.x * (0.12 + travel),
+			(flight.y - lift) * travel + 43.0 * progress * progress)
+		_draw_helmet_fragment(origin + offset, flight.z, index % 4, 0, opacity, false, width, floor_y)
+
+func _draw_helmet_shell(head: Vector2, age: float, facing_left: bool, width: float, floor_y: float) -> void:
+	var progress := age / HELMET_SHELL_TIME
+	var opacity: float = smoothstep(0.025, 0.062, age) * (1.0 - smoothstep(0.69, 1.0, progress))
+	for index in range(2):
+		var side := -1.0 if index == 0 else 1.0
+		var drift := 29.0 * progress - 11.0 * progress * progress
+		var fall := 63.0 * progress * progress - 42.0 * progress
+		var at := head + Vector2(side * (4.0 + drift), fall - 4.0 - index * 2.0)
+		_draw_helmet_fragment(at, 12.0, 1 - index if facing_left else index, 1,
+			opacity, facing_left, width, floor_y)
+
+func _draw_helmet_fragment(at: Vector2, piece_width: float, column: int, row: int,
+		opacity: float, flip: bool, width: float, floor_y: float) -> void:
+	var piece_size := Vector2(piece_width, roundf(piece_width * FRAGMENT_TILE.y / FRAGMENT_TILE.x))
+	var corner := (at - piece_size * 0.5).round().clamp(
+		Vector2(0, -PIXELS_PER_CELL), Vector2(width, floor_y) - piece_size)
+	var source := Rect2(Vector2(column, row) * FRAGMENT_TILE, FRAGMENT_TILE)
+	if flip:
+		piece_size.x = -piece_size.x
+	draw_texture_rect_region(HELMET_FRAGMENTS, Rect2(corner, piece_size), source, Color(Color.WHITE, opacity))
+
+func _draw_helmet_flash(contact: Vector2, age: float, width: float) -> void:
+	var progress := age / HELMET_FLASH_TIME
+	var alpha: float = 1.0 - smoothstep(0.40, 1.0, progress)
+	var at := Vector2(clampf(contact.x, 16.0, width - 16.0), contact.y - 2.0)
+	var rays := PackedVector2Array([Vector2(-16, -2), Vector2(-6, -4), Vector2(-10, -11),
+		Vector2(-2, -6), Vector2(0, -14), Vector2(3, -6), Vector2(10, -11),
+		Vector2(7, -4), Vector2(16, -2), Vector2(7, 0), Vector2(9, 3),
+		Vector2(0, 1), Vector2(-9, 3), Vector2(-7, 0)])
+	for index in range(rays.size()):
+		rays[index] = at + (rays[index] * lerpf(0.88, 1.08, progress)).round()
+	draw_colored_polygon(rays, Color(Color("e88a37"), alpha))
+	draw_colored_polygon(PackedVector2Array([at + Vector2(-10, -2), at + Vector2(-2, -4),
+		at + Vector2(0, -10), at + Vector2(2, -4), at + Vector2(10, -2),
+		at + Vector2(0, 0)]), Color(Color("ffe7a1"), alpha))
 
 func _draw_boots_exhaust(bounds: Rect2, floor_y: float) -> void:
 	if boots_exhaust_life <= 0.0 or model.grounded or not model.boots_equipped:
@@ -546,6 +636,8 @@ func _draw_field_objects() -> void:
 		_draw_hero(bounds, hero_frame())
 	else:
 		_draw_crush(impact, width)
+	if active:
+		_draw_helmet_impacts(width, floor_y)
 	if phase == "collapse":
 		_draw_clear_dust(width, floor_y, collapse_elapsed)
 

@@ -15,6 +15,7 @@ var sliders := {}
 var panel: PanelContainer
 var score_label: Label
 var boots_count: Label
+var helmet_count: Label
 var pointers := {}
 var jump_pointers := {}
 var jump_pending := false
@@ -32,6 +33,7 @@ var qa_result_demo := false
 var qa_statistics_preview: StackProfile
 var qa_crane_preview := false
 var qa_crane_releases: Array[Dictionary] = []
+var qa_helmet_hits: Array[Dictionary] = []
 var qa_animation_held := false
 const CREAM := Color("f4e3ba")
 const MINT := Color("8dc6ac")
@@ -143,6 +145,7 @@ func _clear_ui() -> void:
 	panel = null
 	score_label = null
 	boots_count = null
+	helmet_count = null
 
 
 func _show_screen(value: String) -> void:
@@ -174,17 +177,14 @@ func _show_screen(value: String) -> void:
 			_button(content, "Настройки", "settings", func(): _show_screen("settings"))
 		"paused":
 			_heading(content, "Пауза")
-			EQUIPMENT_VIEW.build_pause(panel, content, _compact_panel(), model.boots_equipped,
-				model.boots_charges, StackSimulation.BOOTS_MAX_CHARGES, _text)
+			EQUIPMENT_VIEW.build_pause(panel, content, _compact_panel(), model, _text)
 			_button(content, "Продолжить", "resume", func(): _show_screen("playing"))
 			_button(content, "Начать заново", "restart", _start_game)
 			_button(content, "Главное меню", "home", func(): _show_screen("menu"))
 		"equipment":
 			var offer := panel
-			var previous := model.boots_charges if model.boots_equipped else -1
-			EQUIPMENT_VIEW.build_offer(panel, content, _compact_panel(), previous,
-				StackSimulation.BOOTS_MAX_CHARGES, _button, _text,
-				_resolve_equipment.bind(true, offer), _resolve_equipment.bind(false, offer))
+			var resolve := func(item: String): _resolve_equipment(item, offer)
+			EQUIPMENT_VIEW.build_offer(panel, content, _compact_panel(), model, _button, _text, resolve)
 		"over":
 			_heading(content, "Смена окончена")
 			_result_score(content)
@@ -253,7 +253,7 @@ func _position_panel() -> void:
 
 func _panel_width() -> float:
 	if screen == "equipment":
-		return minf(330, size.x - 32)
+		return minf(440 if model.equipment_options().size() > 1 else 330, size.x - 32)
 	if screen == "paused":
 		return minf(360, size.x - 32)
 	return minf(720 if _wide_panel() and screen != "menu" else 440, size.x - 32)
@@ -390,8 +390,9 @@ func _build_hud() -> void:
 	score_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_update_hud_score()
 	ui.add_child(score_label)
-	boots_count = EQUIPMENT_VIEW.build_hud(ui)
-	EQUIPMENT_VIEW.update_hud(boots_count, model.boots_equipped, model.boots_charges)
+	boots_count = EQUIPMENT_VIEW.build_hud(ui, "boots")
+	helmet_count = EQUIPMENT_VIEW.build_hud(ui, "helmet")
+	EQUIPMENT_VIEW.update_hud(boots_count, helmet_count, model)
 	if screen == "equipment":
 		return
 	var pause := _button(ui, "II", "pause", _pause)
@@ -420,6 +421,7 @@ func _start_game() -> void:
 	qa_hero_pose = false
 	qa_crane_preview = false
 	qa_crane_releases.clear()
+	qa_helmet_hits.clear()
 	qa_animation_held = false
 	crush_elapsed = -1.0
 	session += 1
@@ -428,6 +430,7 @@ func _start_game() -> void:
 	world.model = model
 	world.caption_life = 0.0
 	world.boots_exhaust_life = 0.0
+	world.helmet_impacts.clear()
 	world._layout()
 	result_saved = false
 	_show_screen("playing")
@@ -438,10 +441,10 @@ func _pause() -> void:
 		_show_screen("paused")
 
 
-func _resolve_equipment(accept: bool, offer: PanelContainer) -> void:
+func _resolve_equipment(item: String, offer: PanelContainer) -> void:
 	if screen != "equipment" or panel != offer:
 		return
-	model.resolve_equipment(accept)
+	model.resolve_equipment(item)
 	_show_screen("equipment" if model.equipment_pending else "playing")
 
 
@@ -555,6 +558,13 @@ func _advance_game(delta: float) -> void:
 			"air_jump":
 				sound.effect("jump")
 				world.boots_jump_effect()
+			"helmet_hit":
+				sound.effect("helmet_break" if event.helmet_broke else "helmet_hit")
+				world.helmet_hit(event)
+				if qa_enabled:
+					qa_helmet_hits.append(event)
+					if qa_helmet_hits.size() > 24:
+						qa_helmet_hits.pop_front()
 			"land": sound.effect("land")
 			"drop":
 				if qa_enabled:
@@ -578,7 +588,7 @@ func _advance_game(delta: float) -> void:
 		return
 	if score_label != null:
 		_update_hud_score()
-		EQUIPMENT_VIEW.update_hud(boots_count, model.boots_equipped, model.boots_charges)
+		EQUIPMENT_VIEW.update_hud(boots_count, helmet_count, model)
 
 
 func _background_demo() -> bool:
@@ -665,19 +675,17 @@ func _publish_qa() -> void:
 		var trolley := world.crane_trolley_center(index)
 		trolleys.append([trolley.x, trolley.y])
 	var rail := world.crane_rail
-	var boots_hud := {}
-	if boots_count != null and boots_count.is_visible_in_tree():
-		var plate := boots_count.get_parent().get_parent() as Control
-		var bounds := plate.get_global_rect()
-		boots_hud = {"text": boots_count.text,
-			"rect": [bounds.position.x, bounds.position.y, bounds.size.x, bounds.size.y]}
 	var status := {"ready": true, "screen": screen, "score": model.score,
-		"lines": model.lines, "loss_reason": model.loss_reason,
+		"lines": model.lines, "cleared_crates": model.cleared_crates, "loss_reason": model.loss_reason,
 		"session": session, "ticks": model.ticks, "state": model.state,
 		"animation_held": qa_animation_held,
 		"jump_pending": jump_pending,
 		"equipment_rows": model.equipment_rows, "equipment_pending": model.equipment_pending,
-		"boots_equipped": model.boots_equipped, "boots_charges": model.boots_charges, "boots_hud": boots_hud,
+		"equipment_options": model.equipment_options() if model.equipment_pending else [],
+		"boots_equipped": model.boots_equipped, "boots_charges": model.boots_charges,
+		"boots_hud": _gear_hud_snapshot(boots_count),
+		"helmet_charges": model.helmet_charges, "helmet_hud": _gear_hud_snapshot(helmet_count),
+		"helmet_hits": qa_helmet_hits,
 		"clear_animation": {"phase": world.clear_animation_phase(), "elapsed": world.model.clear_elapsed, "ids": retiring_ids},
 		"crush_animation": {"active": screen in ["playing", "paused"] and crush_elapsed >= 0.0,
 			"progress": world.crush_progress, "impact_crate": world.model.impact_crate_id},
@@ -712,6 +720,14 @@ func _publish_qa() -> void:
 			"music_muted": AudioServer.is_bus_mute(AudioServer.get_bus_index("Music")),
 			"effects_muted": AudioServer.is_bus_mute(AudioServer.get_bus_index("Effects"))}}
 	JavaScriptBridge.eval("window.stackAttackState = " + JSON.stringify(status))
+
+
+func _gear_hud_snapshot(count: Label) -> Dictionary:
+	if count == null or not count.is_visible_in_tree():
+		return {}
+	var plate := count.get_parent().get_parent() as Control
+	var bounds := plate.get_global_rect()
+	return {"text": count.text, "rect": [bounds.position.x, bounds.position.y, bounds.size.x, bounds.size.y]}
 
 
 func _missing_menu_glyphs() -> String:
@@ -832,6 +848,10 @@ func _qa_command() -> void:
 		return
 	if screen != "playing":
 		return
+	if str(request.get("scenario", "")) == "helmet_board":
+		if crush_elapsed < 0.0:
+			_qa_set_helmet_board(request)
+		return
 	if str(request.get("scenario", "")) in ["boots_rows", "boots_jump"]:
 		var count := clampi(int(request.get("count", 1)), 1, 6) if request.scenario == "boots_rows" else 0
 		_qa_set_equipment_board(count, bool(request.get("animation_hold", false)))
@@ -865,7 +885,7 @@ func _qa_command() -> void:
 		model.boots_equipped = bool(request.get("boots", false))
 		model.boots_charges = StackSimulation.BOOTS_MAX_CHARGES if model.boots_equipped else 0
 		world.boots_exhaust_life = 0.0
-		EQUIPMENT_VIEW.update_hud(boots_count, model.boots_equipped, model.boots_charges)
+		EQUIPMENT_VIEW.update_hud(boots_count, helmet_count, model)
 		if pose == "push":
 			model.add_crate(model.player.x + TUNING.player_width if model.facing > 0 else model.player.x - 1, float(TUNING.rows - 1))
 		world.clock = 0.15 if pose == "walk_recover" else 0.0
@@ -910,21 +930,30 @@ func _qa_command() -> void:
 			model.cranes[1].x = 6.5
 
 
-func _qa_set_equipment_board(row_count: int, hold: bool) -> void:
+func _qa_prepare_equipment_board(hold: bool) -> void:
 	qa_hero_pose = false
 	qa_crane_preview = false
 	qa_animation_held = hold
+	qa_helmet_hits.clear()
 	world.caption_life = 0.0
+	world.boots_exhaust_life = 0.0
+	world.helmet_impacts.clear()
 	_release_controls()
 	model.crates.clear()
 	model.cranes_enabled = false
 	model.cranes[0].x = 2.5
 	model.cranes[1].x = 7.5
-	model.player = Vector2(4.3, TUNING.rows - TUNING.player_height - row_count)
+	model.player = Vector2(4.3, TUNING.rows - TUNING.player_height)
 	model.player_velocity = Vector2.ZERO
 	model.grounded = true
 	model.state = "playing"
 	model.chain = 0
+	model.accumulator = 0.0
+
+
+func _qa_set_equipment_board(row_count: int, hold: bool) -> void:
+	_qa_prepare_equipment_board(hold)
+	model.player.y -= row_count
 	for row in range(row_count):
 		for column in range(TUNING.columns):
 			model.add_crate(float(column), float(TUNING.rows - 1 - row))
@@ -932,3 +961,24 @@ func _qa_set_equipment_board(row_count: int, hold: bool) -> void:
 	for row in range(stacks.size()):
 		for column in stacks[row]:
 			model.add_crate(float(column), float(TUNING.rows - 1 - row_count - row))
+
+
+func _qa_set_helmet_board(request: Dictionary) -> void:
+	_qa_prepare_equipment_board(bool(request.get("animation_hold", false)))
+	var floor_y := TUNING.rows - TUNING.player_height
+	var spawn: Variant = request.get("player", [])
+	if spawn is Array and spawn.size() == 2:
+		model.player = Vector2(clampf(float(spawn[0]), 0.0, TUNING.columns - TUNING.player_width),
+			clampf(float(spawn[1]), -1.0, floor_y))
+	var velocity: Variant = request.get("velocity", [])
+	if velocity is Array and velocity.size() == 2:
+		model.player_velocity = Vector2(clampf(float(velocity[0]), -TUNING.player_speed, TUNING.player_speed),
+			clampf(float(velocity[1]), -TUNING.jump_speed, 12.0))
+	model.grounded = is_equal_approx(model.player.y, floor_y) and is_zero_approx(model.player_velocity.y)
+	var crates: Variant = request.get("crates", [])
+	if crates is Array:
+		for placement in crates.slice(0, 48):
+			if placement is Array and placement.size() == 3:
+				model.add_crate(clampf(float(placement[0]), 0.0, TUNING.columns - 1.0),
+					clampf(float(placement[1]), -1.0, TUNING.rows - 1.0),
+					clampf(float(placement[2]), -TUNING.crate_fall_speed, TUNING.crate_fall_speed))

@@ -49,3 +49,23 @@ noise = random.Random(39418)
 write('land', .13, lambda t: (math.sin(2 * math.pi * 95 * t) * .18 + noise.uniform(-.12, .12)) * math.exp(-t * 30))
 write('line', .5, lambda t: sum(math.sin(2 * math.pi * pitch(n) * t) for n in [72, 76, 79]) * .12 * math.exp(-t * 6))
 write('over', .65, lambda t: math.sin(2 * math.pi * (180 * t - 70 * t * t)) * .2 * math.exp(-t * 5))
+
+
+def helmet_impact(breaks):
+    noise = random.Random(42931)
+
+    def sample(t):
+        crack = noise.uniform(-.32, .32) * math.exp(-t * 44)
+        wood = math.sin(2 * math.pi * 165 * t) * .24 * math.exp(-t * 33)
+        shell = 0
+        if breaks and t > .035:
+            after = t - .035
+            shell = (math.sin(2 * math.pi * 750 * after) + .45 * math.sin(2 * math.pi * 1060 * after))
+            shell *= .15 * math.exp(-after * 19)
+        return crack + wood + shell
+
+    return sample
+
+
+write('helmet_hit', .21, helmet_impact(False))
+write('helmet_break', .28, helmet_impact(True))

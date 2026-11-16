@@ -25,7 +25,7 @@ func setup(settings: StackProfile) -> void:
 		player.playback_type = AudioServer.PLAYBACK_TYPE_STREAM
 		add_child(player)
 		effects_players.append(player)
-	for name in ["click", "jump", "land", "line", "over"]:
+	for name in ["click", "jump", "land", "line", "over", "helmet_hit", "helmet_break"]:
 		sounds[name] = load("res://audio/" + name + ".wav")
 	apply_volumes()
 

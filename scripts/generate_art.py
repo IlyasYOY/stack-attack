@@ -69,7 +69,37 @@ def draw_rocket_boot(draw, at):
                 draw.point((at[0] + x, at[1] + y), fill=ROCKET_BOOT_PALETTE[pixel])
 
 
-def hero_frame(frame, rocket_boots=False):
+def hard_hat():
+    image = Image.new('RGBA', (32, 16))
+    d = ImageDraw.Draw(image)
+    d.polygon([(3, 12), (3, 10), (6, 8), (7, 5), (10, 2), (13, 1),
+               (20, 1), (24, 2), (27, 5), (28, 8), (30, 9), (31, 12),
+               (29, 13), (22, 12), (15, 12), (5, 14), (3, 13)], fill=INK)
+    d.polygon([(7, 9), (8, 5), (11, 3), (14, 2), (20, 2), (24, 3),
+               (26, 5), (27, 8), (22, 10), (10, 11)], fill='#287c80')
+    d.polygon([(9, 6), (12, 3), (16, 2), (20, 2), (22, 3), (18, 3),
+               (16, 4), (13, 4), (11, 6)], fill='#65b4a9')
+    d.line([(8, 8), (10, 7), (10, 6)], fill='#4e9d99')
+    d.line([(13, 3), (16, 3)], fill='#c0e4cd')
+    d.polygon([(8, 9), (16, 8), (20, 8), (24, 7), (27, 8), (24, 10),
+               (11, 11), (7, 12)], fill='#21545f')
+    d.polygon([(4, 11), (10, 9), (16, 8), (23, 8), (28, 9), (30, 10),
+               (30, 11), (22, 10), (15, 10), (5, 13), (4, 13)], fill='#337d82')
+    d.line([(5, 11), (10, 10), (16, 9), (23, 9), (28, 10)], fill='#8fd1bc')
+    d.polygon([(20, 5), (22, 3), (26, 3), (28, 5), (28, 8), (26, 10),
+               (22, 10), (20, 8)], fill=INK)
+    d.polygon([(21, 5), (23, 4), (26, 4), (27, 5), (27, 8), (25, 9),
+               (22, 9), (21, 8)], fill='#9b542c')
+    d.polygon([(22, 6), (23, 5), (26, 5), (26, 8), (23, 8), (22, 7)], fill='#ffbe49')
+    d.rectangle((23, 5, 25, 7), fill='#ffdf83')
+    d.line((23, 5, 24, 5), fill='#fff3be')
+    return image
+
+
+HELMET = hard_hat()
+
+
+def hero_frame(frame, rocket_boots=False, helmet=False):
     image = Image.new('RGBA', (32, 48))
     d = ImageDraw.Draw(image)
     d.rectangle((9, 37, 23, 41), fill=INK)
@@ -124,28 +154,90 @@ def hero_frame(frame, rocket_boots=False):
     d.rectangle((22, 15, 23, 17), fill='#1a2c32')
     d.rectangle((25, 15, 27, 18), fill='#e5a674')
     d.point((18, 19), fill='#b67352')
-    d.rectangle((7, 1, 23, 4), fill=INK)
-    d.rectangle((5, 4, 25, 10), fill=INK)
-    d.rectangle((8, 2, 21, 3), fill='#5ea9a3')
-    d.rectangle((6, 5, 24, 9), fill='#277b82')
-    d.line((8, 4, 21, 4), fill='#77c1b1')
-    d.rectangle((7, 9, 28, 11), fill='#123f50')
-    d.line((9, 9, 27, 9), fill='#65b0a7')
-    for x in [13, 21]:
-        d.rectangle((x, 5, x + 5, 9), fill='#634934')
-        d.rectangle((x + 1, 5, x + 4, 8), fill='#d1a159')
-        d.rectangle((x + 2, 6, x + 3, 7), fill='#e5f2da')
-    d.rectangle((19, 6, 20, 7), fill='#987047')
+    if helmet:
+        image.paste(HELMET, (0, 0), HELMET)
+    else:
+        d.rectangle((7, 1, 23, 4), fill=INK)
+        d.rectangle((5, 4, 25, 10), fill=INK)
+        d.rectangle((8, 2, 21, 3), fill='#5ea9a3')
+        d.rectangle((6, 5, 24, 9), fill='#277b82')
+        d.line((8, 4, 21, 4), fill='#77c1b1')
+        d.rectangle((7, 9, 28, 11), fill='#123f50')
+        d.line((9, 9, 27, 9), fill='#65b0a7')
+        for x in [13, 21]:
+            d.rectangle((x, 5, x + 5, 9), fill='#634934')
+            d.rectangle((x + 1, 5, x + 4, 8), fill='#d1a159')
+            d.rectangle((x + 2, 6, x + 3, 7), fill='#e5f2da')
+        d.rectangle((19, 6, 20, 7), fill='#987047')
     d.rectangle((6, 29, 9, 32), fill='#f2be88')
     return image
 
 
 frames = ['idle', 'walk', 'jump', 'push']
 atlas = Image.new('RGBA', (32 * len(frames), 48))
+helmet_atlas = Image.new('RGBA', (32 * len(frames), 96))
 for column, frame in enumerate(frames):
     hero_frame(frame).save(ROOT / f'hero_{frame}.png')
     atlas.paste(hero_frame(frame, rocket_boots=True), (column * 32, 0))
+    for row, rocket_boots in enumerate((False, True)):
+        helmet_atlas.paste(hero_frame(frame, rocket_boots=rocket_boots, helmet=True), (column * 32, row * 48))
 atlas.save(ROOT / 'hero_rocket_boots.png')
+helmet_atlas.save(ROOT / 'hero_helmet.png')
+
+icon = Image.new('RGBA', (32, 32))
+icon.paste(HELMET, (-1, 8))
+icon.save(ROOT / 'helmet.png')
+
+
+def draw_plank(image):
+    d = ImageDraw.Draw(image)
+    d.polygon([(1, 10), (14, 1), (16, 3), (18, 3), (17, 6), (19, 7),
+               (17, 8), (16, 10), (13, 10), (4, 15), (2, 14)], fill=INK)
+    d.polygon([(2, 10), (14, 2), (16, 4), (15, 6), (17, 7), (15, 9),
+               (12, 9), (4, 14), (3, 13)], fill='#b97035')
+    d.line([(3, 10), (14, 3), (15, 4)], fill='#f5c178')
+    d.line([(5, 12), (12, 8), (15, 7)], fill='#df9654')
+    d.line([(7, 9), (10, 7), (13, 6)], fill='#8c502c')
+    d.point((4, 11), fill='#edb96e')
+
+
+def break_hard_hat():
+    halves = [Image.new('RGBA', (20, 16)), Image.new('RGBA', (20, 16))]
+    crack = [19, 19, 18, 18, 17, 18, 16, 15, 16, 14, 13, 14, 13, 12, 12, 12]
+    for y, seam in enumerate(crack):
+        for x in range(3, 32):
+            pixel = HELMET.getpixel((x, y))
+            if not pixel[3]:
+                continue
+            if x < seam:
+                halves[0].putpixel((x, y + 1), pixel)
+            else:
+                halves[1].putpixel((x - 12, y + 1), pixel)
+        # A jagged rim shows through after the cap separates.
+        if HELMET.getpixel((seam, y))[3]:
+            halves[1].putpixel((seam - 12, y + 1), (16, 39, 51, 255))
+        if HELMET.getpixel((seam - 1, y))[3]:
+            halves[0].putpixel((seam - 1, y + 1), (16, 39, 51, 255))
+            if y in (3, 4, 6, 9):
+                halves[0].putpixel((seam - 2, y + 1), (168, 218, 193, 255))
+    return halves
+
+
+fragments = Image.new('RGBA', (80, 32))
+plank = Image.new('RGBA', (20, 16))
+draw_plank(plank)
+fragments.paste(plank, (0, 0))
+fragments.paste(plank.transpose(Image.Transpose.FLIP_LEFT_RIGHT), (20, 0))
+d = ImageDraw.Draw(fragments)
+d.polygon([(41, 7), (54, 1), (58, 5), (56, 13), (45, 15)], fill=INK)
+d.polygon([(44, 7), (53, 3), (56, 6), (54, 11), (46, 13)], fill='#d9954d')
+d.line([(44, 7), (53, 3), (55, 5)], fill='#f5c178', width=2)
+d.polygon([(61, 5), (67, 1), (79, 6), (73, 15), (65, 12)], fill=INK)
+d.polygon([(63, 6), (67, 3), (76, 7), (72, 12), (67, 11)], fill='#af662f')
+d.line([(63, 6), (67, 3), (75, 6)], fill='#edb96e', width=2)
+for index, half in enumerate(break_hard_hat()):
+    fragments.paste(half, (index * 20, 16))
+fragments.save(ROOT / 'helmet_fragments.png')
 
 image = Image.new('RGBA', (32, 32))
 d = ImageDraw.Draw(image)

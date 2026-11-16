@@ -48,6 +48,9 @@ func run() -> void:
 	clearing()
 	equipment_rewards()
 	equipment_jumps()
+	helmet_falling_hits()
+	helmet_underside_hits()
+	helmet_multiple_hits()
 	loss_conditions()
 	crush_beside_support()
 	crane_cycles()
@@ -285,7 +288,7 @@ func equipment_rewards() -> void:
 
 	var game := empty(4)
 	game.equipment_enabled = true
-	game.resolve_equipment(true)
+	game.resolve_equipment("boots")
 	check(not game.boots_equipped, "Resolving equipment without an offer must have no effect")
 	add_full_rows(game, 4)
 	game.advance(3.0, 0)
@@ -306,44 +309,75 @@ func equipment_rewards() -> void:
 		"A long frame must stop on the first playable boundary after the final collapse")
 	check(game.equipment_pending and game.equipment_rows == 7 and game.accumulator == 0.0,
 		"Opening the first offer must preserve the second threshold and surplus, and discard leftover frame time")
+	check(game.equipment_options() == ["boots", "helmet"], "The first offer must make both equipment slots available")
 	var frozen := [game.ticks, game.elapsed, game.player, game.player_velocity, game.cranes.duplicate(true), game._rng.state]
 	game.advance(20.0, 1, true)
 	check(frozen == [game.ticks, game.elapsed, game.player, game.player_velocity, game.cranes, game._rng.state],
 		"An open offer must ignore elapsed wall time, movement and jumps")
-	game.resolve_equipment(false)
+	game.resolve_equipment("unknown")
+	check(game.equipment_pending and game.equipment_rows == 7 and game.boots_charges == 0 and game.helmet_charges == 0,
+		"An invalid item must leave the current offer open and the next threshold queued")
+	game.resolve_equipment("")
 	check(game.equipment_pending and not game.boots_equipped and game.equipment_rows == 2 and game.ticks == frozen[0],
 		"Skipping the first offer must immediately present the next one from the same combo")
-	game.resolve_equipment(true)
-	check(not game.equipment_pending and game.boots_equipped and game.boots_charges == Simulation.BOOTS_MAX_CHARGES,
-		"Accepting an offer must equip ten charges")
+	game.resolve_equipment("boots")
+	check(not game.equipment_pending and game.boots_equipped
+		and game.boots_charges == Simulation.BOOTS_MAX_CHARGES and game.helmet_charges == 0,
+		"Choosing boots must equip ten charges and spend the offer on the chosen slot")
 	game.advance(Simulation.STEP, 0)
 	check(game.ticks == frozen[0] + 1 and game.grounded and game.events.is_empty(),
 		"Play must resume on a fresh tick without input or time carried through the reward")
 
-	start = game.ticks
 	add_full_rows(game, 9)
 	game.advance(5.0, 0)
-	check(not game.equipment_pending and game.equipment_rows == 1 and game.boots_charges == 10
-		and game.ticks == start + 600, "Full boots must silently consume every crossed threshold and retain surplus")
+	check(game.equipment_pending and game.equipment_rows == 6 and game.equipment_options() == ["helmet"],
+		"Full boots must leave the helmet available and preserve queued thresholds")
+	game.resolve_equipment("boots")
+	check(game.equipment_pending and game.equipment_rows == 6, "Choosing an unavailable full item must leave the offer open")
+	game.resolve_equipment("helmet")
+	check(not game.equipment_pending and game.equipment_rows == 1 and game.equipment_options().is_empty()
+		and game.helmet_charges == Simulation.HELMET_MAX_CHARGES and game.boots_charges == 10,
+		"Choosing the helmet must keep the boots, and reaching full capacity must consume the queued threshold")
+	start = game.ticks
+	add_full_rows(game, 10)
+	game.advance(5.0, 0)
+	check(not game.equipment_pending and game.equipment_rows == 1 and game.ticks == start + 600,
+		"With both items full, a combo must consume all crossed thresholds without pausing or dropping the remainder")
+
+	game.helmet_charges -= 1
+	add_full_rows(game, 4)
+	game.advance(3.0, 0)
+	check(game.equipment_pending and game.equipment_options() == ["helmet"],
+		"A partly spent helmet must be available while the boots are full")
+	game.resolve_equipment("")
+	check(not game.equipment_pending and game.helmet_charges == 2 and game.boots_charges == 10,
+		"Skipping the helmet must keep the two remaining charges and the boots")
+	add_full_rows(game, 5)
+	game.advance(3.0, 0)
+	game.resolve_equipment("helmet")
+	check(not game.equipment_pending and game.helmet_charges == 3 and game.boots_charges == 10,
+		"A later helmet reward must restore three charges without affecting the boots")
+
 	game.advance(Simulation.STEP, 0, true)
 	game.advance(Simulation.STEP, 0, true)
 	game.advance(1.0, 0)
-	add_full_rows(game, 4)
+	add_full_rows(game, 5)
 	game.advance(3.0, 0)
-	check(game.equipment_pending and game.equipment_rows == 0 and game.boots_charges == 9,
-		"Partially spent boots must get an offer at the next threshold")
-	game.resolve_equipment(false)
+	check(game.equipment_pending and game.equipment_rows == 0 and game.boots_charges == 9
+		and game.equipment_options() == ["boots"], "Partially spent boots must remain available while the helmet is full")
+	game.resolve_equipment("")
 	check(not game.equipment_pending and game.boots_equipped and game.boots_charges == 9,
 		"Skipping a replacement must keep the equipped pair and its remaining charges")
 	add_full_rows(game, 10)
 	game.advance(5.0, 0)
 	check(game.equipment_pending and game.equipment_rows == 5, "An earlier skip must not prevent future offers")
-	game.resolve_equipment(true)
+	game.resolve_equipment("boots")
 	check(not game.equipment_pending and game.equipment_rows == 0 and game.boots_charges == 10,
 		"A replacement must restore ten charges and silently consume the next threshold at full capacity")
 	game.reset(7481)
 	check(game.equipment_enabled and not game.equipment_pending and not game.boots_equipped
-		and game.boots_charges == 0 and game.equipment_rows == 0, "Reset must retain the opt-in and clear the run's equipment")
+		and game.boots_charges == 0 and game.helmet_charges == 0 and game.equipment_rows == 0,
+		"Reset must retain the opt-in and clear both equipment slots")
 
 
 func equipment_jumps() -> void:
@@ -351,7 +385,7 @@ func equipment_jumps() -> void:
 	game.equipment_enabled = true
 	add_full_rows(game, 5)
 	game.advance(3.0, 0)
-	game.resolve_equipment(true)
+	game.resolve_equipment("boots")
 	game.advance(Simulation.STEP, 0)
 	for charges in range(Simulation.BOOTS_MAX_CHARGES, 0, -1):
 		game.advance(Simulation.STEP, 0, true)
@@ -376,7 +410,7 @@ func equipment_jumps() -> void:
 	add_full_rows(game, 5)
 	game.advance(3.0, 0)
 	check(game.equipment_pending, "A new offer must be available after the boots are exhausted")
-	game.resolve_equipment(true)
+	game.resolve_equipment("boots")
 
 	for row in range(7, game.tuning.rows):
 		game.add_crate(2, row)
@@ -397,6 +431,162 @@ func equipment_jumps() -> void:
 	game.advance(Simulation.STEP, 0, true)
 	check(game.events == [{"type": "air_jump"}] and game.boots_charges == 9,
 		"Coyote takeoff must qualify for the second jump")
+
+
+func helmet_falling_hits() -> void:
+	var game := empty()
+	game.player.x = 4.2
+	game.helmet_charges = Simulation.HELMET_MAX_CHARGES
+	var contact_y := game.player.y - 1.0
+	for remaining in range(Simulation.HELMET_MAX_CHARGES - 1, -1, -1):
+		var crate := game.add_crate(4.0, contact_y - .025, 6.0)
+		game.advance(Simulation.STEP, 0)
+		check(game.state == "playing" and game.grounded and game.impact_crate_id == -1
+			and game.helmet_charges == remaining and game.crates.is_empty(),
+			"Every charge, including the last, must protect and remove exactly one falling crate")
+		check(game.events == [{"type": "helmet_hit", "crate_id": int(crate.id), "x": 4.0,
+			"y": contact_y, "player_x": game.player.x, "player_y": game.player.y, "direction": "fall",
+			"helmet_broke": remaining == 0, "charges": remaining, "tick": game.ticks}],
+			"A head strike must report the collision position and the remaining charges exactly once")
+	check(game.lines == 0 and game.score == 0 and game.cleared_crates == 0 and game.best_combo == 0,
+		"Individual crate destruction must not count towards clear statistics")
+	var fatal := game.add_crate(4.0, contact_y - .025, 6.0)
+	game.advance(Simulation.STEP, 0)
+	check(game.state == "over" and game.impact_crate_id == int(fatal.id) and game.crates.has(fatal)
+		and game.events == [{"type": "over", "reason": "crushed", "score": 0}],
+		"The next falling strike after helmet breakage must follow the normal crush path")
+
+	var side := empty()
+	side.helmet_charges = 3
+	side.player.x = 4 - side.tuning.player_width
+	var pushed := side.add_crate(4, 9.8, .2)
+	advance(side, .04, 1)
+	check(float(pushed.x) > 4.01 and side.helmet_charges == 3 and side.state == "playing",
+		"Pushing the side of a falling crate must keep ordinary push behavior and spend no charge")
+	var landing := empty()
+	landing.helmet_charges = 3
+	landing.player = Vector2(4.2, 8.9)
+	var support := landing.add_crate(4, 10)
+	advance(landing, .3)
+	check(landing.grounded and is_equal_approx(landing.player.y + landing.tuning.player_height, float(support.y))
+		and landing.helmet_charges == 3 and landing.crates.has(support),
+		"Landing on top of a crate must keep it as ordinary support")
+	var clearing_game := empty(4, 6)
+	clearing_game.helmet_charges = 3
+	add_full_rows(clearing_game, 2)
+	clearing_game.advance(2.0, 0)
+	check(clearing_game.helmet_charges == 3 and clearing_game.lines == 2 and clearing_game.score == 200
+		and clearing_game.cleared_crates == 8 and clearing_game.best_combo == 2,
+		"Clear and collapse must preserve the helmet and count only their own line crates")
+
+
+func helmet_underside_hits() -> void:
+	for input_event in ["jump", "air_jump"]:
+		for charges in [0, 1]:
+			var game := empty()
+			game.equipment_enabled = true
+			game.helmet_charges = charges
+			game.boots_equipped = true
+			game.boots_charges = Simulation.BOOTS_MAX_CHARGES
+			if input_event == "air_jump":
+				game.advance(Simulation.STEP, 0, true)
+			var start_y := game.player.y
+			var crate := game.add_crate(game.player.x, start_y - 1.03)
+			var contact_y := float(crate.y) + 1.0
+			game.advance(Simulation.STEP, 0, true)
+			var expected: Array[Dictionary] = [{"type": input_event}]
+			if charges == 1:
+				expected.append({"type": "helmet_hit", "crate_id": int(crate.id), "x": float(crate.x),
+					"y": contact_y - 1.0, "player_x": game.player.x, "player_y": contact_y, "direction": "jump",
+					"helmet_broke": true, "charges": 0, "tick": game.ticks})
+				var jump_velocity := -game.tuning.jump_speed + game.tuning.gravity * Simulation.STEP
+				check(game.crates.is_empty() and game.helmet_charges == 0 and game.player.y < contact_y
+					and is_equal_approx(game.player.y, start_y + jump_velocity * Simulation.STEP)
+					and is_equal_approx(game.player_velocity.y, jump_velocity),
+					"A rising helmet hit must break the crate and continue at full jump velocity")
+			else:
+				check(game.crates.has(crate) and game.player_velocity.y == 0.0 and is_equal_approx(game.player.y, contact_y),
+					"Without a helmet a rising collision must stop at the underside")
+			check(game.events == expected and game.boots_equipped and not game.grounded
+				and game.boots_charges == (9 if input_event == "air_jump" else 10),
+				"Ordinary and rocket jump collisions must retain their independent inputs and charge costs")
+
+	# An accelerated test jump crosses two separated undersides in one tick.
+	for charges in [1, 2]:
+		var game := empty()
+		game.helmet_charges = charges
+		game.tuning.jump_speed = 180.2
+		var farther := game.add_crate(2, 8.0897)
+		var nearer := game.add_crate(2, 9.09)
+		var farther_underside := float(farther.y) + 1.0
+		var farther_start_y := float(farther.y)
+		game.advance(Simulation.STEP, 0, true)
+		check(game.events.size() == charges + 1 and game.events[1].crate_id == nearer.id
+			and game.helmet_charges == 0 and not game.crates.has(nearer),
+			"The nearer underside must be hit before an earlier-stored farther crate")
+		if charges == 1:
+			check(game.crates == [farther] and is_equal_approx(float(farther.y), farther_start_y + game.tuning.crate_gravity * Simulation.STEP * Simulation.STEP)
+				and game.player_velocity.y == 0.0 and is_equal_approx(game.player.y, farther_underside),
+				"The unbroken upper crate must still block the jump and fall once its support is gone")
+		else:
+			check(game.crates.is_empty() and game.events[2].crate_id == farther.id
+				and game.player.y < farther_underside and game.player_velocity.y < 0.0,
+				"Both distinct swept undersides must consume charges in contact order")
+	var tied := empty()
+	tied.player.x = 1.72
+	tied.helmet_charges = 1
+	var earlier := tied.add_crate(1, 9.09)
+	var later := tied.add_crate(2, 9.09)
+	tied.crates.reverse()
+	tied.advance(Simulation.STEP, 0, true)
+	check(tied.crates == [later] and tied.events.size() == 2 and tied.events[1].crate_id == earlier.id,
+		"Equal upward contact heights must use crate ID rather than storage order")
+
+
+func simultaneous_fall(charges: int) -> StackSimulation:
+	var game := empty()
+	game.helmet_charges = charges
+	game.player.x = 1.72
+	var falling_y := game.player.y - 1.025
+	game.add_crate(1, falling_y, 6)
+	game.add_crate(2, falling_y, 6)
+	game.add_crate(1, falling_y - 1.005, 6)
+	return game
+
+
+func helmet_multiple_hits() -> void:
+	for charges in [1, 2]:
+		var game := simultaneous_fall(charges)
+		var first := game.crates[0]
+		var second := game.crates[1]
+		var upper := game.crates[2]
+		var upper_start_y := float(upper.y)
+		game.advance(Simulation.STEP, 0)
+		check(game.events.size() == 2 and game.events[0].crate_id == first.id
+			and game.events[0].charges == charges - 1 and game.events[0].tick == 1
+			and not game.crates.has(first) and game.helmet_charges == 0,
+			"The first contact must spend one charge and leave the next same-tick contact to resolve")
+		if charges == 1:
+			check(game.loss_reason == "crushed" and game.impact_crate_id == int(second.id)
+				and game.crates.has(second) and game.events[1] == {"type": "over", "reason": "crushed", "score": 0},
+				"The first fall can break the helmet without protecting against a second fall in the same tick")
+		else:
+			check(game.state == "playing" and game.events[1].type == "helmet_hit" and game.events[1].tick == 1
+				and game.events[1].crate_id == second.id and game.events[1].helmet_broke and game.crates == [upper]
+				and is_equal_approx(float(upper.y), upper_start_y + 6 * Simulation.STEP),
+				"The second charge must remove the next crate and leave the upper crate free to fall in the same tick")
+
+	var batched := simultaneous_fall(2)
+	var stepped := simultaneous_fall(2)
+	batched.advance(30 * Simulation.STEP, 0)
+	var stepped_events: Array[Dictionary] = []
+	for index in range(30):
+		stepped.advance(Simulation.STEP, 0)
+		stepped_events.append_array(stepped.events)
+	check(batched.state == "over" and batched.events.size() == 3 and batched.events == stepped_events
+		and batched.ticks == stepped.ticks and batched.player == stepped.player and batched.crates == stepped.crates
+		and batched.helmet_charges == stepped.helmet_charges and batched.impact_crate_id == stepped.impact_crate_id,
+		"Helmet strikes and the following loss must agree across different render frame sizes")
 
 
 func loss_conditions() -> void:
@@ -424,11 +614,13 @@ func loss_conditions() -> void:
 	check(crushed.impact_crate_id == -1, "Reset must discard the prior impact ID")
 	var full := empty(4, 6)
 	full.cranes_enabled = true
+	full.helmet_charges = 3
 	for row in range(6):
 		full.add_crate(0, row)
 	full.advance(1.0 / 120, 0)
 	check(full.state == "over" and full.loss_reason == "overflow" and full.impact_crate_id == -1,
 		"A settled tower at full field height blocks the cranes without reporting an impact")
+	check(full.helmet_charges == 3, "Overflow must not use a helmet charge")
 	check(full.cranes[0].x == -Simulation.CRANE_EDGE_MARGIN, "Overflow must stop the cranes before another release")
 
 
@@ -680,11 +872,12 @@ func app_flow() -> void:
 	check(app.screen == "menu" and app.buttons.has("play") and app.buttons.has("settings") and app.buttons.has("statistics"), "Main menu must offer the agreed screens")
 	var art_model = app.world.model
 	var art_snapshot := [art_model.player, art_model.score, art_model.crates.duplicate(true), art_model._rng.state, art_model.ticks]
-	for equipped in [false, true]:
-		check(StackWorldView.pause_portrait(equipped).get_size() == Vector2(32, 48),
-			"The pause portrait must preserve the full hero sprite canvas")
-		check(art_snapshot == [art_model.player, art_model.score, art_model.crates, art_model._rng.state, art_model.ticks],
-			"Equipment portraits must never mutate gameplay")
+	for boots in [false, true]:
+		for helmet in [false, true]:
+			check(StackWorldView.pause_portrait(boots, helmet).get_size() == Vector2(32, 48),
+				"Every equipment combination must preserve the full pause portrait canvas")
+			check(art_snapshot == [art_model.player, art_model.score, art_model.crates, art_model._rng.state, art_model.ticks],
+				"Equipment portraits must never mutate gameplay")
 	for pose in ["idle", "walk", "jump", "push"]:
 		check(app.world.HERO_TEXTURES[pose].get_size() == Vector2(32, 48), "All workshop poses must preserve the same full sprite canvas")
 	check(app.world.CRATE_TEXTURE.get_size() == Vector2(48, 48) and app.world.CRATE_TEXTURE.resource_path == "res://art/crate_wood.png", "All crates must use the one existing wooden appearance")
