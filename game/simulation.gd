@@ -49,6 +49,10 @@ var _pull_crate := {}
 var _pull_start_player_x := 0.0
 var _pull_start_crate_x := 0.0
 var _pull_returning := false
+var _pushed_crate_id := -1
+var _push_contact_id := -1
+var _sliding_push_direction := 0.0
+var _sliding_pull := false
 var _clear_ids: Array[int] = []
 var _collapse_started := false
 var _player_clear_start := Vector2.ZERO
@@ -62,6 +66,9 @@ func _init(settings: StackTuning = null, seed_value: int = 1) -> void:
 func reset(seed_value: int) -> void:
 	_rng.seed = seed_value
 	cancel_grab()
+	_pushed_crate_id = -1
+	_push_contact_id = -1
+	_sliding_push_direction = 0.0
 	crates.clear()
 	events.clear()
 	_next_id = 0
@@ -134,6 +141,8 @@ func advance(delta: float, axis: float, jump_pressed: bool = false, pull_held: b
 	events.clear()
 	if not pull_held:
 		release_pull_input()
+	if signf(axis) != _sliding_push_direction or _gloves_take_control(pull_held):
+		_sliding_push_direction = 0.0
 	if state == "over" or equipment_pending:
 		return
 	if _gloves_take_control(pull_held):
@@ -151,6 +160,14 @@ func advance(delta: float, axis: float, jump_pressed: bool = false, pull_held: b
 		if state == "over" or equipment_pending:
 			accumulator = 0.0
 			break
+
+
+func is_crate_sliding(axis: float, pull_held: bool) -> bool:
+	if state != "playing" or equipment_pending:
+		return false
+	if _gloves_take_control(pull_held):
+		return pull_held and _sliding_pull and grabbed_crate_id >= 0
+	return _sliding_push_direction != 0.0 and signf(axis) == _sliding_push_direction
 
 
 func equipment_options() -> Array[String]:
@@ -193,6 +210,9 @@ func _offer_equipment_if_due() -> void:
 
 func _tick(axis: float, pull_held: bool) -> void:
 	ticks += 1
+	_push_contact_id = -1
+	_sliding_push_direction = 0.0
+	_sliding_pull = false
 	if state == "clearing":
 		_advance_clear()
 		return
@@ -326,6 +346,7 @@ func _gloves_take_control(pull_held: bool) -> bool:
 
 func release_pull_input() -> void:
 	grabbed_crate_id = -1
+	_sliding_pull = false
 
 
 func cancel_grab() -> void:
@@ -388,7 +409,9 @@ func _move_with_gloves(pull_held: bool) -> void:
 		if not _pull_path_clear(_pull_crate, _pull_start_player_x, _pull_start_crate_x):
 			cancel_grab()
 			return
-	var offset := move_toward(float(_pull_crate.x) - _pull_start_crate_x, distance, tuning.push_speed * STEP)
+	var previous_offset := float(_pull_crate.x) - _pull_start_crate_x
+	var offset := move_toward(previous_offset, distance, tuning.push_speed * STEP)
+	_sliding_pull = pull_held and not _pull_returning and offset != previous_offset
 	player.x = _pull_start_player_x + offset
 	_pull_crate.x = _pull_start_crate_x + offset
 	_pull_crate.target_x = _pull_crate.x
@@ -439,7 +462,10 @@ func _land_player() -> void:
 
 
 func _try_push(crate: Dictionary, direction: int) -> bool:
-	if absf(float(crate.target_x) - float(crate.x)) > EPS:
+	var remaining := float(crate.target_x) - float(crate.x)
+	if absf(remaining) > EPS:
+		if int(crate.id) == _pushed_crate_id and remaining * direction > 0.0:
+			_push_contact_id = _pushed_crate_id
 		return false
 	for other in crates:
 		if absf(float(other.target_x) - float(other.x)) > EPS:
@@ -454,10 +480,12 @@ func _try_push(crate: Dictionary, direction: int) -> bool:
 			float(crate.y), 1.0, float(other.y), 1.0):
 			return false
 	crate.target_x = target
+	_pushed_crate_id = int(crate.id)
+	_push_contact_id = _pushed_crate_id
 	return true
 
 
-func _move_crate_horizontally(crate: Dictionary) -> void:
+func _move_crate_horizontally(crate: Dictionary) -> float:
 	# Revalidate the entire horizontal step at the CURRENT height. A push can
 	# start above a neighbour, then descend into its side before it finishes.
 	var old_x := float(crate.x)
@@ -476,6 +504,9 @@ func _move_crate_horizontally(crate: Dictionary) -> void:
 	if resolved != desired:
 		# Stop at contact instead of keeping a stale command inside the wall.
 		crate.target_x = resolved
+	if int(crate.id) == _pushed_crate_id and absf(float(crate.target_x) - resolved) <= EPS:
+		_pushed_crate_id = -1
+	return resolved - old_x if resolved == desired else 0.0
 
 
 func _move_crates() -> void:
@@ -484,7 +515,7 @@ func _move_crates() -> void:
 	var index := 0
 	while index < crates.size():
 		var crate := crates[index]
-		_move_crate_horizontally(crate)
+		var slide := _move_crate_horizontally(crate)
 		var old_bottom := float(crate.y) + 1.0
 		crate.vy = minf(float(crate.vy) + tuning.crate_gravity * STEP, tuning.crate_fall_speed)
 		var new_y := float(crate.y) + float(crate.vy) * STEP
@@ -516,6 +547,8 @@ func _move_crates() -> void:
 			impact_crate_id = int(crate.id)
 			_lose("crushed")
 			return
+		if int(crate.id) == _push_contact_id and _overlap(player.y, tuning.player_height, new_y, 1.0):
+			_sliding_push_direction = signf(slide)
 		index += 1
 
 

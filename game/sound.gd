@@ -1,10 +1,14 @@
 class_name StackSound
 extends Node
+const SLIDE_FADE_SECONDS := 0.03
+
 var profile: StackProfile
 var music_player: AudioStreamPlayer
+var slide_player: AudioStreamPlayer
 var effects_players: Array[AudioStreamPlayer] = []
 var unlocked := false
 var sounds := {}
+var _slide_gain := 0.0
 
 
 func setup(settings: StackProfile) -> void:
@@ -26,8 +30,13 @@ func setup(settings: StackProfile) -> void:
 		add_child(player)
 		effects_players.append(player)
 	for name in ["click", "jump", "land", "line", "over", "helmet_hit", "helmet_break",
-		"gloves_pull", "gloves_tear"]:
+		"gloves_tear"]:
 		sounds[name] = load("res://audio/" + name + ".wav")
+	slide_player = AudioStreamPlayer.new()
+	slide_player.bus = "Effects"
+	slide_player.playback_type = AudioServer.PLAYBACK_TYPE_STREAM
+	slide_player.stream = preload("res://audio/crate_slide.wav")
+	add_child(slide_player)
 	apply_volumes()
 
 
@@ -65,6 +74,28 @@ func _play_effect(name: String) -> void:
 			break
 
 
+func set_slide_active(active: bool, delta: float) -> void:
+	if active and unlocked:
+		if not slide_player.playing:
+			slide_player.volume_db = -80.0
+			slide_player.play()
+			return
+		_slide_gain = move_toward(_slide_gain, 1.0, delta / SLIDE_FADE_SECONDS)
+	elif slide_player.playing:
+		_slide_gain = move_toward(_slide_gain, 0.0, delta / SLIDE_FADE_SECONDS)
+		if _slide_gain == 0.0:
+			stop_slide()
+			return
+	else:
+		return
+	slide_player.volume_db = linear_to_db(maxf(0.0001, _slide_gain))
+
+
+func stop_slide() -> void:
+	_slide_gain = 0.0
+	slide_player.stop()
+
+
 func _supports_haptics() -> bool:
 	return OS.has_feature("android")
 
@@ -81,6 +112,8 @@ func preview_vibration() -> void:
 func _exit_tree() -> void:
 	if is_instance_valid(music_player):
 		music_player.stop()
+	if is_instance_valid(slide_player):
+		stop_slide()
 	for player in effects_players:
 		if is_instance_valid(player):
 			player.stop()

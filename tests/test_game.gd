@@ -44,6 +44,7 @@ func advance(game: StackSimulation, duration: float, axis: float = 0.0) -> void:
 func run() -> void:
 	movement_and_jump()
 	pushing_and_danger()
+	crate_slide_signal()
 	diagonal_crate_collisions()
 	clearing()
 	equipment_rewards()
@@ -130,6 +131,56 @@ func pushing_and_danger() -> void:
 	blocked.add_crate(5, 10)
 	advance(blocked, .4, 1)
 	check(absf(float(lower.x) - 4) < .001, "One push must not move an entire horizontal chain")
+
+
+func crate_slide_signal() -> void:
+	for direction in [1, -1]:
+		var game := empty()
+		var crate := game.add_crate(4, 10)
+		game.player.x = 4 - game.tuning.player_width if direction == 1 else 5.0
+		game.advance(Simulation.STEP * .25, direction)
+		check(not game.is_crate_sliding(direction, false), "Push intent needs actual horizontal motion before it can sound")
+		game.advance(Simulation.STEP * .75, direction)
+		var continuous := game.is_crate_sliding(direction, false)
+		for tick in range(49):
+			game.advance(Simulation.STEP, direction)
+			continuous = continuous and game.is_crate_sliding(direction, false)
+		check(continuous, "Sustained direct pushing must sound through a cell boundary in either direction")
+		check(not game.is_crate_sliding(-direction, false), "Reversing input must silence the slide immediately")
+		var x := float(crate.x)
+		game.advance(0.0, 0.0)
+		game.advance(0.0, direction)
+		check(not game.is_crate_sliding(direction, false) and float(crate.x) == x,
+			"Releasing and repressing between steps must not replay a stale slide")
+		game.advance(Simulation.STEP, 0.0)
+		check((float(crate.x) - x) * direction > 0.0 and not game.is_crate_sliding(0.0, false),
+			"An ordinary push keeps its existing motion and becomes silent on release")
+
+	for obstacle in ["edge", "crate"]:
+		var game := empty()
+		var x := 9.0 if obstacle == "edge" else 4.0
+		var crate := game.add_crate(x, 10)
+		game.player.x = x - game.tuning.player_width
+		if obstacle == "crate":
+			game.add_crate(x + 1, 10)
+		game.advance(.1, 1)
+		check(not game.is_crate_sliding(1, false) and float(crate.x) == x,
+			"A push blocked by the %s must stay silent" % obstacle)
+
+	var returning := empty()
+	var crate := returning.add_crate(3.9, 10)
+	crate.target_x = 4.0
+	returning.player.x = 3.9 - returning.tuning.player_width
+	returning.advance(Simulation.STEP, 1)
+	check(float(crate.x) > 3.9 and not returning.is_crate_sliding(1, false),
+		"Touching a crate that is already returning must not count as a direct push")
+
+	var falling := empty()
+	var airborne := falling.add_crate(4, 9.8, 6)
+	falling.advance(.1, -1)
+	check(float(airborne.y) == 10.0 and not falling.is_crate_sliding(-1, false)
+		and falling.events == [{"type": "land", "x": 4.0, "y": 10.0}],
+		"A vertical fall must only produce the existing landing event")
 
 
 func crates_separate(game: StackSimulation) -> bool:
@@ -494,6 +545,8 @@ func gloves_pull_and_break() -> void:
 			check(game.grabbed_crate_id == (int(crate.id) if remaining > 0 else -1)
 				and float(other.x) == start_x + direction and crates_separate(game),
 				"A grip must stay on the same crate while usable and release when the gloves tear")
+			check(game.is_crate_sliding(0, true) == (remaining > 0),
+				"Held pulling must sound at each cell boundary until the gloves tear")
 		game.advance(Simulation.STEP, 0, false, true)
 		check(game.grabbed_crate_id == -1 and game.events.is_empty(), "Torn gloves must not grab again")
 
@@ -535,7 +588,8 @@ func gloves_blockers() -> void:
 		var initial_x := float(crate.x)
 		game.advance(Simulation.STEP, 0, false, true)
 		check(game.grabbed_crate_id == int(crate.id) and game.player == initial and float(crate.x) == initial_x
-			and game.gloves_charges == 6 and game.events.is_empty() and crates_separate(game) and not game.is_pulling(),
+			and game.gloves_charges == 6 and game.events.is_empty() and crates_separate(game) and not game.is_pulling()
+			and not game.is_crate_sliding(0, true),
 			"A %s obstacle must block the whole pair without a charge or loss of grip" % obstacle)
 		game.advance(0, 0)
 		check(game.grabbed_crate_id == -1, "Releasing the button must clear a blocked grip immediately")
@@ -545,6 +599,9 @@ func gloves_blockers() -> void:
 	var initial := dynamic.player
 	dynamic.advance(8 * Simulation.STEP, 0, false, true)
 	dynamic.add_crate(2, 9.08, 6)
+	dynamic.advance(2 * Simulation.STEP, 0, false, true)
+	check(dynamic.is_pulling() and dynamic.grabbed_crate_id == -1 and not dynamic.is_crate_sliding(0, true),
+		"A dynamic blocker must silence pulling as soon as rollback starts under held input")
 	dynamic.advance(.18, 0)
 	check(dynamic.player == initial and float(crate.x) == 4.0 and dynamic.grabbed_crate_id == -1
 		and dynamic.gloves_charges == 6 and crates_separate(dynamic) and dynamic.state == "playing",
@@ -561,13 +618,18 @@ func gloves_detachment() -> void:
 	released.advance(Simulation.STEP, 0, false, true)
 	var paused_player := released.player
 	var paused_x := float(target.x)
+	check(released.is_crate_sliding(0, true) and not released.is_crate_sliding(0, false),
+		"Held pull motion must sound only while input is active, including between fixed steps")
 	released.release_pull_input()
 	check(released.grabbed_crate_id == -1 and released.gloves_charges == 6 and released.is_pulling()
-		and released.player == paused_player and float(target.x) == paused_x,
+		and released.player == paused_player and float(target.x) == paused_x and not released.is_crate_sliding(0, true),
 		"Releasing input for a pause must detach immediately without advancing or charging the cell")
 	released.advance(Simulation.STEP, 0, false, true)
 	check(released.grabbed_crate_id == int(target.id) and released.is_pulling(),
 		"Holding again during safe completion must reattach to the same crate")
+	released.advance(Simulation.STEP, 0)
+	check(released.is_pulling() and not released.is_crate_sliding(0, false),
+		"A safe finishing step can continue moving silently after release")
 	released.advance(.4, 0)
 	check(float(target.x) == 3.0 and released.gloves_charges == 5 and released.grabbed_crate_id == -1
 		and not released.is_pulling(),

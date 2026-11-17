@@ -22,6 +22,8 @@ var jump_pointers := {}
 var pull_pointers := {}
 var jump_pending := false
 var pull_key_held := false
+var slide_active := false
+var slide_focused := true
 var session := 0
 var result_saved := false
 var crush_elapsed := -1.0
@@ -485,11 +487,18 @@ func _release_controls() -> void:
 	pull_pointers.clear()
 	jump_pending = false
 	pull_key_held = false
+	_stop_crate_slide()
 	if model != null:
 		model.release_pull_input()
 	if world != null:
 		world.pressed_actions.clear()
 		world.axis = 0.0
+
+
+func _stop_crate_slide() -> void:
+	slide_active = false
+	if sound != null:
+		sound.stop_slide()
 
 
 func _pull_held() -> bool:
@@ -569,14 +578,14 @@ func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false
 		pointers.erase(id)
 
 
-func _advance_game(delta: float) -> void:
+func _advance_game(delta: float) -> bool:
 	if model == null or screen != "playing":
-		return
+		return false
 	if crush_elapsed >= 0.0:
 		crush_elapsed = minf(crush_elapsed + delta, CRUSH_ANIMATION_TIME)
 		if crush_elapsed >= CRUSH_ANIMATION_TIME:
 			_end_game()
-		return
+		return false
 	var actions: Array[String] = []
 	for action in pointers.values():
 		if not actions.has(action):
@@ -607,8 +616,8 @@ func _advance_game(delta: float) -> void:
 					if qa_helmet_hits.size() > 24:
 						qa_helmet_hits.pop_front()
 			"gloves_pull":
-				sound.effect("gloves_tear" if event.gloves_broke else "gloves_pull")
 				if event.gloves_broke:
+					sound.effect("gloves_tear")
 					world.gloves_break(event)
 					world._layout()
 				if qa_enabled:
@@ -635,19 +644,20 @@ func _advance_game(delta: float) -> void:
 					_end_game()
 	if screen == "playing" and model.equipment_pending:
 		_show_screen("equipment")
-		return
+		return false
 	if score_label != null:
 		_update_hud_score()
 		EQUIPMENT_VIEW.update_hud(boots_count, helmet_count, gloves_count, model)
+	return screen == "playing" and crush_elapsed < 0.0 and model.is_crate_sliding(axis, pull_held)
 
 
 func _background_demo() -> bool:
 	return screen in ["menu", "settings", "statistics"] or (qa_enabled and qa_result_demo and screen == "over")
 
 
-func _advance_demo(delta: float) -> void:
+func _advance_demo(delta: float) -> bool:
 	if not _background_demo() or qa_freeze_demo:
-		return
+		return false
 	demo.advance(delta)
 	world.model = demo.model
 	world.axis = demo.axis
@@ -657,6 +667,7 @@ func _advance_demo(delta: float) -> void:
 			"line":
 				sound.effect("line", false)
 				world.line_effect(int(event.chain))
+	return demo.model.is_crate_sliding(demo.axis, false)
 
 
 func _update_crush_view() -> void:
@@ -669,9 +680,11 @@ func _update_crush_view() -> void:
 func _process(delta: float) -> void:
 	if world == null:
 		return
-	_advance_demo(delta)
-	if not (qa_enabled and (qa_hero_pose or qa_animation_held)):
-		_advance_game(delta)
+	var slide_moving := _advance_demo(delta)
+	if screen == "playing" and not (qa_enabled and (qa_hero_pose or qa_animation_held)):
+		slide_moving = _advance_game(delta)
+	slide_active = slide_focused and slide_moving
+	sound.set_slide_active(slide_active, delta)
 	_update_crush_view()
 	var frozen := screen in ["paused", "equipment"] or (qa_enabled and (qa_hero_pose or qa_freeze_demo or qa_animation_held))
 	world.animate(0.0 if frozen else delta)
@@ -684,8 +697,14 @@ func _process(delta: float) -> void:
 
 
 func _notification(what: int) -> void:
-	if what in [NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_WINDOW_FOCUS_OUT] and is_inside_tree() and screen == "playing":
-		_pause()
+	if what in [NOTIFICATION_APPLICATION_FOCUS_IN, NOTIFICATION_WM_WINDOW_FOCUS_IN]:
+		slide_focused = true
+	elif what in [NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_WINDOW_FOCUS_OUT] and is_inside_tree():
+		slide_focused = false
+		if screen == "playing":
+			_pause()
+		else:
+			_stop_crate_slide()
 
 
 func _publish_qa() -> void:
@@ -738,6 +757,9 @@ func _publish_qa() -> void:
 		"helmet_hits": qa_helmet_hits,
 		"gloves_charges": model.gloves_charges, "gloves_hud": _gear_hud_snapshot(gloves_count),
 		"grabbed_crate_id": model.grabbed_crate_id, "gloves_pulls": qa_gloves_pulls,
+		"crate_slide": {"active": slide_active, "playing": sound.slide_player.playing,
+			"position": sound.slide_player.get_playback_position(), "volume_db": sound.slide_player.volume_db,
+			"loop_seconds": sound.slide_player.stream.get_length()},
 		"clear_animation": {"phase": world.clear_animation_phase(), "elapsed": world.model.clear_elapsed, "ids": retiring_ids},
 		"crush_animation": {"active": screen in ["playing", "paused"] and crush_elapsed >= 0.0,
 			"progress": world.crush_progress, "impact_crate": world.model.impact_crate_id},

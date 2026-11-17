@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Original procedural soundtrack and effects; no recorded samples or third-party music."""
 from pathlib import Path
+from itertools import accumulate
 import math
 import random
 import struct
@@ -71,13 +72,13 @@ write('helmet_hit', .21, helmet_impact(False))
 write('helmet_break', .28, helmet_impact(True))
 
 
-def glove_slide(tears):
+def glove_tear():
     noise = random.Random(18311)
 
     def sample(t):
         wood = .24 * math.sin(2 * math.pi * 112 * t) * math.exp(-t * 38)
         scuff = noise.uniform(-.16, .16) * math.exp(-t * 29)
-        if tears and t > .04:
+        if t > .04:
             tail = t - .04
             scuff += noise.uniform(-.29, .29) * math.exp(-tail * 25)
             scuff += .13 * math.sin(2 * math.pi * 620 * tail) * math.exp(-tail * 23)
@@ -86,5 +87,29 @@ def glove_slide(tears):
     return sample
 
 
-write('gloves_pull', .14, glove_slide(False))
-write('gloves_tear', .26, glove_slide(True))
+write('gloves_tear', .26, glove_tear())
+
+
+def crate_slide(duration):
+    noise = random.Random(37816)
+    count = int(duration * RATE)
+    samples = [noise.uniform(-1, 1) for _ in range(count)]
+
+    def smooth(radius):
+        # The filter sees the same neighbors when the last sample wraps to the first.
+        window = samples[-radius:] + samples + samples[:radius]
+        sums = list(accumulate(window, initial=0.0))
+        width = 2 * radius + 1
+        return [(sums[i + width] - sums[i]) / width for i in range(count)]
+
+    texture = []
+    for i, (fine, grain, slow) in enumerate(zip(smooth(1), smooth(3), smooth(20))):
+        phase = 2 * math.pi * i / count
+        pressure = 1 + .08 * math.sin(3 * phase) + .05 * math.cos(7 * phase)
+        texture.append((grain - slow + .18 * (fine - grain)) * pressure)
+    gain = .08 / max(abs(value) for value in texture)
+    return lambda t: texture[round(t * RATE)] * gain
+
+
+SLIDE_DURATION = 1.6
+write('crate_slide', SLIDE_DURATION, crate_slide(SLIDE_DURATION))
