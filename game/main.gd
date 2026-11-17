@@ -658,7 +658,7 @@ func _advance_game(delta: float) -> bool:
 			"drop":
 				if qa_enabled:
 					qa_crane_releases.append({"crane": event.crane, "column": event.column,
-						"crate_id": event.crate_id, "tick": event.tick})
+						"crate_id": event.crate_id, "variant": event.variant, "tick": event.tick})
 					if qa_crane_releases.size() > 24:
 						qa_crane_releases.pop_front()
 			"line":
@@ -781,16 +781,20 @@ func _publish_qa() -> void:
 	var visible_crates := []
 	var retiring_ids := []
 	for crate in world.model.crates:
-		visible_crates.append({"id": crate.id, "x": crate.x, "y": crate.y, "color": crate.color})
+		visible_crates.append({"id": crate.id, "x": crate.x, "y": crate.y, "color": crate.color,
+			"variant": crate.variant})
 		if world.model.is_clearing_crate(int(crate.id)):
 			retiring_ids.append(crate.id)
 	var cranes := []
 	var trolleys := []
+	var cargo_rects := []
 	for index in range(world.model.cranes.size()):
 		var crane: Dictionary = world.model.cranes[index]
+		var cargo := world.crane_cargo_rect(index)
 		cranes.append({"x": crane.x, "direction": crane.direction, "loaded": crane.loaded,
 			"waiting": crane.waiting, "wait_remaining": crane.wait_remaining,
-			"release_column": crane.release_column, "open_time": crane.open_time})
+			"release_column": crane.release_column, "open_time": crane.open_time, "variant": crane.variant})
+		cargo_rects.append([cargo.position.x, cargo.position.y, cargo.size.x, cargo.size.y])
 		var trolley := world.crane_trolley_center(index)
 		trolleys.append([trolley.x, trolley.y])
 	var rail := world.crane_rail
@@ -829,6 +833,7 @@ func _publish_qa() -> void:
 		"field": [world.field.position.x, world.field.position.y, world.field.size.x, world.field.size.y], "visible_crates": visible_crates,
 		"cranes": cranes, "crane_releases": qa_crane_releases, "crane_preview": qa_crane_preview,
 		"crane_rail": [rail.position.x, rail.position.y, rail.size.x, rail.size.y], "crane_trolleys": trolleys,
+		"crane_cargo_rects": cargo_rects,
 		"crane_settings": {"speed": TUNING.crane_speed, "wait_min": TUNING.crane_wait_min,
 			"wait_max": TUNING.crane_wait_max, "margin": StackSimulation.CRANE_EDGE_MARGIN},
 		"buttons": rects, "sliders": slider_rects, "controls": input_rects,
@@ -942,23 +947,7 @@ func _qa_command() -> void:
 		_update_crush_view()
 		return
 	if str(request.get("scenario", "")) == "crate_appearance" and screen in ["menu", "playing"]:
-		var target := demo.model if screen == "menu" else model
-		_release_controls()
-		world.reset_mallet_effects()
-		target.cancel_grab()
-		target.crates.clear()
-		target.state = "playing"
-		var player_x := clampf(float(request.get("player_x", 8.4)), 0.0, TUNING.columns - TUNING.player_width)
-		target.player = Vector2(player_x, TUNING.rows - TUNING.player_height)
-		target.player_velocity = Vector2.ZERO
-		target.grounded = true
-		target.facing = -1 if int(request.get("facing", target.facing)) < 0 else 1
-		for index in range(3):
-			var crate := target.add_crate(float(1 + index * 3), 2.0)
-			crate.color = index
-		qa_freeze_demo = screen == "menu"
-		qa_hero_pose = screen == "playing"
-		world.axis = 0.0
+		_qa_crate_appearance(request)
 		return
 	if str(request.get("scenario", "")) == "result_preview" and screen in ["menu", "over"]:
 		model.score = clampi(int(request.get("score", 0)), 0, 100000000)
@@ -997,7 +986,7 @@ func _qa_command() -> void:
 		# Reset a real simulation and start the first routes at known positions for capture.
 		qa_hero_pose = false
 		qa_crane_preview = true
-		qa_animation_held = false
+		qa_animation_held = bool(request.get("animation_hold", false))
 		qa_crane_releases.clear()
 		_release_controls()
 		world.reset_mallet_effects()
@@ -1072,6 +1061,43 @@ func _qa_command() -> void:
 			model.add_crate(5, 2, .5)
 			model.cranes[0].x = 3.5
 			model.cranes[1].x = 6.5
+
+
+func _qa_crate_appearance(request: Dictionary) -> void:
+	var target := demo.model if screen == "menu" else model
+	_release_controls()
+	world.reset_mallet_effects()
+	target.cancel_grab()
+	target.crates.clear()
+	target.state = "playing"
+	var stacks := bool(request.get("stacks", false))
+	var default_x := (TUNING.columns - TUNING.player_width) * 0.5 if stacks else 8.4
+	var player_x := clampf(float(request.get("player_x", default_x)), 0.0, TUNING.columns - TUNING.player_width)
+	target.player = Vector2(player_x, TUNING.rows - TUNING.player_height)
+	target.player_velocity = Vector2.ZERO
+	target.grounded = true
+	target.facing = -1 if int(request.get("facing", target.facing)) < 0 else 1
+	var tag_offset := int(request.get("tag_offset", 0))
+	if stacks:
+		var heights := [2, 4, 3, 1, 0, 0, 1, 3, 4, 2]
+		var variant := 0
+		for column in range(heights.size()):
+			for row in range(heights[column]):
+				target.add_crate(float(column), float(TUNING.rows - 1 - row), 0.0, variant)
+				variant = (variant + 1) % StackSimulation.CRATE_VARIANT_COUNT
+	elif bool(request.get("gallery", false)):
+		for index in range(StackSimulation.CRATE_VARIANT_COUNT):
+			@warning_ignore("integer_division")
+			var row := index / 5
+			var crate := target.add_crate(float(1 + (index % 5) * 2), float(2 + row * 2), 0.0, index)
+			crate.color = posmod(index + tag_offset, 3)
+	else:
+		for index in range(3):
+			var crate := target.add_crate(float(1 + index * 3), 2.0, 0.0, 0)
+			crate.color = posmod(index + tag_offset, 3)
+	qa_freeze_demo = screen == "menu"
+	qa_hero_pose = screen == "playing"
+	world.axis = 0.0
 
 
 func _qa_prepare_equipment_board(hold: bool) -> void:

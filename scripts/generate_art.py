@@ -1,36 +1,117 @@
 """Original workshop pixel art, hand drawn here; no reference image pixels used."""
 from pathlib import Path
-from PIL import Image, ImageDraw
+from random import Random
+from PIL import Image, ImageColor, ImageDraw
 ROOT = Path(__file__).resolve().parents[1] / 'art'
 ROOT.mkdir(exist_ok=True)
 INK = '#102733'
 
-def bolt(d, x, y):
-    d.rectangle((x - 2, y - 2, x + 2, y + 2), fill='#45555c')
-    d.rectangle((x - 1, y - 1, x + 1, y + 1), fill='#e6d5ad')
-    d.point((x + 1, y + 1), fill='#8d8878')
-image = Image.new('RGBA', (48, 48))
-d = ImageDraw.Draw(image)
-d.rectangle((0, 0, 47, 47), fill=INK)
-d.rectangle((2, 2, 45, 45), fill='#633c2b')
-for x in range(4, 44, 9):
-    d.rectangle((x, 5, x + 7, 41), fill='#b97035')
-    d.line((x + 1, 6, x + 1, 40), fill='#d28a45')
-    d.line((x + 7, 8, x + 7, 39), fill='#804b2a')
-    d.line((x + 3, 16, x + 3, 24), fill='#a65e2f')
-    d.line((x + 4, 29, x + 4, 35), fill='#dc944e')
-for box in [(2, 2, 45, 8), (2, 39, 45, 45), (2, 8, 7, 39), (40, 8, 45, 39)]:
-    d.rectangle(box, fill='#d08b43')
-d.line((3, 3, 44, 3), fill='#ffe1a1', width=2)
-d.line((3, 40, 44, 40), fill='#edb96e')
-d.rectangle((3, 44, 45, 46), fill='#523a2e')
-d.polygon([(4, 37), (37, 4), (44, 4), (44, 10), (11, 43), (4, 43)], fill='#68422c')
-d.polygon([(5, 37), (38, 4), (43, 5), (43, 9), (10, 42), (5, 42)], fill='#d9954d')
-d.line((7, 37, 39, 5), fill='#f5c178', width=2)
-d.line((10, 41, 43, 8), fill='#a76030')
-for x, y in [(5, 5), (42, 5), (5, 42), (42, 42)]:
-    bolt(d, x, y)
-image.save(ROOT / 'crate_wood.png')
+CRATE_SIZE = 48
+
+# Face, plank seam, grain highlight, rail, rail highlight, brace, brace highlight.
+# The atlas follows the ten numbered crates in the workshop concept.
+CRATE_PALETTES = (
+    ("#bc792f", "#805026", "#d59443", "#d28b3f", "#ffcc7d", "#e29a49", "#ffce83"),
+    ("#dba45d", "#a06f3a", "#edbb74", "#e7a75e", "#ffe0a1", "#efb870", "#ffdda3"),
+    ("#aa6539", "#79442d", "#c27d4f", "#b77543", "#e9a873", "#c47b4e", "#eeb28a"),
+    ("#b7744f", "#824a37", "#cb8864", "#c58760", "#edb898", "#d28762", "#fbc1a0"),
+    ("#aa8152", "#785c41", "#c09866", "#bc9360", "#e9c896", "#c8a170", "#f1d3a4"),
+    ("#c48336", "#845125", "#da9a47", "#d58c3d", "#ffd283", "#e09b45", "#ffd27e"),
+    ("#bf7c35", "#865228", "#d99346", "#cf8a3e", "#fbc776", "#dd9b4c", "#ffd38b"),
+    ("#b39166", "#826b4d", "#ccb18a", "#c6a377", "#f0d4a6", "#cbb08a", "#f2d7af"),
+    ("#985c35", "#70432d", "#b07148", "#a96b3e", "#dc9d68", "#b6794d", "#e6a878"),
+    ("#d39b50", "#986333", "#e9b36a", "#dfa255", "#ffda91", "#e5ad63", "#ffda95"),
+)
+
+
+def crate_bolt(draw, x, y):
+    draw.rectangle((x - 2, y - 2, x + 2, y + 2), fill="#253640")
+    draw.rectangle((x - 1, y - 1, x + 1, y + 1), fill="#849092")
+    draw.line((x - 1, y - 1, x, y - 1), fill="#e6dcc6")
+    draw.point((x + 1, y + 1), fill="#556369")
+
+
+def wood_grain(base, accent, amount):
+    return tuple(round(a + (b - a) * amount)
+                 for a, b in zip(ImageColor.getrgb(base), ImageColor.getrgb(accent)))
+
+
+def crate_boards(draw, face, seam, grain, variant, horizontal):
+    def line(u1, v1, u2, v2, shade):
+        coordinates = (v1, u1, v2, u2) if horizontal else (u1, v1, u2, v2)
+        draw.line(coordinates, fill=shade)
+
+    rng = Random(26419 + variant)
+    shadow_grain = wood_grain(face, seam, 0.5)
+    light_grain = wood_grain(face, grain, 0.8)
+    draw.rectangle((6, 7, 41, 40), fill=face)
+    # Keep grain in the boards. The horizontal crate uses the same shading
+    # turned along its planks, while the outside frame keeps a fixed light.
+    for edge in (7, 15, 23, 31, 39):
+        line(edge, 7, edge, 40, seam)
+        line(edge + 1, 8, edge + 1, 39, light_grain)
+        for _ in range(5):
+            across = edge + rng.randrange(2, 7)
+            length = rng.randrange(3, 9)
+            along = rng.randrange(8, 41 - length)
+            line(across, along, across, along + length, rng.choice((face, shadow_grain, light_grain)))
+
+
+def crate_knot(draw, x, y, seam, face, grain):
+    draw.ellipse((x - 2, y - 3, x + 2, y + 3), fill=seam)
+    draw.ellipse((x - 1, y - 2, x + 1, y + 1), fill=face)
+    draw.point((x, y - 1), fill=seam)
+    draw.point((x - 1, y + 2), fill=grain)
+
+
+def crate_brace(draw, face, bevel, shadow, descending):
+    def path(points):
+        return [(47 - x, y) for x, y in points] if descending else points
+
+    draw.polygon(path([(4, 37), (37, 4), (44, 4), (44, 11), (11, 44), (4, 44)]), fill=shadow)
+    draw.polygon(path([(5, 37), (38, 4), (43, 5), (43, 9), (10, 42), (5, 42)]), fill=face)
+    draw.line(path([(6, 37), (38, 5)]), fill=bevel, width=2)
+    draw.line(path([(10, 41), (43, 8)]), fill=shadow)
+
+
+def wooden_crate(variant, palette):
+    face, seam, grain, rail, bevel, brace, brace_bevel = palette
+    image = Image.new('RGBA', (CRATE_SIZE, CRATE_SIZE), INK)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((2, 2, 45, 45), fill=seam)
+    crate_boards(draw, face, seam, grain, variant, horizontal=variant == 6)
+    if variant == 1:
+        crate_knot(draw, 13, 16, seam, face, grain)
+    elif variant == 4:
+        draw.line([(9, 20), (14, 16), (18, 15)], fill=grain, width=2)
+        draw.line([(30, 36), (35, 33), (39, 29)], fill=grain, width=2)
+    elif variant == 5:
+        crate_knot(draw, 13, 15, seam, face, grain)
+        crate_knot(draw, 35, 34, seam, face, grain)
+    elif variant == 9:
+        draw.line([(12, 23), (11, 27), (13, 30), (12, 34), (14, 37)], fill=grain, width=2)
+        draw.line([(35, 9), (34, 13), (36, 17), (35, 20), (37, 23)], fill=grain, width=2)
+        draw.line([(26, 12), (27, 16), (26, 18)], fill=grain)
+
+    for bounds in ((2, 2, 45, 7), (2, 40, 45, 45), (2, 8, 6, 39), (41, 8, 45, 39)):
+        draw.rectangle(bounds, fill=rail)
+    draw.line((3, 3, 44, 3), fill=bevel, width=2)
+    draw.line((3, 8, 3, 40), fill=bevel)
+    draw.line((4, 40, 43, 40), fill=bevel)
+    draw.line((44, 8, 44, 40), fill=seam)
+    draw.line((3, 44, 44, 44), fill="#5b3a2d")
+    draw.line((3, 45, 44, 45), fill=seam)
+    crate_brace(draw, brace, brace_bevel, seam, descending=variant in (2, 7, 9))
+    for x, y in ((5, 5), (42, 5), (5, 42), (42, 42)):
+        crate_bolt(draw, x, y)
+    return image
+
+
+crate_atlas = Image.new('RGBA', (CRATE_SIZE * len(CRATE_PALETTES), CRATE_SIZE))
+for variant_index, variant_palette in enumerate(CRATE_PALETTES):
+    crate_atlas.paste(wooden_crate(variant_index, variant_palette), (variant_index * CRATE_SIZE, 0))
+crate_atlas.save(ROOT / 'crate_wood_variants.png')
+
 
 ROCKET_BOOT_PIXELS = [
     ".######.....",

@@ -44,6 +44,7 @@ func advance(game: StackSimulation, duration: float, axis: float = 0.0) -> void:
 func run() -> void:
 	movement_and_jump()
 	pushing_and_danger()
+	crate_variant_assignment()
 	crate_slide_signal()
 	diagonal_crate_collisions()
 	clearing()
@@ -115,11 +116,12 @@ func pushing_and_danger() -> void:
 	check(absf(float(crate.x) - roundf(float(crate.x))) < .001, "A completed push must align to columns")
 	check(pushing.player.x + pushing.tuning.player_width <= float(crate.x) + .01, "Pushing must not penetrate the crate")
 	var falling := empty()
-	var airborne := falling.add_crate(4, 9.8, .2)
+	var airborne := falling.add_crate(4, 9.8, .2, 8)
 	falling.player.x = 4 - falling.tuning.player_width
 	advance(falling, .04, 1)
 	check(float(airborne.x) > 4.01 and float(airborne.y) > 9.8 and float(airborne.y) < 10,
 		"The character must be able to push a crate while it is falling")
+	check(int(airborne.variant) == 8, "A moving and falling crate must keep its assigned appearance")
 	var stack := empty()
 	stack.player.x = 4 - stack.tuning.player_width
 	stack.add_crate(4, 10)
@@ -133,6 +135,38 @@ func pushing_and_danger() -> void:
 	blocked.add_crate(5, 10)
 	advance(blocked, .4, 1)
 	check(absf(float(lower.x) - 4) < .001, "One push must not move an entire horizontal chain")
+
+
+func crate_variant_assignment() -> void:
+	var game := Simulation.new(Config.new(), 42)
+	var reference := Simulation.new(Config.new(), 42)
+	var variants := {}
+	for crate in game.crates:
+		variants[int(crate.variant)] = true
+	for crane in game.cranes:
+		variants[int(crane.variant)] = true
+	check(variants.size() == game.crates.size() + game.cranes.size(),
+		"The initial floor crates and crane loads must have distinct appearances")
+	var initial_crates := game.crates.duplicate(true)
+	var initial_cranes := game.cranes.duplicate(true)
+	var gameplay_rng := game._rng.state
+	var assigned := {}
+	for index in range(Simulation.CRATE_VARIANT_COUNT):
+		var explicit := game.add_crate(4.0, 0.0, 0.0, index)
+		check(int(explicit.variant) == index and int(explicit.color) == int(explicit.id) % 3,
+			"An explicit appearance must leave the existing crate IDs and color sequence intact")
+		var appearance := int(game.add_crate(4.0, 0.0).variant)
+		assigned[appearance] = true
+		check(appearance == reference.add_crate(4.0, 0.0).variant,
+			"Explicit appearances must not consume a seeded assignment")
+	check(assigned.size() == Simulation.CRATE_VARIANT_COUNT and assigned.keys().all(
+		func(variant: int) -> bool: return variant >= 0 and variant < Simulation.CRATE_VARIANT_COUNT),
+		"A full appearance cycle must cover precisely the valid variants")
+	check(game._rng.state == gameplay_rng, "Assigning appearances must not consume gameplay randomness")
+	game.add_crate(4.0, 0.0)
+	game.reset(42)
+	check(game.crates == initial_crates and game.cranes == initial_cranes,
+		"Resetting the same seed must reproduce both floor and crane appearances")
 
 
 func crate_slide_signal() -> void:
@@ -258,6 +292,10 @@ func clearing() -> void:
 		retiring_ids.append(int(game.add_crate(column, 5).id))
 	var survivor := game.add_crate(2, 4)
 	game.add_crate(0, 4)
+	var variants := {}
+	for crate in game.crates:
+		variants[int(crate.id)] = int(crate.variant)
+	var same_variant := func(crate: Dictionary) -> bool: return variants[int(crate.id)] == int(crate.variant)
 	var player_y := game.player.y
 	game.advance(Simulation.STEP, 0)
 	check(game.state == "clearing", "Only a complete settled bottom row starts clearing")
@@ -269,6 +307,7 @@ func clearing() -> void:
 	check(game.cranes == crane_positions, "Cranes must stay still and hold cargo during a clear")
 	check(game.cleared_crates == 0 and game.crates.size() == 6 and retiring_ids.all(is_retiring),
 		"The retiring crates must remain in the model throughout the 0.22 second hold")
+	check(game.crates.all(same_variant), "The held row must retain the appearance of every retiring crate")
 	check(game.player.y == player_y and float(survivor.y) == 4.0, "Support must stay in place during the hold")
 	game.cranes_enabled = false
 	var safe_support := true
@@ -287,6 +326,7 @@ func clearing() -> void:
 	game.advance(Simulation.STEP, 0)
 	var descended := game.crates.all(func(crate: Dictionary) -> bool: return absf(float(crate.y) - 5) < .001)
 	check(game.crates.size() == 2 and descended, "All crates above a cleared row descend one cell")
+	check(game.crates.all(same_variant), "The surviving crates must keep their appearances after changing rows")
 	check(absf(game.player.y - player_y - 1) < .001, "The character descends together with the warehouse contents")
 	check(game.state == "playing", "Joint descent must not cause a false crush")
 	var chain_game := empty(4, 6)
@@ -1060,6 +1100,7 @@ func crane_cycles() -> void:
 	var passes := [0, 0]
 	var waits := []
 	var saw_independent_entry := false
+	var stable_appearances := true
 	var wait_started := [0, 0]
 	var wait_length := [0.0, 0.0]
 	check(game.cranes.size() == 2 and game.cranes[0].direction == 1 and game.cranes[1].direction == -1,
@@ -1084,6 +1125,8 @@ func crane_cycles() -> void:
 				"Releases in a step must use distinct columns in the board")
 			check(crate.id == event.crate_id and crate.x == event.column and crate.y == Simulation.CRATE_RELEASE_Y and crate.vy == 0.0,
 				"The released crate must enter the ordinary physics at rest and at the original height")
+			check(crate.variant == event.variant and crate.variant == previous[event.crane].variant,
+				"The falling crate and drop event must carry the exact appearance held by the crane")
 			check(absf(crane.x - (event.column + 0.5)) <= stride + Simulation.EPS and crane.open_time > 0.0,
 				"The crane must open its jaws in the column at the handoff")
 			columns.append(event.column)
@@ -1092,6 +1135,8 @@ func crane_cycles() -> void:
 		for index in range(2):
 			var before: Dictionary = previous[index]
 			var crane: Dictionary = game.cranes[index]
+			if not before.waiting or crane.waiting:
+				stable_appearances = stable_appearances and crane.variant == before.variant
 			var entrance := -Simulation.CRANE_EDGE_MARGIN if crane.direction == 1 else game.tuning.columns + Simulation.CRANE_EDGE_MARGIN
 			var exit := game.tuning.columns - entrance
 			if not before.waiting and not crane.waiting:
@@ -1114,6 +1159,7 @@ func crane_cycles() -> void:
 		# Clear the runway after checking each actual spawn, so late cycles can be exercised without a loss.
 		game.crates.clear()
 	check(passes[0] >= 4 and passes[1] >= 4, "Both cranes must sustain repeated passes")
+	check(stable_appearances, "A crane appearance must remain stable until the start of another loaded pass")
 	check(waits.size() >= 8 and waits.min() < waits.max() and saw_independent_entry,
 		"Return times must vary and allow one crane to re-enter while the other is still waiting")
 
@@ -1124,15 +1170,21 @@ func crane_contention() -> void:
 	var stride := game.tuning.crane_speed * Simulation.STEP
 	game.cranes[0].x = 0.5 - stride
 	game.cranes[1].x = 0.5 + stride
+	var left_variant := int(game.cranes[0].variant)
+	var right_variant := int(game.cranes[1].variant)
 	for crane in game.cranes:
 		crane.release_column = 0
 	game.advance(Simulation.STEP, 0.0)
 	check(game.crates.size() == 1 and game.crates[0].x == 0 and game.cranes[0].loaded and not game.cranes[1].loaded,
 		"The crane at its last column gets the only safe release for a shared target")
 	check(game.cranes[0].release_column == 1, "The other crane should try the next column without stopping")
+	check(game.crates[0].variant == right_variant and game.cranes[0].variant == left_variant,
+		"A contested column must transfer the first load and preserve the rerouted load's appearance")
 	advance(game, 1.0 / game.tuning.crane_speed)
 	check(game.crates.size() == 2 and game.crates.any(func(crate: Dictionary) -> bool: return crate.x == 1),
 		"The next column can take the second crate without overlapping the first")
+	check(game.crates.any(func(crate: Dictionary) -> bool: return crate.x == 1 and crate.variant == left_variant),
+		"The delayed release must still use the original load's appearance")
 
 
 func storage() -> void:
@@ -1305,7 +1357,9 @@ func app_flow() -> void:
 				"Equipment portraits must never mutate gameplay")
 	for pose in ["idle", "walk", "jump", "push"]:
 		check(app.world.HERO_TEXTURES[pose].get_size() == Vector2(32, 48), "All workshop poses must preserve the same full sprite canvas")
-	check(app.world.CRATE_TEXTURE.get_size() == Vector2(48, 48) and app.world.CRATE_TEXTURE.resource_path == "res://art/crate_wood.png", "All crates must use the one existing wooden appearance")
+	check(app.world.CRATE_TEXTURE.get_size() == Vector2(480, 48)
+		and app.world.CRATE_TEXTURE.resource_path == "res://art/crate_wood_variants.png",
+		"The crate texture must hold ten equally sized wooden appearances")
 	check(app._missing_menu_glyphs().is_empty(), "The original workshop bitmap face must cover the visible menu text")
 	var personal = app.model
 	var random_before: int = personal._rng.state

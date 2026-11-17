@@ -25,6 +25,7 @@ group.add_argument('--ui-only', action='store_true', help='Run demo isolation an
 group.add_argument('--game-over-only', action='store_true', help='Run score-only result screen regressions and capture screenshots')
 group.add_argument('--statistics-only', action='store_true', help='Check Statistics and capture its rendered overview and history')
 group.add_argument('--cranes-only', action='store_true', help='Check crane passes and capture both playing layouts')
+group.add_argument('--crates-only', action='store_true', help='Check ten rendered wooden crate appearances and their lifetime')
 group.add_argument('--animations-only', action='store_true', help='Check row clear and crush transitions and capture their rendered phases')
 group.add_argument('--keyboard-only', action='store_true', help='Check jump keys and menu keyboard isolation')
 group.add_argument('--boots-only', action='store_true', help='Check equipment offers, air jumps and responsive boots UI')
@@ -1101,6 +1102,7 @@ def crane_cycle(page, snapshot):
             elif elapsed < settings['wait_min']:
                 assert abs(after['x'] - before['x'] - after['direction'] * speed * elapsed) < 1e-5, (
                     'Crane changed speed or stopped while crossing the field', before, after)
+                assert before['variant'] == after['variant'], ('Crane cargo changed within one pass', before, after)
         for release in snapshot['crane_releases'][len(releases):]:
             index = release['crane']
             crane = snapshot['cranes'][index]
@@ -1110,6 +1112,8 @@ def crane_cycle(page, snapshot):
             assert not any((other['tick'], other['column']) == (release['tick'], column) for other in releases)
             crates = [crate for crate in snapshot['visible_crates'] if crate['id'] == release['crate_id']]
             assert len(crates) == 1 and abs(crates[0]['x'] - column) < 1e-5, ('Claw did not release the board crate', release, crates)
+            assert crates[0]['variant'] == release['variant'] == crane['variant'], (
+                'The released crate must retain its crane cargo appearance', release, crates, crane)
             forward_travel = crane['direction'] * speed * (snapshot['ticks'] - release['tick']) / 120
             assert abs(crane['x'] - (column + .5) - forward_travel) <= speed / 120 + 1e-5, (
                 'Claw position did not line up with the released crate', release, crane)
@@ -1317,6 +1321,7 @@ def clear_animation_check(page, dimensions, shots):
     for crate in collapse['visible_crates']:
         origin = remaining[crate['id']]
         assert abs(crate['y'] - origin['y'] - descent) < 1e-5 and crate['x'] == origin['x']
+        assert crate['variant'] == origin['variant'], ('Descent changed a crate appearance', origin, crate)
     collapse_image = animation_image(page, dimensions, shots, 'collapse')
     former_top = (.15, rows - 1.9, .65, .25)
     assert wood_fraction(field_crop(collapse_image, collapse, *former_top)) < .1
@@ -1326,6 +1331,8 @@ def clear_animation_check(page, dimensions, shots):
     second = animation_step(page, 16)
     assert second['state'] == 'clearing' and second['clear_animation']['phase'] == 'glow'
     assert set(second['clear_animation']['ids']) == remaining.keys()
+    assert {crate['id']: crate['variant'] for crate in second['visible_crates']} == {
+        crate_id: crate['variant'] for crate_id, crate in remaining.items()}
     assert second['score'] == 200 and second['lines'] == 2
     assert abs(second['player'][1] - began['player'][1] - 1) < 1e-5
     finished = animation_step(page, 57)
@@ -1911,6 +1918,8 @@ def check_helmet_hits(before, after, crate_ids, direction, charges):
     assert [hit['charges'] for hit in hits] == charges, hits
     assert [hit['helmet_broke'] for hit in hits] == [charge == 0 for charge in charges], hits
     assert set(crate_ids).isdisjoint(crate['id'] for crate in after['visible_crates']), hits
+    assert crate_variants(after) == {crate_id: variant for crate_id, variant in crate_variants(before).items()
+                                     if crate_id not in crate_ids}
     assert before['ticks'] < min(hit['tick'] for hit in hits) and max(hit['tick'] for hit in hits) <= after['ticks']
     assert after['screen'] == 'playing' and after['state'] == 'playing' and not after['loss_reason']
     assert cleared_metrics(after) == cleared_metrics(before)
@@ -2158,6 +2167,7 @@ def check_partial_pull(board, partial, *, cells=0, held=True):
     direction = -board['facing']
     travel = (crate['x'] - target['x']) * direction
     assert cells < travel < cells + 1 and crate['y'] == target['y'], (target, crate, cells)
+    assert crate['variant'] == target['variant']
     assert abs(partial['player'][0] - board['player'][0] - travel * direction) < .001
     assert partial['player'][1] == board['player'][1] and partial['grounded']
     assert partial['facing'] == board['facing']
@@ -2178,6 +2188,8 @@ def check_pull_cells(board, finished, cells):
     assert abs(finished['player'][0] - board['player'][0] - cells * direction) < .001
     expected_x = {c['id']:c['x'] for c in others} | {target['id']:target['x'] + cells * direction}
     assert {c['id']:c['x'] for c in finished['visible_crates']} == expected_x
+    assert {c['id']:c['variant'] for c in finished['visible_crates']} == {
+        c['id']:c['variant'] for c in board['visible_crates']}
     hits = finished['gloves_pulls']
     assert len(hits) == cells, hits
     assert [hit['tick'] - board['ticks'] for hit in hits] == [GLOVE_CELL_TICKS * i for i in range(1, cells + 1)]
@@ -2483,36 +2495,146 @@ def gloves_checks(browser):
             'screenshot_sha256':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in shots}}
 
 
+def crate_variants(snapshot):
+    return {crate['id']: crate['variant'] for crate in snapshot['visible_crates']}
+
+
+def crate_rect(snapshot, crate):
+    left, top, width, _ = snapshot['field']
+    cell = width / snapshot['columns']
+    # The engine snaps sprite origins to the 24-pixel board grid before scaling.
+    x, y = [round(crate[axis] * 24) / 24 for axis in ('x', 'y')]
+    return left + x * cell, top + y * cell, cell, cell
+
+
+def crate_face(image, snapshot, rect):
+    x, y, w, h = rect
+    scale_x = image.width / snapshot['viewport'][0]
+    scale_y = image.height / snapshot['viewport'][1]
+    # Exclude the edges that can be covered by the jaws or the frame.
+    bounds = (round((x + .18 * w) * scale_x), round((y + .25 * h) * scale_y),
+              round((x + .82 * w) * scale_x), round((y + .84 * h) * scale_y))
+    return image.crop(bounds).resize((20, 20), Image.Resampling.BILINEAR)
+
+
+def closest_crate_face(face, references):
+    distances = {variant: sum(ImageStat.Stat(ImageChops.difference(face, reference)).mean)
+                 for variant, reference in references.items()}
+    return min(distances, key=distances.get), distances
+
+
+def crate_hashes(page, snapshot):
+    image = Image.open(io.BytesIO(page.screenshot())).convert('RGB')
+    return {crate['variant']: hashlib.sha256(
+        field_crop(image, snapshot, crate['x'], crate['y'], 1, 1).tobytes()).hexdigest()
+        for crate in snapshot['visible_crates']}
+
+
 def wooden_crates(browser):
-    context = browser.new_context(viewport={'width':360,'height':800},has_touch=True,device_scale_factor=1)
+    dimensions = (360, 800)
+    context = browser.new_context(viewport={'width': dimensions[0], 'height': dimensions[1]},
+                                  has_touch=True, device_scale_factor=1)
     page = context.new_page()
+    errors = []
+    page.on('pageerror', lambda value: errors.append(str(value)))
     page.goto(URL)
-    wait_screen(page,'menu')
+    wait_screen(page, 'menu')
+    original_stats = personal_statistics(state(page))
     checks = []
-    for screen in ['menu','playing']:
-        if screen == 'playing':
-            button(page,'play',True)
-            wait_screen(page,'playing')
-        scenario(page,'crate_appearance')
-        page.wait_for_function('window.stackAttackState.visible_crates.map(c => c.color).join() === "0,1,2"')
-        snapshot = state(page)
-        image = Image.open(io.BytesIO(page.screenshot())).convert('RGB')
-        fx,fy,fw,_ = snapshot['field']
-        cell = fw/snapshot['columns']
-        assert cell == 32 and snapshot['viewport'] == [360,800]
-        crops = [image.crop((round(fx+c['x']*cell),round(fy+c['y']*cell),round(fx+(c['x']+1)*cell),round(fy+(c['y']+1)*cell)))
-                 for c in snapshot['visible_crates']]
-        hashes = [hashlib.sha256(crop.tobytes()).hexdigest() for crop in crops]
-        assert len(set(hashes)) == 1, ('Legacy color tags changed the crate appearance',screen,hashes)
-        if screen == 'playing':
-            raw = crops[0].tobytes()
-            orange = sum(r>150 and r>g>b for r,g,b in zip(raw[0::3],raw[1::3],raw[2::3]))
-            assert orange > cell*cell/3, 'The shared appearance must be wood'
-        checks.append({'screen':screen,'legacy_color_tags':[0,1,2],'identical_crate_pixels':'PASS',
-                       'screenshot':screenshot(page,f'wood-crates-{screen}-360x800.png')})
+    for screen, dimensions in [('menu', (360, 800)), ('playing', (390, 844)), ('playing', (844, 390)),
+                               ('playing', (320, 568)), ('playing', (568, 320))]:
+        if state(page)['screen'] != screen:
+            button(page, 'play', True)
+            wait_screen(page, 'playing')
+        width, height = dimensions
+        page.set_viewport_size({'width': width, 'height': height})
+        layout = 'landscape' if width > height else 'portrait'
+        page.wait_for_function('value => window.stackAttackState.layout === value', arg=layout)
+        page.wait_for_timeout(220)
+        snapshot = animation_request(page, 'crate_appearance', gallery=True)
+        crates = snapshot['visible_crates']
+        assert [crate['variant'] for crate in crates] == list(range(10)), crates
+        hashes = crate_hashes(page, snapshot)
+        assert len(set(hashes.values())) == 10, ('The gallery must render ten distinct appearances', screen, hashes)
+
+        retagged = animation_request(page, 'crate_appearance', gallery=True, tag_offset=1)
+        new_crates = retagged['visible_crates']
+        assert all((before['color'] + 1) % 3 == after['color'] for before, after in zip(crates, new_crates))
+        assert crate_hashes(page, retagged) == hashes, ('Legacy tags changed rendered crate pixels', screen, hashes)
+        gallery = screenshot(page, f'wood-crates-gallery-{screen}-{width}x{height}.png')
+
+        dense = animation_request(page, 'crate_appearance', stacks=True)
+        assert set(crate_variants(dense).values()) == set(range(10))
+        assert len(dense['visible_crates']) >= 20
+        dense_path = screenshot(page, f'wood-crates-stacks-{screen}-{width}x{height}.png')
+        checks.append({'screen': screen, 'viewport': dimensions, 'variant_pixel_sha256': hashes,
+                       'legacy_tags_independent': 'PASS', 'screenshots': [gallery, dense_path]})
+    assert personal_statistics(state(page)) == original_stats
+    assert not errors, errors
     context.close()
-    print('WOODEN_CRATES',json.dumps(checks),flush=True)
+    print('WOODEN_CRATES', json.dumps(checks), flush=True)
     return checks
+
+
+def crate_lifetime_checks(browser):
+    context = browser.new_context(viewport={'width': 390, 'height': 844}, has_touch=True, device_scale_factor=1)
+    page = context.new_page()
+    errors, shots = [], []
+    page.on('pageerror', lambda value: errors.append(str(value)))
+    page.goto(URL)
+    wait_screen(page, 'menu')
+    button(page, 'play', True)
+    wait_screen(page, 'playing')
+
+    gallery = animation_request(page, 'crate_appearance', gallery=True)
+    gallery_image = animation_image(page, (390, 844), shots)
+    faces = {crate['variant']: crate_face(gallery_image, gallery, crate_rect(gallery, crate))
+             for crate in gallery['visible_crates']}
+
+    animation_request(page, 'cranes', animation_hold=True)
+    animation_step(page, 150)
+    carrying = animation_step(page, 150)
+    assert not carrying['crane_releases'] and all(c['loaded'] for c in carrying['cranes'])
+    carrying_image = animation_image(page, (390, 844), shots, 'wood-crane-carrying')
+    animation_step(page, 110)
+    dropped = animation_step(page, 20)
+    falling_image = animation_image(page, (390, 844), shots, 'wood-crane-falling')
+    assert len(dropped['crane_releases']) == len(carrying['cranes']) == 2
+    falling = {crate['id']:crate for crate in dropped['visible_crates']}
+    rendered_handoffs = []
+    for release in dropped['crane_releases']:
+        index, expected = release['crane'], release['variant']
+        cargo = carrying['cranes'][index]
+        crate = falling[release['crate_id']]
+        assert expected == cargo['variant'] == crate['variant'] and 0 < crate['y'] < 8
+        cargo_face = crate_face(carrying_image, carrying, carrying['crane_cargo_rects'][index])
+        falling_face = crate_face(falling_image, dropped, crate_rect(dropped, crate))
+        for target in (cargo_face, falling_face):
+            closest, distances = closest_crate_face(target, faces)
+            assert closest == expected, ('Rendered crane/cell appearance does not match the gallery',
+                                         index, expected, closest, distances)
+        rendered_handoffs.append({'crane': index, 'crate_id':crate['id'], 'variant': expected})
+
+    board = animation_request(page, 'push', animation_hold=True)
+    original, = board['visible_crates']
+    page.keyboard.down('ArrowRight')
+    try:
+        moving = animation_step(page, 25)
+    finally:
+        page.keyboard.up('ArrowRight')
+    pushed, = moving['visible_crates']
+    assert pushed['id'] == original['id'] and pushed['variant'] == original['variant']
+    assert pushed['x'] > original['x'] + .25
+    pause_animation_and_rotate(page, moving, (390, 844))
+
+    phases = clear_animation_check(page, (390, 844), shots)
+    start_crane_preview(page)
+    releases = crane_cycle(page, state(page))
+    assert all(0 <= release['variant'] < 10 for release in releases)
+    assert not errors, errors
+    context.close()
+    return {'push_pause_rotation': 'PASS', 'clear_descent': phases, 'crane_releases': releases,
+            'rendered_handoffs': rendered_handoffs, 'screenshots': shots}
 
 
 def mallet_board(page, **options):
@@ -2573,6 +2695,7 @@ def mallet_checks(browser):
         assert hit['crate_id'] == floor_crate['id'] and not hit['mallet_broke']
         survivor, = landed['visible_crates']
         assert survivor['id'] == upper_crate['id'] and survivor['x'] == upper_crate['x'] and survivor['y'] == floor_crate['y']
+        assert survivor['variant'] == upper_crate['variant']
         assert first['field'] == landed['field'] == board['field']
         assert landed['boots_charges'] == 5 and landed['helmet_charges'] == 2
         assert len(landed['mallet_swings']) == 1
@@ -2768,6 +2891,14 @@ try:
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         full_check = not any(vars(args).values())
+        if args.crates_only:
+            crates = wooden_crates(browser)
+            lifetime = crate_lifetime_checks(browser)
+            (BUILD/'crates-check.json').write_text(json.dumps({'status':'PASS', 'browser':browser.version,
+                'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
+                'rendered_variants':crates, 'lifetime':lifetime}, indent=2)+'\n')
+            browser.close()
+            raise SystemExit(0)
         mallet = mallet_checks(browser) if args.mallet_only or full_check else {}
         if mallet:
             print('MALLET', json.dumps(mallet), flush=True)

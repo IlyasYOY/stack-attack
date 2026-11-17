@@ -40,7 +40,8 @@ const MALLET_FRAGMENTS: Texture2D = preload("res://art/mallet_fragments.png")
 const HERO_TEXTURES := {
 	"idle": preload("res://art/hero_idle.png"), "walk": preload("res://art/hero_walk.png"),
 	"jump": preload("res://art/hero_jump.png"), "push": preload("res://art/hero_push.png")}
-const CRATE_TEXTURE: Texture2D = preload("res://art/crate_wood.png")
+const CRATE_TEXTURE: Texture2D = preload("res://art/crate_wood_variants.png")
+const CRATE_TILE_SIZE := 48.0
 const PIXELS_PER_CELL := 24.0
 const CRANE_TRACK_Y := [-46.0, -34.0]
 const CRANE_BODY := [Color("659a9a"), Color("da944f")]
@@ -346,6 +347,10 @@ func _crate_origin(column: float, row: float) -> Vector2:
 func _crane_cargo_origin(crane: Dictionary) -> Vector2:
 	return _crate_origin(float(crane.x) - 0.5, StackSimulation.CRATE_RELEASE_Y)
 
+func crane_cargo_rect(index: int) -> Rect2:
+	var origin := _crane_cargo_origin(model.cranes[index])
+	return Rect2(field.position + origin * cell / PIXELS_PER_CELL, Vector2.ONE * cell)
+
 func _crane_center(cargo: Vector2, index: int) -> Vector2:
 	return Vector2(cargo.x + PIXELS_PER_CELL * 0.5, CRANE_TRACK_Y[index])
 
@@ -389,14 +394,22 @@ func _draw_crane_rect(bounds: Rect2, span: Rect2, color: Color) -> void:
 	if visible.has_area():
 		draw_rect(visible, color)
 
-func _draw_crane_crate(position: Vector2, span: Rect2) -> void:
+func _crate_source(variant: int) -> Rect2:
+	return Rect2(variant * CRATE_TILE_SIZE, 0, CRATE_TILE_SIZE, CRATE_TILE_SIZE)
+
+func _draw_crate(bounds: Rect2, variant: int, tint: Color = Color.WHITE) -> void:
+	draw_texture_rect_region(CRATE_TEXTURE, bounds, _crate_source(variant), tint)
+
+func _draw_crane_crate(position: Vector2, span: Rect2, variant: int) -> void:
 	var bounds := Rect2(position, Vector2.ONE * PIXELS_PER_CELL)
 	var visible := bounds.intersection(span)
 	if visible == bounds:
-		draw_texture_rect(CRATE_TEXTURE, bounds, false)
+		_draw_crate(bounds, variant)
 	elif visible.has_area():
-		var texture_scale := CRATE_TEXTURE.get_size() / bounds.size
-		var source := Rect2((visible.position - bounds.position) * texture_scale, visible.size * texture_scale)
+		var texture_scale := CRATE_TILE_SIZE / PIXELS_PER_CELL
+		var source := _crate_source(variant)
+		source.position += (visible.position - bounds.position) * texture_scale
+		source.size = visible.size * texture_scale
 		draw_texture_rect_region(CRATE_TEXTURE, visible, source)
 
 func _draw_crane(span: Rect2, crane: Dictionary, index: int) -> void:
@@ -418,7 +431,7 @@ func _draw_crane(span: Rect2, crane: Dictionary, index: int) -> void:
 		_draw_crane_rect(Rect2(center.x + side, center.y - 1.0, 2.0, 2.0), span, metal)
 
 	if bool(crane.loaded):
-		_draw_crane_crate(cargo, span)
+		_draw_crane_crate(cargo, span, int(crane.variant))
 	var cue := float(crane.open_time)
 	var spread := 0.0
 	if cue > 0.0:
@@ -467,7 +480,7 @@ func _draw_clearing_row(width: float, floor_y: float, phase: String) -> void:
 		var x := _crate_origin(float(crate.x), float(crate.y)).x
 		var left := roundf(lerpf(width * 0.5, x, width_scale))
 		var right := roundf(lerpf(width * 0.5, x + PIXELS_PER_CELL, width_scale))
-		draw_texture_rect(CRATE_TEXTURE, Rect2(left, floor_y - height, right - left, height), false, tint)
+		_draw_crate(Rect2(left, floor_y - height, right - left, height), int(crate.variant), tint)
 	_draw_receiving_lip(row, openness)
 	if glow > 0.0:
 		draw_rect(row.grow(1.0), Color(EFFECT_AMBER, glow * 0.28), false, 3.0)
@@ -773,7 +786,7 @@ func _draw_crush(impact: Dictionary, width: float) -> void:
 			var glove := Vector2(x, pose.end.y - 4.0)
 			draw_rect(Rect2(glove, Vector2(4, 3)), Color(INK, reach))
 			draw_rect(Rect2(glove + Vector2(1, 0), Vector2(2, 2)), Color(Color("f1bb83"), reach))
-	draw_texture_rect(CRATE_TEXTURE, crate, false)
+	_draw_crate(crate, int(impact.variant))
 	if reach > 0.0:
 		var center := _hero_bounds().get_center().x
 		for x in [center - 6.0, center + 2.0]:
@@ -832,7 +845,7 @@ func _draw_field_objects() -> void:
 			impact = crate
 			continue
 		var position := _crate_origin(float(crate.x), float(crate.y))
-		draw_texture_rect(CRATE_TEXTURE, Rect2(position, Vector2.ONE * PIXELS_PER_CELL), false)
+		_draw_crate(Rect2(position, Vector2.ONE * PIXELS_PER_CELL), int(crate.variant))
 	if impact.is_empty():
 		var bounds := _hero_bounds()
 		_draw_boots_exhaust(bounds, floor_y)

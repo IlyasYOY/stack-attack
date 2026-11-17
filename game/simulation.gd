@@ -5,6 +5,7 @@ const STEP := 1.0 / 120.0
 const EPS := 0.0001
 const CRANE_EDGE_MARGIN := 1.5
 const CRATE_RELEASE_Y := -0.95
+const CRATE_VARIANT_COUNT := 10
 const ROWS_PER_EQUIPMENT := 5
 const BOOTS_MAX_CHARGES := 10
 const HELMET_MAX_CHARGES := 3
@@ -46,6 +47,7 @@ var mallet_charges := 0
 var grabbed_crate_id := -1
 var _rng := RandomNumberGenerator.new()
 var _next_id := 0
+var _next_crate_variant := 0
 var _jump_buffer := 0.0
 var _coyote := 0.0
 var _air_jump_available := false
@@ -81,6 +83,7 @@ func reset(seed_value: int) -> void:
 	crates.clear()
 	events.clear()
 	_next_id = 0
+	_next_crate_variant = posmod(seed_value, CRATE_VARIANT_COUNT)
 	player = Vector2(tuning.columns * 0.5 - tuning.player_width * 0.5,
 		tuning.rows - tuning.player_height)
 	player_velocity = Vector2.ZERO
@@ -121,9 +124,18 @@ func reset(seed_value: int) -> void:
 			add_crate(float(column), float(tuning.rows - 1))
 
 
-func add_crate(x: float, y: float, velocity: float = 0.0) -> Dictionary:
+func _take_crate_variant() -> int:
+	var variant := _next_crate_variant
+	# The stride visits all ten appearances without sampling the gameplay RNG.
+	_next_crate_variant = (_next_crate_variant + 7) % CRATE_VARIANT_COUNT
+	return variant
+
+
+func add_crate(x: float, y: float, velocity: float = 0.0, variant: int = -1) -> Dictionary:
+	if variant < 0 or variant >= CRATE_VARIANT_COUNT:
+		variant = _take_crate_variant()
 	var crate := {"id": _next_id, "x": x, "y": y, "vy": velocity,
-		"target_x": x, "color": _next_id % 3}
+		"target_x": x, "color": _next_id % 3, "variant": variant}
 	_next_id += 1
 	crates.append(crate)
 	return crate
@@ -705,6 +717,7 @@ func _crane_entrance(direction: int) -> float:
 func _enter_crane(crane: Dictionary) -> void:
 	crane.x = _crane_entrance(int(crane.direction))
 	crane.loaded = true
+	crane.variant = _take_crate_variant()
 	crane.waiting = false
 	crane.wait_remaining = 0.0
 	crane.release_column = _rng.randi_range(0, tuning.columns - 1)
@@ -739,11 +752,11 @@ func _try_crane_release(index: int) -> void:
 		if (float(crane.x) - (column + 0.5)) * direction < -EPS:
 			return
 		if _crane_column_is_free(column):
-			var crate := add_crate(float(column), CRATE_RELEASE_Y)
+			var crate := add_crate(float(column), CRATE_RELEASE_Y, 0.0, int(crane.variant))
 			crane.loaded = false
 			crane.open_time = tuning.crane_open_time
 			events.append({"type": "drop", "count": 1, "crane": index,
-				"column": column, "crate_id": int(crate.id), "tick": ticks})
+				"column": column, "crate_id": int(crate.id), "tick": ticks, "variant": int(crate.variant)})
 			return
 		# A blocked target moves forward with the route; a crane never turns back.
 		column += direction
