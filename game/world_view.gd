@@ -16,13 +16,19 @@ var hud_right := SCORE_PANEL_RIGHT
 var crush_progress := -1.0
 var boots_exhaust_life := 0.0
 var helmet_impacts: Array[Dictionary] = []
+var gloves_break_life := 0.0
+var gloves_break_origin := Vector2.ZERO
+var gloves_break_facing := 1
+var _layout_model_id := 0
+var _reserve_grab_space := false
 const FONT: Font = preload("res://art/workshop_font.fnt")
 const HERO_SIZE := Vector2(16, 24)
 const HERO_OFFSET := Vector2(-1, -2)
 const HERO_FRAME_PIXELS := Vector2(32, 48)
-const HERO_FRAME_COLUMNS := {"idle": 0, "walk": 1, "jump": 2, "push": 3}
+const HERO_FRAME_COLUMNS := {"idle": 0, "walk": 1, "jump": 2, "push": 3, "grab": 4}
 const HERO_BOOTS_ATLAS: Texture2D = preload("res://art/hero_rocket_boots.png")
 const HERO_HELMET_ATLAS: Texture2D = preload("res://art/hero_helmet.png")
+const HERO_GLOVES_ATLAS: Texture2D = preload("res://art/hero_work_gloves.png")
 const HERO_TEXTURES := {
 	"idle": preload("res://art/hero_idle.png"), "walk": preload("res://art/hero_walk.png"),
 	"jump": preload("res://art/hero_jump.png"), "push": preload("res://art/hero_push.png")}
@@ -36,6 +42,11 @@ const CRANE_TOP := -52.0
 const SCORE_PANEL_RIGHT := 138.0
 const HUD_CLEARANCE_Y := 60.0
 const LANDSCAPE_FRAME_CLEARANCE := 18.0
+const WAREHOUSE_FRAME := 13.0
+const GRAB_BUTTON_HEIGHT := 48.0
+const GRAB_BUTTON_GAP := 8.0
+const GRAB_ICONS: Texture2D = preload("res://art/glove_controls.png")
+const GRAB_ICON_SIZE := Vector2(32, 32)
 const INK := Color("102733")
 const CREAM := Color("f4e3ba")
 const GOLD := Color("d7a45a")
@@ -53,6 +64,9 @@ const HELMET_WOOD_TIME := 0.48
 const HELMET_SHELL_TIME := 0.58
 const HELMET_FRAGMENTS: Texture2D = preload("res://art/helmet_fragments.png")
 const FRAGMENT_TILE := Vector2(20, 16)
+const GLOVES_BREAK_TIME := 0.64
+const GLOVE_FRAGMENTS: Texture2D = preload("res://art/glove_fragments.png")
+const GLOVE_FRAGMENT_SIZE := Vector2(12, 8)
 # Horizontal flight, initial lift, and width in board pixels.
 const WOOD_FLIGHT := [Vector3(-29, -21, 15), Vector3(30, -16, 14),
 	Vector3(-42, -6, 6), Vector3(38, -2, 5), Vector3(14, -32, 6), Vector3(-11, -34, 4)]
@@ -65,28 +79,50 @@ func _ready() -> void:
 
 func _layout() -> void:
 	if model == null: return
+	var model_id := model.get_instance_id()
+	if _layout_model_id != model_id:
+		_layout_model_id = model_id
+		_reserve_grab_space = false
 	var landscape := size.x > size.y
 	var button_size := Vector2(66, 64)
+	var jump_button: Rect2
 	var left_limit := 0.0
 	var right_limit := size.x
 	var free_width := size.x - 36.0
 	if landscape:
 		var right_button := Rect2(Vector2(84, size.y - 90), button_size)
-		var jump_button := Rect2(Vector2(size.x - 82, size.y - 90), Vector2(70, 64))
+		jump_button = Rect2(Vector2(size.x - 82, size.y - 90), Vector2(70, 64))
 		controls = {"left": Rect2(Vector2(12, size.y - 90), button_size),
 			"right": right_button, "jump": jump_button}
 		left_limit = right_button.end.x + LANDSCAPE_FRAME_CLEARANCE
 		right_limit = jump_button.position.x - LANDSCAPE_FRAME_CLEARANCE
 		free_width = right_limit - left_limit
 	else:
+		jump_button = Rect2(Vector2(size.x - 88, size.y - 92), Vector2(70, 64))
 		controls = {"left": Rect2(Vector2(18, size.y - 92), button_size),
 			"right": Rect2(Vector2(90, size.y - 92), button_size),
-			"jump": Rect2(Vector2(size.x - 88, size.y - 92), Vector2(70, 64))}
+			"jump": jump_button}
+	var grab_y := jump_button.position.y - GRAB_BUTTON_GAP - GRAB_BUTTON_HEIGHT
+	var grab_button := Rect2(jump_button.position.x, grab_y, jump_button.size.x, GRAB_BUTTON_HEIGHT)
+	var has_gloves := model.gloves_charges > 0
+	if has_gloves:
+		controls["grab"] = grab_button
+		_reserve_grab_space = true
 	var free_height := size.y - (84.0 if landscape else 204.0)
 	cell = maxf(8.0, floorf(minf(free_width / model.tuning.columns, free_height / (model.tuning.rows + 2))))
+	var field_bottom := INF
+	var frame_clearance := WAREHOUSE_FRAME + 3.0
+	var centered_right := floorf((size.x + model.tuning.columns * cell) * 0.5)
+	if not landscape and _reserve_grab_space and centered_right + frame_clearance > grab_button.position.x:
+		# Fit the lower frame above the grab control with the rail still below the HUD.
+		# Keep this space through the current game so a tear does not move the field.
+		field_bottom = grab_button.position.y - frame_clearance
+		var rows_with_crane := model.tuning.rows - CRANE_TOP / PIXELS_PER_CELL
+		cell = maxf(8.0, minf(cell, floorf((field_bottom - HUD_CLEARANCE_Y) / rows_with_crane)))
 	var world_size := Vector2(model.tuning.columns * cell, model.tuning.rows * cell)
 	var top := 60.0 + cell * 1.1
 	if not landscape: top += maxf(0.0, (free_height - (model.tuning.rows + 2) * cell) * 0.4)
+	top = minf(top, field_bottom - world_size.y)
 	var left := floorf((size.x - world_size.x) * 0.5)
 	if landscape:
 		left = clampf(left, left_limit, maxf(left_limit, right_limit - world_size.x))
@@ -104,6 +140,7 @@ func animate(delta: float) -> void:
 	clock += delta
 	caption_life = maxf(0.0, caption_life - delta)
 	boots_exhaust_life = maxf(0.0, boots_exhaust_life - delta)
+	gloves_break_life = maxf(0.0, gloves_break_life - delta)
 	for index in range(helmet_impacts.size() - 1, -1, -1):
 		var impact := helmet_impacts[index]
 		impact.age += delta
@@ -113,6 +150,12 @@ func animate(delta: float) -> void:
 
 func boots_jump_effect() -> void:
 	boots_exhaust_life = BOOTS_EXHAUST_TIME
+
+func gloves_break(event: Dictionary) -> void:
+	gloves_break_life = GLOVES_BREAK_TIME
+	gloves_break_facing = int(event.facing)
+	gloves_break_origin = _crate_origin(float(event.player_x) + model.tuning.player_width * 0.5,
+		float(event.player_y) + model.tuning.player_height)
 
 func helmet_hit(event: Dictionary) -> void:
 	var crate := _crate_origin(float(event.x), float(event.y))
@@ -211,6 +254,7 @@ func _draw_scenery() -> void:
 	draw_line(key_at+Vector2(20,-8),key_at+Vector2(27,-10),Color("b6c2ae"),3)
 
 func hero_frame() -> String:
+	if model.grabbed_crate_id >= 0: return "grab"
 	if not model.grounded: return "jump"
 	if absf(axis) > 0.1:
 		for crate in model.crates:
@@ -408,31 +452,57 @@ func _hero_bounds() -> Rect2:
 func _draw_hero(bounds: Rect2, frame: String) -> void:
 	if model.facing < 0:
 		bounds.size.x = -bounds.size.x
-	var atlas := _hero_atlas(model.boots_equipped, model.helmet_charges > 0)
+	var boots := model.boots_equipped
+	var helmet := model.helmet_charges > 0
+	var gloves := model.gloves_charges > 0
+	var atlas := _hero_atlas(boots, helmet, gloves)
 	if atlas != null:
-		draw_texture_rect_region(atlas, bounds, _hero_region(frame, model.boots_equipped, model.helmet_charges > 0))
+		draw_texture_rect_region(atlas, bounds, _hero_region(frame, boots, helmet, gloves))
 	else:
 		draw_texture_rect(HERO_TEXTURES[frame], bounds, false)
 
-static func pause_portrait(boots_equipped: bool, helmet_equipped: bool = false) -> Texture2D:
-	var atlas := _hero_atlas(boots_equipped, helmet_equipped)
+static func pause_portrait(boots_equipped: bool, helmet_equipped: bool = false,
+		gloves_equipped: bool = false) -> Texture2D:
+	var atlas := _hero_atlas(boots_equipped, helmet_equipped, gloves_equipped)
 	if atlas == null:
 		return HERO_TEXTURES.idle
 	var portrait := AtlasTexture.new()
 	portrait.atlas = atlas
-	portrait.region = _hero_region("idle", boots_equipped, helmet_equipped)
+	portrait.region = _hero_region("idle", boots_equipped, helmet_equipped, gloves_equipped)
 	portrait.filter_clip = true
 	return portrait
 
-static func _hero_atlas(boots_equipped: bool, helmet_equipped: bool) -> Texture2D:
+static func _hero_atlas(boots_equipped: bool, helmet_equipped: bool, gloves_equipped: bool) -> Texture2D:
+	if gloves_equipped:
+		return HERO_GLOVES_ATLAS
 	if helmet_equipped:
 		return HERO_HELMET_ATLAS
 	return HERO_BOOTS_ATLAS if boots_equipped else null
 
-static func _hero_region(frame: String, boots_equipped: bool, helmet_equipped: bool) -> Rect2:
+static func _hero_region(frame: String, boots_equipped: bool, helmet_equipped: bool,
+		gloves_equipped: bool) -> Rect2:
 	var column: int = HERO_FRAME_COLUMNS[frame]
 	var row := 1 if boots_equipped and helmet_equipped else 0
+	if gloves_equipped:
+		row = int(boots_equipped) + 2 * int(helmet_equipped)
 	return Rect2(Vector2(column, row) * HERO_FRAME_PIXELS, HERO_FRAME_PIXELS)
+
+func _draw_glove_fragments(width: float, floor_y: float) -> void:
+	if gloves_break_life <= 0.0:
+		return
+	var progress := 1.0 - gloves_break_life / GLOVES_BREAK_TIME
+	var travel: float = smoothstep(0.0, 0.42, progress)
+	var opacity: float = 1.0 - smoothstep(0.58, 1.0, progress)
+	var floor_contact := minf(gloves_break_origin.y, floor_y)
+	for index in range(3):
+		var direction := float(index - 1) * gloves_break_facing
+		var x := gloves_break_origin.x + direction * lerpf(4.0, 13.0, travel)
+		var hop := roundf(sin(travel * PI) * (4.0 + index))
+		var piece_size := Vector2(8, 5) if index < 2 else Vector2(6, 4)
+		var at := Vector2(clampf(roundf(x - piece_size.x * 0.5), 0.0, width - piece_size.x),
+			floor_contact - piece_size.y - hop)
+		var source := Rect2(index * GLOVE_FRAGMENT_SIZE.x, 0, GLOVE_FRAGMENT_SIZE.x, GLOVE_FRAGMENT_SIZE.y)
+		draw_texture_rect_region(GLOVE_FRAGMENTS, Rect2(at, piece_size), source, Color(Color.WHITE, opacity))
 
 func _draw_helmet_impacts(width: float, floor_y: float) -> void:
 	for impact in helmet_impacts:
@@ -638,11 +708,12 @@ func _draw_field_objects() -> void:
 		_draw_crush(impact, width)
 	if active:
 		_draw_helmet_impacts(width, floor_y)
+		_draw_glove_fragments(width, floor_y)
 	if phase == "collapse":
 		_draw_clear_dust(width, floor_y, collapse_elapsed)
 
 func _draw_warehouse() -> void:
-	var outer := field.grow(13)
+	var outer := field.grow(WAREHOUSE_FRAME)
 	draw_rect(outer.grow(3),Color("0a1e28"))
 	draw_rect(outer,Color("74442f"))
 	draw_rect(outer.grow(-2),Color("ae6b36"))
@@ -679,18 +750,32 @@ func _draw_controls() -> void:
 	for action in controls:
 		var rect: Rect2 = controls[action]
 		var down := pressed_actions.has(action)
+		var grabbing: bool = action == "grab" and model.grabbed_crate_id >= 0
 		var p := rect.position
 		var s := rect.size
 		var points := PackedVector2Array([p+Vector2(7,0),p+Vector2(s.x-7,0),p+Vector2(s.x,7),p+Vector2(s.x,s.y-7),p+Vector2(s.x-7,s.y),p+Vector2(7,s.y),p+Vector2(0,s.y-7),p+Vector2(0,7)])
-		draw_colored_polygon(points,GOLD if down else Color("6d8385"))
+		draw_colored_polygon(points, EFFECT_AMBER if grabbing else (GOLD if down else Color("6d8385")))
 		var inside := rect.grow(-2)
 		var a := inside.position
 		var b := inside.end
-		draw_colored_polygon(PackedVector2Array([a+Vector2(5,0),Vector2(b.x-5,a.y),Vector2(b.x,a.y+5),b-Vector2(0,5),b-Vector2(5,0),Vector2(a.x+5,b.y),Vector2(a.x,b.y-5),a+Vector2(0,5)]),Color("34565d") if down else Color("193844"))
-		draw_line(p+Vector2(7,3),p+Vector2(s.x-7,3),Color("b3c6b5"),1)
+		var fill := Color("443a30") if grabbing else (Color("34565d") if down else Color("193844"))
+		draw_colored_polygon(PackedVector2Array([a+Vector2(5,0),Vector2(b.x-5,a.y),Vector2(b.x,a.y+5),b-Vector2(0,5),b-Vector2(5,0),Vector2(a.x+5,b.y),Vector2(a.x,b.y-5),a+Vector2(0,5)]), fill)
+		draw_line(p+Vector2(7,3),p+Vector2(s.x-7,3), EFFECT_AMBER if grabbing else Color("b3c6b5"),1)
 		for at in [p+Vector2(6,6),p+Vector2(s.x-7,6),p+Vector2(6,s.y-7),p+s-Vector2(7,7)]: _bolt(at)
-		_draw_arrow(rect.get_center()+Vector2(1,2),Vector2.UP if action=="jump" else (Vector2.LEFT if action=="left" else Vector2.RIGHT),Color("0b2632"))
-		_draw_arrow(rect.get_center(),Vector2.UP if action=="jump" else (Vector2.LEFT if action=="left" else Vector2.RIGHT),CREAM)
+		if action == "grab":
+			var source := Rect2(Vector2(GRAB_ICON_SIZE.x if grabbing else 0.0, 0), GRAB_ICON_SIZE)
+			var icon_at := rect.get_center() - GRAB_ICON_SIZE * 0.5
+			if grabbing:
+				icon_at.y -= 4.0
+				var indicator := Vector2(rect.get_center().x, rect.end.y - 8.0)
+				draw_circle(indicator, 5.0, Color(0.89, 0.51, 0.18, 0.22))
+				draw_circle(indicator, 3.0, EFFECT_AMBER)
+				draw_rect(Rect2(indicator - Vector2.ONE, Vector2(2, 2)), CREAM)
+			draw_texture_rect_region(GRAB_ICONS, Rect2(icon_at, GRAB_ICON_SIZE), source)
+		else:
+			var direction := Vector2.UP if action == "jump" else (Vector2.LEFT if action == "left" else Vector2.RIGHT)
+			_draw_arrow(rect.get_center() + Vector2(1, 2), direction, Color("0b2632"))
+			_draw_arrow(rect.get_center(), direction, CREAM)
 
 func _draw_arrow(center: Vector2,direction: Vector2,color: Color) -> void:
 	var normal := Vector2(-direction.y,direction.x)

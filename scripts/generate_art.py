@@ -101,8 +101,41 @@ def hard_hat():
 
 HELMET = hard_hat()
 
+GLOVE_RED = '#bf4936'
+GLOVE_LIGHT = '#e8774b'
+GLOVE_SHADE = '#83362e'
+GLOVE_BRASS = '#cb8f46'
+GLOVE_RIM = '#f7cc76'
 
-def hero_frame(frame, rocket_boots=False, helmet=False):
+
+def draw_worn_gloves(d, frame):
+    # The cuffs and fingers cover the bare hands. The arms still fit the same
+    # sprite bounds and the glove pixels stay above or clear of the boot art.
+    d.rectangle((6, 29, 9, 32), fill=GLOVE_SHADE)
+    d.line((6, 29, 9, 29), fill=GLOVE_RIM)
+    d.line((6, 30, 9, 30), fill=GLOVE_BRASS)
+    d.line((7, 31, 8, 31), fill=GLOVE_RED)
+    d.point((6, 32), fill=INK)
+    if frame in ('push', 'grab'):
+        d.polygon([(23, 32), (25, 30), (28, 28), (30, 28), (31, 29),
+                   (31, 35), (29, 37), (23, 37)], fill=INK)
+        d.polygon([(24, 32), (27, 30), (30, 29), (30, 35),
+                   (29, 36), (24, 36)], fill=GLOVE_RED)
+        d.line((25, 32, 28, 30), fill=GLOVE_LIGHT)
+        d.line((28, 32, 30, 32), fill=GLOVE_SHADE)
+        d.line((28, 34, 30, 34), fill=GLOVE_SHADE)
+        d.line((24, 32, 24, 36), fill=GLOVE_BRASS)
+        d.point((24, 33), fill='#ffe392' if frame == 'grab' else GLOVE_RIM)
+    else:
+        d.rectangle((22, 33, 25, 34), fill=GLOVE_BRASS)
+        d.line((22, 33, 24, 33), fill=GLOVE_RIM)
+        d.rectangle((22, 35, 26, 39), fill=INK)
+        d.rectangle((23, 35, 25, 38), fill=GLOVE_RED)
+        d.line((23, 35, 25, 35), fill=GLOVE_LIGHT)
+        d.point((26, 36), fill=GLOVE_SHADE)
+
+
+def hero_frame(frame, rocket_boots=False, helmet=False, gloves=False):
     image = Image.new('RGBA', (32, 48))
     d = ImageDraw.Draw(image)
     d.rectangle((9, 37, 23, 41), fill=INK)
@@ -140,7 +173,7 @@ def hero_frame(frame, rocket_boots=False, helmet=False):
     d.rectangle((15, 37, 17, 38), fill='#705237')
     d.rectangle((6, 26, 9, 35), fill='#ac936d')
     d.rectangle((7, 27, 8, 32), fill='#e2cfa0')
-    arm = (23, 28, 28, 34) if frame == 'push' else (22, 27, 25, 36)
+    arm = (23, 28, 28, 34) if frame in ('push', 'grab') else (22, 27, 25, 36)
     d.rectangle(arm, fill='#9a825f')
     d.rectangle((arm[0], arm[1], arm[2] - 1, arm[1] + 3), fill='#d4c59f')
     d.rectangle((arm[0], arm[3] - 1, min(31, arm[2] + 1), arm[3] + 3), fill='#f1bb83')
@@ -173,6 +206,8 @@ def hero_frame(frame, rocket_boots=False, helmet=False):
             d.rectangle((x + 2, 6, x + 3, 7), fill='#e5f2da')
         d.rectangle((19, 6, 20, 7), fill='#987047')
     d.rectangle((6, 29, 9, 32), fill='#f2be88')
+    if gloves:
+        draw_worn_gloves(d, frame)
     return image
 
 
@@ -187,9 +222,87 @@ for column, frame in enumerate(frames):
 atlas.save(ROOT / 'hero_rocket_boots.png')
 helmet_atlas.save(ROOT / 'hero_helmet.png')
 
+gloves_atlas = Image.new('RGBA', (160, 192))
+for row, (boots, helmet) in enumerate(((False, False), (True, False), (False, True), (True, True))):
+    for column, frame in enumerate([*frames, 'grab']):
+        gloves_atlas.paste(hero_frame(frame, rocket_boots=boots, helmet=helmet, gloves=True),
+                          (column * 32, row * 48))
+gloves_atlas.save(ROOT / 'hero_work_gloves.png')
+
 icon = Image.new('RGBA', (32, 32))
 icon.paste(HELMET, (-1, 8))
 icon.save(ROOT / 'helmet.png')
+
+
+def glove_icon(closed=False):
+    icon = Image.new('RGBA', (32, 32))
+    d = ImageDraw.Draw(icon)
+    if closed:
+        d.polygon([(7, 13), (7, 8), (10, 6), (13, 6), (15, 4), (19, 4),
+                   (21, 5), (24, 5), (26, 7), (27, 10), (27, 17), (25, 21),
+                   (22, 24), (12, 25), (7, 21), (5, 16)], fill=INK)
+        d.polygon([(8, 15), (9, 9), (11, 8), (14, 8), (16, 6), (19, 6),
+                   (21, 7), (24, 7), (25, 10), (25, 17), (23, 21),
+                   (20, 24), (13, 23), (9, 20), (7, 16)], fill=GLOVE_RED)
+        d.polygon([(10, 9), (14, 9), (16, 7), (19, 7), (21, 8), (24, 8),
+                   (25, 10), (24, 12), (11, 13)], fill=GLOVE_LIGHT)
+        for x, top, bottom in [(13, 9, 13), (17, 7, 14), (21, 8, 14)]:
+            d.line((x, top, x, bottom), fill=GLOVE_SHADE)
+        d.line([(10, 13), (13, 13), (16, 16), (19, 16), (21, 15), (24, 15)],
+               fill=GLOVE_SHADE, width=2)
+        d.line([(9, 15), (12, 15), (15, 18), (15, 20)], fill=GLOVE_LIGHT)
+        d.line([(10, 20), (14, 22), (21, 22), (24, 19)], fill=GLOVE_SHADE)
+    else:
+        d.polygon([(4, 16), (6, 14), (9, 14), (11, 16), (10, 7), (12, 5), (15, 5),
+                   (16, 6), (16, 3), (18, 1), (21, 2), (22, 5), (24, 4), (27, 6),
+                   (27, 9), (29, 9), (30, 11), (29, 18), (26, 25), (24, 27), (12, 27),
+                   (9, 24), (5, 21)], fill=INK)
+        d.polygon([(6, 17), (7, 16), (9, 16), (13, 19), (12, 7), (14, 7), (16, 16),
+                   (18, 15), (18, 4), (19, 3), (20, 4), (21, 15), (22, 15), (23, 7),
+                   (24, 6), (25, 7), (24, 16), (25, 17), (27, 11), (28, 11), (28, 15),
+                   (26, 21), (24, 26), (13, 25), (9, 22)], fill=GLOVE_RED)
+        d.line([(6, 17), (9, 17), (13, 21)], fill=GLOVE_LIGHT)
+        d.line((13, 8, 14, 13), fill=GLOVE_LIGHT)
+        d.line((19, 4, 19, 12), fill=GLOVE_LIGHT)
+        d.line((24, 7, 23, 13), fill=GLOVE_LIGHT)
+        d.line([(14, 18), (16, 16), (21, 16), (24, 18)], fill=GLOVE_SHADE)
+        d.line([(10, 22), (15, 24), (23, 24), (25, 22)], fill=GLOVE_SHADE)
+    cuff_y = 23 if closed else 25
+    d.polygon([(11, cuff_y), (23, cuff_y), (25, cuff_y + 1), (25, cuff_y + 4),
+               (23, cuff_y + 5), (12, cuff_y + 5), (10, cuff_y + 4), (10, cuff_y + 1)], fill=INK)
+    d.rectangle((11, cuff_y + 1, 24, cuff_y + 3), fill=GLOVE_BRASS)
+    d.line((12, cuff_y + 1, 23, cuff_y + 1), fill=GLOVE_RIM)
+    for x in (13, 21):
+        d.point((x, cuff_y + 3), fill='#8c532e')
+        d.point((x, cuff_y + 2), fill='#ffdc90')
+    return icon
+
+
+open_glove = glove_icon()
+glove_controls = Image.new('RGBA', (64, 32))
+glove_controls.paste(open_glove, (0, 0))
+glove_controls.paste(glove_icon(closed=True), (32, 0))
+glove_controls.save(ROOT / 'glove_controls.png')
+
+glove_pair = Image.new('RGBA', (38, 32))
+glove_pair.paste(open_glove.resize((20, 24), Image.Resampling.NEAREST), (0, 5))
+glove_pair.paste(open_glove.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+                 .resize((20, 24), Image.Resampling.NEAREST), (18, 2))
+glove_pair.save(ROOT / 'work_gloves.png')
+
+glove_fragments = Image.new('RGBA', (36, 8))
+d = ImageDraw.Draw(glove_fragments)
+d.polygon([(0, 5), (3, 2), (8, 1), (11, 4), (9, 7), (2, 7)], fill=INK)
+d.polygon([(2, 5), (4, 3), (8, 2), (10, 4), (8, 6), (3, 6)], fill=GLOVE_RED)
+d.line([(3, 5), (7, 3), (9, 4)], fill=GLOVE_LIGHT)
+d.polygon([(13, 2), (16, 1), (20, 1), (23, 3), (23, 6), (19, 7), (15, 7), (13, 6)], fill=INK)
+d.polygon([(14, 3), (17, 2), (21, 3), (22, 4), (22, 5), (19, 6), (15, 6), (14, 5)], fill=GLOVE_BRASS)
+d.line([(15, 3), (17, 2), (20, 3)], fill=GLOVE_RIM)
+d.line((17, 5, 20, 5), fill='#8c532e')
+d.polygon([(27, 5), (29, 3), (32, 2), (34, 4), (34, 6), (29, 7)], fill=INK)
+d.polygon([(29, 5), (32, 3), (33, 5), (30, 6)], fill=GLOVE_SHADE)
+d.point((31, 4), fill=GLOVE_RED)
+glove_fragments.save(ROOT / 'glove_fragments.png')
 
 
 def draw_plank(image):

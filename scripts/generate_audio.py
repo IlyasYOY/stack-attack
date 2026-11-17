@@ -69,3 +69,22 @@ def helmet_impact(breaks):
 
 write('helmet_hit', .21, helmet_impact(False))
 write('helmet_break', .28, helmet_impact(True))
+
+
+def glove_slide(tears):
+    noise = random.Random(18311)
+
+    def sample(t):
+        wood = .24 * math.sin(2 * math.pi * 112 * t) * math.exp(-t * 38)
+        scuff = noise.uniform(-.16, .16) * math.exp(-t * 29)
+        if tears and t > .04:
+            tail = t - .04
+            scuff += noise.uniform(-.29, .29) * math.exp(-tail * 25)
+            scuff += .13 * math.sin(2 * math.pi * 620 * tail) * math.exp(-tail * 23)
+        return wood + scuff
+
+    return sample
+
+
+write('gloves_pull', .14, glove_slide(False))
+write('gloves_tear', .26, glove_slide(True))

@@ -16,9 +16,11 @@ var panel: PanelContainer
 var score_label: Label
 var boots_count: Label
 var helmet_count: Label
+var gloves_count: Label
 var pointers := {}
 var jump_pointers := {}
 var jump_pending := false
+var grab_pending := false
 var session := 0
 var result_saved := false
 var crush_elapsed := -1.0
@@ -34,6 +36,7 @@ var qa_statistics_preview: StackProfile
 var qa_crane_preview := false
 var qa_crane_releases: Array[Dictionary] = []
 var qa_helmet_hits: Array[Dictionary] = []
+var qa_gloves_pulls: Array[Dictionary] = []
 var qa_animation_held := false
 const CREAM := Color("f4e3ba")
 const MINT := Color("8dc6ac")
@@ -146,6 +149,7 @@ func _clear_ui() -> void:
 	score_label = null
 	boots_count = null
 	helmet_count = null
+	gloves_count = null
 
 
 func _show_screen(value: String) -> void:
@@ -392,7 +396,8 @@ func _build_hud() -> void:
 	ui.add_child(score_label)
 	boots_count = EQUIPMENT_VIEW.build_hud(ui, "boots")
 	helmet_count = EQUIPMENT_VIEW.build_hud(ui, "helmet")
-	EQUIPMENT_VIEW.update_hud(boots_count, helmet_count, model)
+	gloves_count = EQUIPMENT_VIEW.build_hud(ui, "gloves")
+	EQUIPMENT_VIEW.update_hud(boots_count, helmet_count, gloves_count, model)
 	if screen == "equipment":
 		return
 	var pause := _button(ui, "II", "pause", _pause)
@@ -422,6 +427,7 @@ func _start_game() -> void:
 	qa_crane_preview = false
 	qa_crane_releases.clear()
 	qa_helmet_hits.clear()
+	qa_gloves_pulls.clear()
 	qa_animation_held = false
 	crush_elapsed = -1.0
 	session += 1
@@ -431,6 +437,7 @@ func _start_game() -> void:
 	world.caption_life = 0.0
 	world.boots_exhaust_life = 0.0
 	world.helmet_impacts.clear()
+	world.gloves_break_life = 0.0
 	world._layout()
 	result_saved = false
 	_show_screen("playing")
@@ -475,6 +482,9 @@ func _release_controls() -> void:
 	pointers.clear()
 	jump_pointers.clear()
 	jump_pending = false
+	grab_pending = false
+	if model != null:
+		model.clear_grab_input()
 	if world != null:
 		world.pressed_actions.clear()
 		world.axis = 0.0
@@ -500,19 +510,22 @@ func _input(event: InputEvent) -> void:
 		elif event.physical_keycode in [KEY_SPACE, KEY_UP] and crush_elapsed < 0.0:
 			jump_pending = true
 			get_viewport().set_input_as_handled()
+		elif event.physical_keycode == KEY_G and crush_elapsed < 0.0 and model.gloves_charges > 0:
+			grab_pending = true
+			get_viewport().set_input_as_handled()
 	elif crush_elapsed >= 0.0:
 		return
 	elif event is InputEventScreenTouch:
-		_pointer(event.index, event.position, event.pressed)
+		_pointer(event.index, event.position, event.pressed, event.pressed)
 	elif event is InputEventScreenDrag and pointers.has(event.index):
 		_pointer(event.index, event.position, true)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		_pointer(-1, event.position, event.pressed)
+		_pointer(-1, event.position, event.pressed, event.pressed)
 	elif event is InputEventMouseMotion and pointers.has(-1):
 		_pointer(-1, event.position, true)
 
 
-func _pointer(id: int, position: Vector2, down: bool) -> void:
+func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false) -> void:
 	if not down:
 		jump_pointers.erase(id)
 		if pointers.has(id):
@@ -529,6 +542,8 @@ func _pointer(id: int, position: Vector2, down: bool) -> void:
 		if action == "jump" and not jump_pointers.has(id):
 			jump_pointers[id] = true
 			jump_pending = true
+		elif action == "grab" and just_pressed:
+			grab_pending = true
 		get_viewport().set_input_as_handled()
 	elif pointers.has(id):
 		pointers.erase(id)
@@ -550,8 +565,9 @@ func _advance_game(delta: float) -> void:
 	var axis := float(Input.is_physical_key_pressed(KEY_RIGHT) or actions.has("right")) - float(
 		Input.is_physical_key_pressed(KEY_LEFT) or actions.has("left"))
 	world.axis = axis
-	model.advance(delta, axis, jump_pending)
+	model.advance(delta, axis, jump_pending, grab_pending)
 	jump_pending = false
+	grab_pending = false
 	for event in model.events:
 		match event.type:
 			"jump": sound.effect("jump")
@@ -565,6 +581,15 @@ func _advance_game(delta: float) -> void:
 					qa_helmet_hits.append(event)
 					if qa_helmet_hits.size() > 24:
 						qa_helmet_hits.pop_front()
+			"gloves_pull":
+				sound.effect("gloves_tear" if event.gloves_broke else "gloves_pull")
+				if event.gloves_broke:
+					world.gloves_break(event)
+					world._layout()
+				if qa_enabled:
+					qa_gloves_pulls.append(event)
+					if qa_gloves_pulls.size() > 24:
+						qa_gloves_pulls.pop_front()
 			"land": sound.effect("land")
 			"drop":
 				if qa_enabled:
@@ -588,7 +613,7 @@ func _advance_game(delta: float) -> void:
 		return
 	if score_label != null:
 		_update_hud_score()
-		EQUIPMENT_VIEW.update_hud(boots_count, helmet_count, model)
+		EQUIPMENT_VIEW.update_hud(boots_count, helmet_count, gloves_count, model)
 
 
 func _background_demo() -> bool:
@@ -679,13 +704,15 @@ func _publish_qa() -> void:
 		"lines": model.lines, "cleared_crates": model.cleared_crates, "loss_reason": model.loss_reason,
 		"session": session, "ticks": model.ticks, "state": model.state,
 		"animation_held": qa_animation_held,
-		"jump_pending": jump_pending,
+		"jump_pending": jump_pending, "grab_pending": grab_pending,
 		"equipment_rows": model.equipment_rows, "equipment_pending": model.equipment_pending,
 		"equipment_options": model.equipment_options() if model.equipment_pending else [],
 		"boots_equipped": model.boots_equipped, "boots_charges": model.boots_charges,
 		"boots_hud": _gear_hud_snapshot(boots_count),
 		"helmet_charges": model.helmet_charges, "helmet_hud": _gear_hud_snapshot(helmet_count),
 		"helmet_hits": qa_helmet_hits,
+		"gloves_charges": model.gloves_charges, "gloves_hud": _gear_hud_snapshot(gloves_count),
+		"grabbed_crate_id": model.grabbed_crate_id, "gloves_pulls": qa_gloves_pulls,
 		"clear_animation": {"phase": world.clear_animation_phase(), "elapsed": world.model.clear_elapsed, "ids": retiring_ids},
 		"crush_animation": {"active": screen in ["playing", "paused"] and crush_elapsed >= 0.0,
 			"progress": world.crush_progress, "impact_crate": world.model.impact_crate_id},
@@ -813,6 +840,7 @@ func _qa_command() -> void:
 		return
 	if str(request.get("scenario", "")) == "crate_appearance" and screen in ["menu", "playing"]:
 		var target := demo.model if screen == "menu" else model
+		target.cancel_grab()
 		target.crates.clear()
 		target.state = "playing"
 		var player_x := clampf(float(request.get("player_x", 8.4)), 0.0, TUNING.columns - TUNING.player_width)
@@ -848,9 +876,9 @@ func _qa_command() -> void:
 		return
 	if screen != "playing":
 		return
-	if str(request.get("scenario", "")) == "helmet_board":
+	if str(request.get("scenario", "")) in ["helmet_board", "gloves_board"]:
 		if crush_elapsed < 0.0:
-			_qa_set_helmet_board(request)
+			_qa_set_test_board(request)
 		return
 	if str(request.get("scenario", "")) in ["boots_rows", "boots_jump"]:
 		var count := clampi(int(request.get("count", 1)), 1, 6) if request.scenario == "boots_rows" else 0
@@ -876,6 +904,7 @@ func _qa_command() -> void:
 		if pose not in ["idle", "walk_stride", "walk_recover", "jump", "push"]:
 			return
 		qa_hero_pose = true
+		model.cancel_grab()
 		model.crates.clear()
 		model.player = Vector2(4.3, TUNING.rows - TUNING.player_height)
 		model.player_velocity = Vector2.ZERO
@@ -885,7 +914,7 @@ func _qa_command() -> void:
 		model.boots_equipped = bool(request.get("boots", false))
 		model.boots_charges = StackSimulation.BOOTS_MAX_CHARGES if model.boots_equipped else 0
 		world.boots_exhaust_life = 0.0
-		EQUIPMENT_VIEW.update_hud(boots_count, helmet_count, model)
+		EQUIPMENT_VIEW.update_hud(boots_count, helmet_count, gloves_count, model)
 		if pose == "push":
 			model.add_crate(model.player.x + TUNING.player_width if model.facing > 0 else model.player.x - 1, float(TUNING.rows - 1))
 		world.clock = 0.15 if pose == "walk_recover" else 0.0
@@ -896,6 +925,7 @@ func _qa_command() -> void:
 	qa_hero_pose = false
 	qa_crane_preview = false
 	qa_animation_held = bool(request.get("animation_hold", false))
+	model.cancel_grab()
 	model.crates.clear()
 	model.cranes_enabled = false
 	model.player_velocity = Vector2.ZERO
@@ -935,10 +965,13 @@ func _qa_prepare_equipment_board(hold: bool) -> void:
 	qa_crane_preview = false
 	qa_animation_held = hold
 	qa_helmet_hits.clear()
+	qa_gloves_pulls.clear()
 	world.caption_life = 0.0
 	world.boots_exhaust_life = 0.0
 	world.helmet_impacts.clear()
+	world.gloves_break_life = 0.0
 	_release_controls()
+	model.cancel_grab()
 	model.crates.clear()
 	model.cranes_enabled = false
 	model.cranes[0].x = 2.5
@@ -963,7 +996,7 @@ func _qa_set_equipment_board(row_count: int, hold: bool) -> void:
 			model.add_crate(float(column), float(TUNING.rows - 1 - row_count - row))
 
 
-func _qa_set_helmet_board(request: Dictionary) -> void:
+func _qa_set_test_board(request: Dictionary) -> void:
 	_qa_prepare_equipment_board(bool(request.get("animation_hold", false)))
 	var floor_y := TUNING.rows - TUNING.player_height
 	var spawn: Variant = request.get("player", [])
@@ -975,6 +1008,7 @@ func _qa_set_helmet_board(request: Dictionary) -> void:
 		model.player_velocity = Vector2(clampf(float(velocity[0]), -TUNING.player_speed, TUNING.player_speed),
 			clampf(float(velocity[1]), -TUNING.jump_speed, 12.0))
 	model.grounded = is_equal_approx(model.player.y, floor_y) and is_zero_approx(model.player_velocity.y)
+	model.facing = -1 if int(request.get("facing", model.facing)) < 0 else 1
 	var crates: Variant = request.get("crates", [])
 	if crates is Array:
 		for placement in crates.slice(0, 48):
