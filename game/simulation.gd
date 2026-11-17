@@ -45,7 +45,6 @@ var _jump_buffer := 0.0
 var _coyote := 0.0
 var _air_jump_available := false
 var _air_jump_requested := false
-var _grab_requested := false
 var _pull_crate := {}
 var _pull_start_player_x := 0.0
 var _pull_start_crate_x := 0.0
@@ -131,21 +130,24 @@ func match_result(ended_at: String) -> Dictionary:
 		"reason": loss_reason}
 
 
-func advance(delta: float, axis: float, jump_pressed: bool = false, grab_pressed: bool = false) -> void:
+func advance(delta: float, axis: float, jump_pressed: bool = false, pull_held: bool = false) -> void:
 	events.clear()
+	if not pull_held:
+		release_pull_input()
 	if state == "over" or equipment_pending:
 		return
-	if jump_pressed:
+	if _gloves_take_control(pull_held):
+		_jump_buffer = 0.0
+		_air_jump_requested = false
+	elif jump_pressed:
 		if state == "playing" and _air_jump_available and not grounded and boots_charges > 0:
 			_air_jump_requested = true
 		else:
 			_jump_buffer = 0.12
-	if grab_pressed and state == "playing":
-		_grab_requested = not _grab_requested
 	accumulator += maxf(delta, 0.0)
 	while accumulator + EPS * 0.01 >= STEP:
 		accumulator -= STEP
-		_tick(clampf(axis, -1.0, 1.0))
+		_tick(clampf(axis, -1.0, 1.0), pull_held)
 		if state == "over" or equipment_pending:
 			accumulator = 0.0
 			break
@@ -189,7 +191,7 @@ func _offer_equipment_if_due() -> void:
 	_air_jump_requested = false
 
 
-func _tick(axis: float) -> void:
+func _tick(axis: float, pull_held: bool) -> void:
 	ticks += 1
 	if state == "clearing":
 		_advance_clear()
@@ -197,17 +199,15 @@ func _tick(axis: float) -> void:
 	elapsed += STEP
 	_jump_buffer = maxf(0.0, _jump_buffer - STEP)
 	_coyote = 0.085 if grounded else maxf(0.0, _coyote - STEP)
-	var has_grip := grabbed_crate_id >= 0 or not _pull_crate.is_empty()
-	if has_grip and (_jump_ready() or _air_jump_requested or _held_crate().is_empty()):
-		cancel_grab()
-	if _grab_requested and not _jump_ready() and not _air_jump_requested:
-		_toggle_grab()
-	_grab_requested = false
-	_move_player(axis)
+	if _gloves_take_control(pull_held):
+		_move_with_gloves(pull_held and gloves_charges > 0)
+	else:
+		_walk_player(axis)
+	_move_player_vertically()
 	_move_crates()
 	if state == "over":
 		return
-	if (grabbed_crate_id >= 0 or not _pull_crate.is_empty()) and _held_crate().is_empty():
+	if (grabbed_crate_id >= 0 or is_pulling()) and _held_crate().is_empty():
 		cancel_grab()
 	if _begin_clear_if_full():
 		return
@@ -227,11 +227,9 @@ func _overlap(a: float, aw: float, b: float, bw: float, margin: float = 0.002) -
 	return a + aw > b + margin and a < b + bw - margin
 
 
-func _move_player(axis: float) -> void:
-	if not _move_with_gloves(axis):
-		_walk_player(axis)
+func _move_player_vertically() -> void:
 	var height := tuning.player_height
-	if _jump_ready():
+	if _jump_buffer > 0.0 and (grounded or _coyote > 0.0):
 		player_velocity.y = -tuning.jump_speed
 		grounded = false
 		_coyote = 0.0
@@ -257,10 +255,6 @@ func _move_player(axis: float) -> void:
 	else:
 		proposed_y = _move_player_up(proposed_y)
 	player.y = maxf(-1.0, proposed_y)
-
-
-func _jump_ready() -> bool:
-	return _jump_buffer > 0.0 and (grounded or _coyote > 0.0)
 
 
 func _walk_player(axis: float) -> void:
@@ -297,38 +291,46 @@ func _can_hold(crate: Dictionary) -> bool:
 
 
 func _held_crate() -> Dictionary:
-	var id := grabbed_crate_id if _pull_crate.is_empty() else int(_pull_crate.id)
+	var id := int(_pull_crate.id) if is_pulling() else grabbed_crate_id
+	if id < 0:
+		return {}
 	for crate in crates:
 		if int(crate.id) == id and _can_hold(crate):
 			return crate
 	return {}
 
 
-func _toggle_grab() -> void:
-	if grabbed_crate_id >= 0:
-		grabbed_crate_id = -1
-		return
-	if gloves_charges <= 0 or not grounded or not _pull_crate.is_empty():
-		return
-	var nearest := INF
+func _find_grabbable_crate() -> Dictionary:
+	if not grounded:
+		return {}
+	var nearest_gap := INF
+	var nearest := {}
 	for crate in crates:
 		var x := float(crate.x)
 		if absf(x - roundf(x)) > EPS or not _can_hold(crate):
 			continue
 		var gap := _grab_gap(crate)
-		if gap < nearest:
-			grabbed_crate_id = int(crate.id)
-			nearest = gap
+		if gap < nearest_gap:
+			nearest = crate
+			nearest_gap = gap
+	return nearest
 
 
-func clear_grab_input() -> void:
-	_grab_requested = false
+func is_pulling() -> bool:
+	return not _pull_crate.is_empty()
+
+
+func _gloves_take_control(pull_held: bool) -> bool:
+	return (pull_held and gloves_charges > 0) or is_pulling()
+
+
+func release_pull_input() -> void:
+	grabbed_crate_id = -1
 
 
 func cancel_grab() -> void:
-	grabbed_crate_id = -1
-	clear_grab_input()
-	if not _pull_crate.is_empty():
+	release_pull_input()
+	if is_pulling():
 		# On detachment the crate can settle back using ordinary collision and gravity.
 		_pull_crate.target_x = _pull_start_crate_x
 		_pull_crate = {}
@@ -354,18 +356,23 @@ func _pull_path_clear(crate: Dictionary, player_target: float, crate_target: flo
 	return true
 
 
-func _move_with_gloves(axis: float) -> bool:
-	if _pull_crate.is_empty():
-		if grabbed_crate_id < 0:
-			return false
-		if axis * facing >= -EPS:
-			return true
-		var crate := _held_crate()
+func _move_with_gloves(pull_held: bool) -> void:
+	var crate := _held_crate()
+	if crate.is_empty():
+		cancel_grab()
+		if not pull_held:
+			return
+		crate = _find_grabbable_crate()
+		if crate.is_empty():
+			return
+	if pull_held and (not is_pulling() or not _pull_returning):
+		grabbed_crate_id = int(crate.id)
+	if not is_pulling():
 		var start_x := float(crate.x)
 		if not _pull_path_clear(crate, player.x - facing, start_x - facing):
-			return true
+			return
 		if crates.any(func(other: Dictionary) -> bool: return absf(float(other.target_x) - float(other.x)) > EPS):
-			return true
+			return
 		_pull_crate = crate
 		_pull_start_player_x = player.x
 		_pull_start_crate_x = start_x
@@ -380,7 +387,7 @@ func _move_with_gloves(axis: float) -> bool:
 		distance = 0.0
 		if not _pull_path_clear(_pull_crate, _pull_start_player_x, _pull_start_crate_x):
 			cancel_grab()
-			return false
+			return
 	var offset := move_toward(float(_pull_crate.x) - _pull_start_crate_x, distance, tuning.push_speed * STEP)
 	player.x = _pull_start_player_x + offset
 	_pull_crate.x = _pull_start_crate_x + offset
@@ -392,9 +399,8 @@ func _move_with_gloves(axis: float) -> bool:
 				"y": float(_pull_crate.y), "player_x": player.x, "player_y": player.y, "facing": facing,
 				"gloves_broke": gloves_charges == 0, "charges": gloves_charges, "tick": ticks})
 			if gloves_charges == 0:
-				grabbed_crate_id = -1
+				release_pull_input()
 		_pull_crate = {}
-	return true
 
 
 func _move_player_up(proposed_y: float) -> float:

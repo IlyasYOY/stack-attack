@@ -29,7 +29,7 @@ group.add_argument('--animations-only', action='store_true', help='Check row cle
 group.add_argument('--keyboard-only', action='store_true', help='Check jump keys and menu keyboard isolation')
 group.add_argument('--boots-only', action='store_true', help='Check equipment offers, air jumps and responsive boots UI')
 group.add_argument('--helmet-only', action='store_true', help='Check helmet contacts, recovery, rewards and layouts')
-group.add_argument('--gloves-only', action='store_true', help='Check glove grabs, pulls, rewards and responsive controls')
+group.add_argument('--gloves-only', action='store_true', help='Check hold-to-pull controls, charges and rewards')
 args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2079,6 +2079,9 @@ def helmet_checks(browser):
             'screenshot_sha256':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in shots}}
 
 
+GLOVE_CELL_TICKS = 39  # One cell at 3.1 cells per second, with physics at 120 Hz.
+
+
 def gloves_shot(page, phase, shots):
     size = page.viewport_size
     shot = screenshot(page, f'gloves-{phase}-{size["width"]}x{size["height"]}.png')
@@ -2095,82 +2098,102 @@ def gloves_board(page, *, facing=1, x=None, gap=0, extra=(), player_x=None):
     snapshot = animation_request(page, 'gloves_board', crates=[[x, 10, 0], *extra],
                                  player=[player_x, before['rows'] - height], facing=facing, animation_hold=True)
     assert snapshot['animation_held'] and snapshot['grounded'] and snapshot['facing'] == facing
-    assert snapshot['grabbed_crate_id'] == -1 and not snapshot['gloves_pulls']
+    check_glove_grip(snapshot)
+    assert not snapshot['gloves_pulls']
     assert len(snapshot['visible_crates']) == 1 + len(extra), snapshot['visible_crates']
     return snapshot
 
 
 @contextmanager
-def held_gloves_input(page, action, touch):
+def glove_touches(page):
+    controls = state(page)['controls']
+    points = {}
+    for identifier, action in enumerate(('grab', 'jump', 'left', 'right'), 1):
+        if action in controls:
+            x, y = point(page, controls[action])
+            points[action] = {'x':x, 'y':y, 'id':identifier}
+    cdp = page.context.new_cdp_session(page)
+
+    def dispatch(event, *actions):
+        cdp.send('Input.dispatchTouchEvent', {'type':event, 'touchPoints':[points[action] for action in actions]})
+
+    try:
+        yield dispatch
+    finally:
+        dispatch('touchEnd')
+        cdp.detach()
+
+
+@contextmanager
+def hold_grab(page, touch):
     if touch:
-        x, y = point(page, state(page)['controls'][action])
-        cdp = page.context.new_cdp_session(page)
+        with glove_touches(page) as dispatch:
+            dispatch('touchStart', 'grab')
+            yield
+    else:
+        page.keyboard.down('g')
         try:
-            cdp.send('Input.dispatchTouchEvent', {'type':'touchStart', 'touchPoints':[{'x':x, 'y':y, 'id':1}]})
             yield
         finally:
-            cdp.send('Input.dispatchTouchEvent', {'type':'touchEnd', 'touchPoints':[]})
-            cdp.detach()
-    else:
-        key = {'grab':'g', 'left':'ArrowLeft', 'right':'ArrowRight'}[action]
-        page.keyboard.down(key)
-        try:
-            yield
-        finally:
-            page.keyboard.up(key)
+            page.keyboard.up('g')
 
 
-def tap_grab(page, touch):
-    if touch:
-        page.touchscreen.tap(*point(page, state(page)['controls']['grab']))
-    else:
-        page.keyboard.press('g')
-    return animation_step(page, 1)
+def check_glove_grip(snapshot, *, held=False, moving=False, crate_id=-1):
+    assert (snapshot['pull_held'], snapshot['pull_in_progress'], snapshot['grabbed_crate_id']) == (
+        held, moving, crate_id), ('Unexpected glove grip', snapshot['screen'], snapshot['ticks'],
+                                  snapshot['pull_held'], snapshot['pull_in_progress'], snapshot['grabbed_crate_id'])
 
 
-def pull_with_gloves(page, board, touch, shots, *, capture=False):
+def check_partial_pull(board, partial, *, cells=0, held=True):
+    target = board['visible_crates'][0]
+    crate = next(c for c in partial['visible_crates'] if c['id'] == target['id'])
+    direction = -board['facing']
+    travel = (crate['x'] - target['x']) * direction
+    assert cells < travel < cells + 1 and crate['y'] == target['y'], (target, crate, cells)
+    assert abs(partial['player'][0] - board['player'][0] - travel * direction) < .001
+    assert partial['player'][1] == board['player'][1] and partial['grounded']
+    assert partial['facing'] == board['facing']
+    assert len(partial['gloves_pulls']) == cells, partial['gloves_pulls']
+    check_gloves_hud(partial, board['gloves_charges'] - cells)
+    check_glove_grip(partial, held=held, moving=True, crate_id=target['id'] if held else -1)
+    if held:
+        assert partial['hero_frame'] == 'grab'
+
+
+def check_pull_cells(board, finished, cells):
     target, *others = board['visible_crates']
     direction = -board['facing']
     charges = board['gloves_charges']
-    attached = tap_grab(page, touch)
-    assert attached['grabbed_crate_id'] == target['id']
-    assert attached['hero_frame'] == 'grab'
-    assert attached['player'] == board['player'] and attached['visible_crates'] == board['visible_crates']
-    if capture:
-        gloves_shot(page, 'grabbed', shots)
-    action = 'left' if direction < 0 else 'right'
-    with held_gloves_input(page, action, touch):
-        partial = animation_step(page, 6)
-        crate = next(c for c in partial['visible_crates'] if c['id'] == target['id'])
-        travel = (crate['x'] - target['x']) * direction
-        assert 0 < travel < 1 and crate['y'] == target['y'], (target, crate)
-        assert abs(partial['player'][0] - board['player'][0] - travel * direction) < .001
-        assert partial['facing'] == board['facing'] and partial['grabbed_crate_id'] == target['id']
-        assert partial['hero_frame'] == 'grab'
-        assert not partial['gloves_pulls'], partial['gloves_pulls']
-        check_gloves_hud(partial, charges)
-        if capture:
-            gloves_shot(page, 'partial-pull', shots)
-    finished = animation_step(page, 50)
-    check_gloves_hud(finished, charges - 1)
-    assert finished['facing'] == board['facing'] and finished['player'][1] == board['player'][1]
-    assert abs(finished['player'][0] - board['player'][0] - direction) < .001
-    expected_x = {c['id']:c['x'] for c in others} | {target['id']:target['x'] + direction}
+    check_gloves_hud(finished, charges - cells)
+    assert finished['grounded'] and finished['player'][1] == board['player'][1]
+    assert finished['facing'] == board['facing'] and not finished['pull_in_progress']
+    assert abs(finished['player'][0] - board['player'][0] - cells * direction) < .001
+    expected_x = {c['id']:c['x'] for c in others} | {target['id']:target['x'] + cells * direction}
     assert {c['id']:c['x'] for c in finished['visible_crates']} == expected_x
-    hit, = finished['gloves_pulls']
-    assert hit['crate_id'] == target['id'] and hit['charges'] == charges - 1 and hit['gloves_broke'] == (charges == 1)
-    assert hit['facing'] == board['facing'] and partial['ticks'] < hit['tick'] <= finished['ticks']
-    assert (hit['x'], hit['y']) == (target['x'] + direction, target['y'])
-    assert abs(hit['player_x'] - finished['player'][0]) < .001 and hit['player_y'] == finished['player'][1]
-    assert finished['grabbed_crate_id'] == (target['id'] if charges > 1 else -1)
+    hits = finished['gloves_pulls']
+    assert len(hits) == cells, hits
+    assert [hit['tick'] - board['ticks'] for hit in hits] == [GLOVE_CELL_TICKS * i for i in range(1, cells + 1)]
+    for i, hit in enumerate(hits, 1):
+        remaining = charges - i
+        assert hit['crate_id'] == target['id'] and hit['charges'] == remaining and hit['gloves_broke'] == (remaining == 0)
+        assert hit['facing'] == board['facing'] and hit['tick'] <= finished['ticks']
+        assert (hit['x'], hit['y']) == (target['x'] + i * direction, target['y'])
+        assert abs(hit['player_x'] - board['player'][0] - i * direction) < .001 and hit['player_y'] == board['player'][1]
     assert cleared_metrics(board) == cleared_metrics(finished)
     assert finished['helmet_charges'] == board['helmet_charges'] and finished['boots_charges'] == board['boots_charges']
     assert personal_statistics(board) == personal_statistics(finished)
-    if charges == 1:
-        assert finished['field'] == board['field'] and finished['crane_rail'] == board['crane_rail'], (
-            'Removing the grab control shifted the game board', board['field'], finished['field'])
-        check_touch_control_layout(finished)
-        gloves_shot(page, 'last-charge', shots)
+
+
+def single_glove_pull(page, board, shots):
+    with hold_grab(page, True):
+        check_partial_pull(board, animation_step(page, 1))
+        gloves_shot(page, 'grabbed', shots)
+        check_partial_pull(board, animation_step(page, 5))
+        gloves_shot(page, 'partial-pull', shots)
+    check_partial_pull(board, animation_step(page, 1), held=False)
+    finished = animation_step(page, 2 * GLOVE_CELL_TICKS)
+    check_pull_cells(board, finished, 1)
+    check_glove_grip(finished)
     return finished
 
 
@@ -2197,14 +2220,109 @@ def gloves_focus_loss(page):
         page.bring_to_front()
 
 
+def keyboard_glove_pull(page, shots):
+    board = gloves_board(page, extra=[[8, 10, 0]])
+    target_id = board['visible_crates'][0]['id']
+    with hold_grab(page, False):
+        check_partial_pull(board, animation_step(page, 1))
+        gloves_shot(page, 'grabbed', shots)
+        page.keyboard.down('g')  # Playwright sends a KeyG repeat while the key stays down.
+        page.keyboard.down('ArrowRight')
+        try:
+            page.keyboard.press('ArrowUp')
+            check_partial_pull(board, animation_step(page, 5))
+            gloves_shot(page, 'partial-pull', shots)
+            check_partial_pull(board, animation_step(page, GLOVE_CELL_TICKS - 7))
+            first_cell = animation_step(page, 1)
+            check_pull_cells(board, first_cell, 1)
+            check_glove_grip(first_cell, held=True, crate_id=target_id)
+            second_cell = animation_step(page, GLOVE_CELL_TICKS)
+            check_pull_cells(board, second_cell, 2)
+            check_glove_grip(second_cell, held=True, crate_id=target_id)
+        finally:
+            page.keyboard.up('ArrowRight')
+    stopped = animation_step(page, GLOVE_CELL_TICKS + 5)
+    check_pull_cells(board, stopped, 2)
+    check_glove_grip(stopped)
+    return stopped['gloves_pulls']
+
+
+def multitouch_glove_pull(page, shots):
+    board = gloves_board(page, facing=-1, gap=.12, extra=[[1, 10, 0]])
+    target_id = board['visible_crates'][0]['id']
+    with glove_touches(page) as dispatch:
+        dispatch('touchStart', 'grab', 'left', 'jump')
+        check_partial_pull(board, animation_step(page, 1))
+        gloves_shot(page, 'grabbed', shots)
+        check_partial_pull(board, animation_step(page, 5))
+        gloves_shot(page, 'partial-pull', shots)
+        dispatch('touchEnd', 'jump')  # Grab and Left stay down.
+        first_cell = animation_step(page, GLOVE_CELL_TICKS - 6)
+        check_pull_cells(board, first_cell, 1)
+        check_glove_grip(first_cell, held=True, crate_id=target_id)
+
+        check_partial_pull(board, animation_step(page, 6), cells=1)
+        dispatch('touchEnd', 'grab')  # Left cannot keep pulling after the grab finger lifts.
+        dispatch('touchStart', 'jump')
+        check_partial_pull(board, animation_step(page, 1), cells=1, held=False)
+        second_cell = animation_step(page, GLOVE_CELL_TICKS - 7)
+        check_pull_cells(board, second_cell, 2)
+        check_glove_grip(second_cell)
+    stopped = animation_step(page, GLOVE_CELL_TICKS + 5)
+    check_pull_cells(board, stopped, 2)
+    check_glove_grip(stopped)
+    return stopped['gloves_pulls']
+
+
+def gloves_release_checks(page, portrait, landscape, shots):
+    resize_boots_view(page, portrait)
+    for interruption in ('pause', 'focus', 'rotation'):
+        board = gloves_board(page)
+        touch = interruption == 'rotation'
+        with hold_grab(page, touch):
+            partial = animation_step(page, 6)
+            check_partial_pull(board, partial)
+            if interruption == 'rotation':
+                interrupted = resize_boots_view(page, portrait)
+                assert interrupted['screen'] == 'playing'
+            elif interruption == 'focus':
+                interrupted = gloves_focus_loss(page)
+            else:
+                button(page, 'pause', True)
+                wait_screen(page, 'paused')
+                interrupted = state(page)
+                check_helmet_pause(interrupted, 3, 10, board['gloves_charges'])
+                gloves_shot(page, 'pause', shots)
+                paused = resize_boots_view(page, landscape)
+                assert_frozen_animation(interrupted, paused)
+                check_glove_grip(paused, moving=True)
+                check_helmet_pause(paused, 3, 10, board['gloves_charges'])
+                gloves_shot(page, 'pause', shots)
+            assert_frozen_animation(partial, interrupted)
+            check_glove_grip(interrupted, moving=True)
+            check_gloves_hud(interrupted, board['gloves_charges'])
+            if not touch:
+                button(page, 'resume', True)
+                wait_screen(page, 'playing')
+                assert_frozen_animation(interrupted, state(page))
+                page.keyboard.down('g')  # A repeat from the original hold must not rearm the input.
+            finished = animation_step(page, 2 * GLOVE_CELL_TICKS)
+            check_pull_cells(board, finished, 1)
+            check_glove_grip(finished)
+        with hold_grab(page, touch):
+            check_partial_pull(board, animation_step(page, 1), cells=1)
+
+
 def gloves_checks(browser):
     portrait, landscape = (390, 844), (844, 390)
     shots, errors = [], []
     context, page = open_boots_game(browser, portrait, errors)
     initial = state(page)
-    gloves_board(page)
-    bare = tap_grab(page, False)
-    assert bare['grabbed_crate_id'] == -1 and not bare['gloves_pulls']
+    board = gloves_board(page)
+    with hold_grab(page, False):
+        bare = animation_step(page, GLOVE_CELL_TICKS)
+    check_pull_cells(board, bare, 0)
+    check_glove_grip(bare)
     check_gloves_hud(bare, 0)
     choice = clear_boots_rows(page, 5, True)
     check_equipment_choice(choice, 'boots', 'helmet', 'gloves')
@@ -2226,103 +2344,68 @@ def gloves_checks(browser):
     gloves_shot(page, 'loadout', shots)
     assert not clear_boots_rows(page, 5, False)['equipment_options']
 
-    gloves_board(page, player_x=1)
-    far = tap_grab(page, False)
-    assert far['grabbed_crate_id'] == -1 and not far['gloves_pulls']
+    board = gloves_board(page, player_x=1)
+    with hold_grab(page, False):
+        far = animation_step(page, GLOVE_CELL_TICKS)
+    check_pull_cells(board, far, 0)
+    assert far['grabbed_crate_id'] == -1
+
+    # A completed tap between physics ticks cannot leave a latched input.
     board = gloves_board(page)
-    target = board['visible_crates'][0]['id']
-    with held_gloves_input(page, 'grab', False):
-        assert animation_step(page, 1)['grabbed_crate_id'] == target
-        page.keyboard.down('g')  # Physical KeyG auto-repeat.
-        assert animation_step(page, 45)['grabbed_crate_id'] == target
-    assert tap_grab(page, False)['grabbed_crate_id'] == -1
-    with held_gloves_input(page, 'grab', True):
-        assert animation_step(page, 1)['grabbed_crate_id'] == target
-        assert animation_step(page, 45)['grabbed_crate_id'] == target
-    detached = tap_grab(page, True)
-    assert detached['grabbed_crate_id'] == -1 and not detached['gloves_pulls']
-    assert detached['player'] == board['player'] and detached['visible_crates'] == board['visible_crates']
-    check_gloves_hud(detached, 6)
+    page.keyboard.press('g')
+    page.touchscreen.tap(*point(page, state(page)['controls']['grab']))
+    tapped = animation_step(page, GLOVE_CELL_TICKS)
+    check_pull_cells(board, tapped, 0)
+    check_glove_grip(tapped)
 
     # The wall and the first blocker obstruct retreat. The elevated blocker
     # intersects only the pulled crate; it starts clear of the hero's head.
     blockers = ((1, []), (4, [[2, 10, 0]]), (4, [[2.98, 9.05, 0]]))
     for x, extra in blockers:
         board = gloves_board(page, x=x, extra=extra)
-        target = board['visible_crates'][0]
-        assert tap_grab(page, False)['grabbed_crate_id'] == target['id']
-        with held_gloves_input(page, 'left', False):
-            blocked = animation_step(page, 1)
-        assert blocked['player'] == board['player'] and not blocked['gloves_pulls']
-        assert blocked['visible_crates'][0] == target and blocked['facing'] == board['facing']
-        check_gloves_hud(blocked, 6)
+        with hold_grab(page, False):
+            blocked = animation_step(page, GLOVE_CELL_TICKS if not extra or extra[0][1] == 10 else 1)
+            check_pull_cells(board, blocked, 0)
 
-    board = gloves_board(page, facing=-1, gap=.12, extra=[[1, 10, 0]])
-    touch_pull = pull_with_gloves(page, board, True, shots, capture=True)['gloves_pulls'][0]
+    touch_pulls = multitouch_glove_pull(page, shots)
     resize_boots_view(page, portrait)
-    board = gloves_board(page, extra=[[8, 10, 0]])
-    keyboard_pull = pull_with_gloves(page, board, False, shots, capture=True)['gloves_pulls'][0]
-    board = gloves_board(page, extra=[[4.75, 9, 0]])
-    supported = board['visible_crates'][1]
-    pull_with_gloves(page, board, False, shots)
-    settled = animation_step(page, 80)
-    fallen = next(c for c in settled['visible_crates'] if c['id'] == supported['id'])
-    assert (fallen['x'], fallen['y']) == (supported['x'], 10) and len(settled['gloves_pulls']) == 1
-    gloves_shot(page, 'cascade', shots)
+    keyboard_pulls = keyboard_glove_pull(page, shots)
 
-    gloves_board(page)
-    grabbed = tap_grab(page, True)
-    target = grabbed['grabbed_crate_id']
-    assert target >= 0
-    with held_gloves_input(page, 'left', False):
-        partial = animation_step(page, 6)
-    assert partial['player'][0] < grabbed['player'][0] and not partial['gloves_pulls']
-    page.keyboard.press('g')
-    page.wait_for_function('window.stackAttackState.grab_pending')
-    button(page, 'pause', True)
-    wait_screen(page, 'paused')
-    paused = state(page)
-    assert_frozen_animation(partial, paused)
-    assert paused['grabbed_crate_id'] == target and not paused['grab_pending']
-    check_helmet_pause(paused, 3, 10, 3)
-    gloves_shot(page, 'pause', shots)
-    rotated = resize_boots_view(page, landscape)
-    assert_frozen_animation(paused, rotated)
-    assert rotated['grabbed_crate_id'] == target and not rotated['grab_pending']
-    check_helmet_pause(rotated, 3, 10, 3)
-    gloves_shot(page, 'pause', shots)
-    button(page, 'resume', True)
-    wait_screen(page, 'playing')
-    assert_frozen_animation(paused, state(page))
-    page.keyboard.press('g')
-    page.wait_for_function('window.stackAttackState.grab_pending')
-    blurred = gloves_focus_loss(page)
-    assert_frozen_animation(partial, blurred)
-    assert blurred['grabbed_crate_id'] == target and not blurred['grab_pending']
-    check_gloves_hud(blurred, 3)
-    button(page, 'resume', True)
-    wait_screen(page, 'playing')
-    finished = animation_step(page, 50)
-    assert finished['grabbed_crate_id'] == target and len(finished['gloves_pulls']) == 1
-    assert abs(finished['player'][0] - grabbed['player'][0] + 1) < .001
-    check_gloves_hud(finished, 2)
+    # The first cell removes support. The next is blocked at the left edge.
+    board = gloves_board(page, x=2, extra=[[2.75, 9, 0]])
+    supported = board['visible_crates'][1]
+    page.mouse.move(*point(page, board['controls']['grab']))
+    page.mouse.down()
+    try:
+        settled = animation_step(page, 2 * GLOVE_CELL_TICKS)
+        check_pull_cells(board, settled, 1)
+    finally:
+        page.mouse.up()
+    fallen = next(c for c in settled['visible_crates'] if c['id'] == supported['id'])
+    assert (fallen['x'], fallen['y']) == (supported['x'], 10)
+    gloves_shot(page, 'cascade', shots)
 
     choice = clear_boots_rows(page, 5, True)
     labels = check_equipment_choice(choice, 'gloves')
-    assert labels['gloves_old_charges'] == '2' and labels['gloves_new_charges'] == '6', labels
+    assert labels['gloves_old_charges'] == '1' and labels['gloves_new_charges'] == '6', labels
     gloves_shot(page, 'replacement', shots)
-    check_gloves_hud(select_boots_action(page, 'skip', True), 2)
+    check_gloves_hud(select_boots_action(page, 'skip', True), 1)
     choice = clear_boots_rows(page, 5, True)
     check_equipment_choice(choice, 'gloves')
-    resize_boots_view(page, portrait)
+    resize_boots_view(page, landscape)
     gloves_shot(page, 'replacement', shots)
     check_gloves_hud(select_boots_action(page, 'equip_gloves', True), 6)
 
-    board = gloves_board(page)
-    assert tap_grab(page, True)['grabbed_crate_id'] >= 0
+    gloves_release_checks(page, portrait, landscape, shots)
+    labels = check_equipment_choice(clear_boots_rows(page, 5, True), 'gloves')
+    assert labels['gloves_old_charges'] == '3' and labels['gloves_new_charges'] == '6', labels
+    check_gloves_hud(select_boots_action(page, 'equip_gloves', True), 6)
+
+    gloves_board(page)
     press_boots_jump(page, True)
     airborne = animation_step(page, 32)
-    assert airborne['grabbed_crate_id'] == -1 and not airborne['grounded'] and not airborne['gloves_pulls']
+    check_glove_grip(airborne)
+    assert not airborne['grounded'] and not airborne['gloves_pulls']
     press_boots_jump(page, True)
     boosted = animation_step(page, 1)
     check_boots_hud(boosted, 9)
@@ -2333,10 +2416,20 @@ def gloves_checks(browser):
     check_helmet_hits(falling, impact, [falling['visible_crates'][0]['id']], 'fall', [2])
     check_gloves_hud(impact, 6)
 
-    for charges in range(6, 0, -1):
-        exhausted = pull_with_gloves(page, gloves_board(page), False, shots)
-        assert exhausted['gloves_charges'] == charges - 1
-    assert tap_grab(page, False)['grabbed_crate_id'] == -1
+    board = gloves_board(page, x=8)
+    with hold_grab(page, True):
+        check_pull_cells(board, animation_step(page, 3 * GLOVE_CELL_TICKS), 3)
+        check_partial_pull(board, animation_step(page, 3 * GLOVE_CELL_TICKS - 1), cells=5)
+        exhausted = animation_step(page, 1)
+        check_pull_cells(board, exhausted, 6)
+        check_glove_grip(exhausted)
+        assert exhausted['field'] == board['field'] and exhausted['crane_rail'] == board['crane_rail'], (
+            'Removing the grab control shifted the game board', board['field'], exhausted['field'])
+        check_touch_control_layout(exhausted)
+        gloves_shot(page, 'last-charge', shots)
+        check_pull_cells(board, animation_step(page, GLOVE_CELL_TICKS + 5), 6)
+    with hold_grab(page, False):
+        check_glove_grip(animation_step(page, 1))
     assert personal_statistics(exhausted) == personal_statistics(initial)
     choice = clear_boots_rows(page, 5, True)
     check_equipment_choice(choice, 'boots', 'helmet', 'gloves')
@@ -2349,7 +2442,8 @@ def gloves_checks(browser):
     restarted = state(page)
     assert restarted['session'] == equipped['session'] + 1 and cleared_metrics(restarted) == (0, 0, 0, 0)
     check_gloves_hud(restarted, 0)
-    assert restarted['grabbed_crate_id'] == -1 and not restarted['grab_pending'] and not restarted['gloves_pulls']
+    check_glove_grip(restarted)
+    assert not restarted['gloves_pulls']
     check_touch_control_layout(restarted)
     context.close()
 
@@ -2363,7 +2457,7 @@ def gloves_checks(browser):
         glove_control = equipped['controls']['grab']
         assert glove_control[2] >= 48 and glove_control[3] >= 48, glove_control
         board = gloves_board(page)
-        pulled = pull_with_gloves(page, board, True, shots, capture=True)
+        pulled = single_glove_pull(page, board, shots)
         button(page, 'pause', True)
         wait_screen(page, 'paused')
         paused = state(page)
@@ -2372,8 +2466,9 @@ def gloves_checks(browser):
         gloves_shot(page, 'pause', shots)
         context.close()
     assert not errors, errors
-    return {'keyboard_pull':keyboard_pull, 'touch_pull':touch_pull, 'trusted_tab_focus_loss':'PASS',
-            'toggle_hold_repeat_and_jump_detach':'PASS', 'blocked_and_partial_pulls':'PASS', 'support_cascade':'PASS',
+    return {'keyboard_pulls':keyboard_pulls, 'touch_pulls':touch_pulls, 'trusted_tab_focus_loss':'PASS',
+            'hold_release_key_repeat_and_multitouch':'PASS', 'movement_and_jump_lock':'PASS',
+            'blocked_and_partial_pulls':'PASS', 'support_cascade':'PASS',
             'last_charge_and_restart':'PASS', 'selection_skip_replacement_and_full_charge_suppression':'PASS',
             'pause_and_both_layouts':'PASS', 'helmet_and_boots_compatibility':'PASS', 'screenshots':shots,
             'screenshot_sha256':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in shots}}

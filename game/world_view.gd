@@ -254,7 +254,7 @@ func _draw_scenery() -> void:
 	draw_line(key_at+Vector2(20,-8),key_at+Vector2(27,-10),Color("b6c2ae"),3)
 
 func hero_frame() -> String:
-	if model.grabbed_crate_id >= 0: return "grab"
+	if model.grabbed_crate_id >= 0 or model.is_pulling(): return "grab"
 	if not model.grounded: return "jump"
 	if absf(axis) > 0.1:
 		for crate in model.crates:

@@ -51,6 +51,7 @@ func run() -> void:
 	gloves_pull_and_break()
 	gloves_blockers()
 	gloves_detachment()
+	gloves_input_priority()
 	helmet_falling_hits()
 	helmet_underside_hits()
 	helmet_multiple_hits()
@@ -470,27 +471,21 @@ func gloves_pull_and_break() -> void:
 		var game := gloved(direction, start_x)
 		var crate := game.crates[0]
 		var other := game.add_crate(start_x + direction, 10)
-		var hero_start := game.player.x
-		game.advance(Simulation.STEP * .25, 0, false, true)
-		check(game.grabbed_crate_id == -1, "A grab press must wait for a fixed tick")
-		game.advance(Simulation.STEP * .75, 0)
-		check(game.grabbed_crate_id == int(crate.id), "One press must grab the front adjacent crate within reach")
-		game.advance(.2, direction)
-		check(game.player.x == hero_start and float(crate.x) == start_x and game.facing == direction,
-			"Forward input while gripping must neither push nor reverse")
 		var cell_ticks := ceili(1.0 / (game.tuning.push_speed * Simulation.STEP))
 		for remaining in range(5, -1, -1):
 			var previous := float(crate.x)
 			var hero_previous := game.player.x
-			game.advance(Simulation.STEP, -direction)
+			game.advance(Simulation.STEP, 0, false, true)
 			check((float(crate.x) - previous) * direction < 0.0 and absf(float(crate.x) - previous) < 1.0
-				and is_equal_approx(game.player.x - hero_previous, float(crate.x) - previous),
-				"The player and crate must move smoothly as a pair while the player faces the crate")
-			game.advance((cell_ticks - 2) * Simulation.STEP, 0)
+				and is_equal_approx(game.player.x - hero_previous, float(crate.x) - previous)
+				and game.is_pulling() and game.grabbed_crate_id == int(crate.id),
+				"Holding the glove button alone must pull the same adjacent crate while facing it")
+			game.advance((cell_ticks - 2) * Simulation.STEP, 0, false, true)
 			check(game.gloves_charges == remaining + 1 and game.events.is_empty(), "Partial distance must spend no charge")
-			game.advance(Simulation.STEP, 0)
+			game.advance(Simulation.STEP, 0, false, true)
 			check(game.gloves_charges == remaining and float(crate.x) == previous - direction
-				and is_equal_approx(game.player.x, hero_previous - direction) and game.facing == direction,
+				and is_equal_approx(game.player.x, hero_previous - direction) and game.facing == direction
+				and not game.is_pulling(),
 				"A started pull must finish one cell at unchanged spacing, including the last charge")
 			check(game.events == [{"type": "gloves_pull", "crate_id": int(crate.id), "x": float(crate.x), "y": 10.0,
 				"player_x": game.player.x, "player_y": game.player.y, "facing": direction,
@@ -503,16 +498,16 @@ func gloves_pull_and_break() -> void:
 		check(game.grabbed_crate_id == -1 and game.events.is_empty(), "Torn gloves must not grab again")
 
 	var reference := gloved(1, 7)
-	reference.advance(1.0, -1, false, true)
+	reference.advance(1.0, 0, false, true)
 	for frame_rate in [30, 144]:
 		var game := gloved(1, 7)
 		var pulls: Array[Dictionary] = []
 		for frame in range(frame_rate):
-			game.advance(1.0 / frame_rate, -1, false, frame == 0)
+			game.advance(1.0 / frame_rate, 0, false, true)
 			pulls.append_array(game.events)
 		check(game.ticks == reference.ticks and game.player == reference.player and game.crates == reference.crates
-			and game.gloves_charges == reference.gloves_charges and pulls == reference.events,
-			"Fixed-tick grab and pull results must agree across render frame rates")
+			and game.gloves_charges == 3 and game.gloves_charges == reference.gloves_charges and pulls == reference.events,
+			"One continuous hold must finish the same three cells across render frame rates")
 
 
 func gloves_blockers() -> void:
@@ -538,17 +533,17 @@ func gloves_blockers() -> void:
 		var crate := game.crates[0]
 		var initial := game.player
 		var initial_x := float(crate.x)
-		game.advance(Simulation.STEP, -1, false, true)
-		check(game.grabbed_crate_id == int(crate.id) and game.player == initial and float(crate.x) == initial_x
-			and game.gloves_charges == 6 and game.events.is_empty() and crates_separate(game),
-			"A %s obstacle must block the whole pair without a charge or loss of grip" % obstacle)
 		game.advance(Simulation.STEP, 0, false, true)
-		check(game.grabbed_crate_id == -1, "A blocked grip must still release on a second press")
+		check(game.grabbed_crate_id == int(crate.id) and game.player == initial and float(crate.x) == initial_x
+			and game.gloves_charges == 6 and game.events.is_empty() and crates_separate(game) and not game.is_pulling(),
+			"A %s obstacle must block the whole pair without a charge or loss of grip" % obstacle)
+		game.advance(0, 0)
+		check(game.grabbed_crate_id == -1, "Releasing the button must clear a blocked grip immediately")
 
 	var dynamic := gloved()
 	var crate := dynamic.crates[0]
 	var initial := dynamic.player
-	dynamic.advance(8 * Simulation.STEP, -1, false, true)
+	dynamic.advance(8 * Simulation.STEP, 0, false, true)
 	dynamic.add_crate(2, 9.08, 6)
 	dynamic.advance(.18, 0)
 	check(dynamic.player == initial and float(crate.x) == 4.0 and dynamic.grabbed_crate_id == -1
@@ -559,35 +554,39 @@ func gloves_blockers() -> void:
 func gloves_detachment() -> void:
 	var released := gloved()
 	var target := released.crates[0]
-	released.advance(Simulation.STEP, -1, false, true)
+	released.advance(Simulation.STEP * .25, 0, false, true)
+	check(released.grabbed_crate_id == -1 and not released.is_pulling(), "Sub-tick hold must not start a partial cell")
+	released.advance(Simulation.STEP * .75, 0)
+	check(released.grabbed_crate_id == -1 and not released.is_pulling(), "A hold released before its first tick must leave no queued grip")
 	released.advance(Simulation.STEP, 0, false, true)
-	check(released.grabbed_crate_id == -1 and released.gloves_charges == 6,
-		"Release must clear the grip immediately during a partial cell")
+	var paused_player := released.player
+	var paused_x := float(target.x)
+	released.release_pull_input()
+	check(released.grabbed_crate_id == -1 and released.gloves_charges == 6 and released.is_pulling()
+		and released.player == paused_player and float(target.x) == paused_x,
+		"Releasing input for a pause must detach immediately without advancing or charging the cell")
+	released.advance(Simulation.STEP, 0, false, true)
+	check(released.grabbed_crate_id == int(target.id) and released.is_pulling(),
+		"Holding again during safe completion must reattach to the same crate")
 	released.advance(.4, 0)
-	check(float(target.x) == 3.0 and released.gloves_charges == 5 and released.grabbed_crate_id == -1,
+	check(float(target.x) == 3.0 and released.gloves_charges == 5 and released.grabbed_crate_id == -1
+		and not released.is_pulling(),
 		"A started valid cell must finish once after release, with no follow-on pull")
 
-	var jumped := gloved()
-	var jumping_target := jumped.crates[0]
-	jumped.advance(4 * Simulation.STEP, -1, false, true)
-	jumped.advance(Simulation.STEP, 0, true)
-	check(jumped.events == [{"type": "jump"}] and jumped.grabbed_crate_id == -1 and not jumped.grounded,
-		"An ordinary jump must detach a partial pull immediately")
-	jumped.advance(.3, 0)
-	check(float(jumping_target.x) == 4.0 and jumped.gloves_charges == 6,
-		"An interrupted pull must leave the crate aligned without charging")
-
 	var removed := gloved()
-	removed.advance(4 * Simulation.STEP, -1, false, true)
+	removed.advance(4 * Simulation.STEP, 0, false, true)
 	removed.crates.clear()
 	var before := removed.player.x
 	removed.advance(Simulation.STEP, -1)
-	check(removed.grabbed_crate_id == -1 and removed.gloves_charges == 6 and removed.player.x < before,
-		"Losing the attached ID must clear the grip and allow walking in the same tick")
-	removed.add_crate(2, 10)
-	removed.reset(1)
-	check(removed.grabbed_crate_id == -1 and removed.gloves_charges == 0,
-		"Reset after a lost target must not retain the old grip or charges")
+	check(removed.grabbed_crate_id == -1 and removed.gloves_charges == 6 and not removed.is_pulling(),
+		"Losing the attached ID must end the unfinished step without a charge")
+	removed.advance(Simulation.STEP, -1)
+	check(removed.player.x < before, "After losing the target and releasing the button, normal walking must resume")
+	var restarted := gloved()
+	restarted.advance(Simulation.STEP, 0, false, true)
+	restarted.reset(1)
+	check(restarted.grabbed_crate_id == -1 and restarted.gloves_charges == 0 and not restarted.is_pulling(),
+		"Reset during a pull must clear grip, transaction and charges")
 
 	var ledge := gloved()
 	var ledge_crate := ledge.crates[0]
@@ -595,7 +594,7 @@ func gloves_detachment() -> void:
 	ledge.player.y -= 1.0
 	ledge.add_crate(3, 10)
 	ledge.add_crate(4, 10)
-	ledge.advance(.29, -1, false, true)
+	ledge.advance(.29, 0, false, true)
 	ledge.advance(.4, 0)
 	check(ledge.grabbed_crate_id == -1 and ledge.gloves_charges == 6 and float(ledge_crate.x) == 4.0
 		and is_equal_approx(ledge.player.y + ledge.tuning.player_height, 11.0) and crates_separate(ledge),
@@ -603,19 +602,26 @@ func gloves_detachment() -> void:
 
 	var stacked := gloved()
 	var upper := stacked.add_crate(4, 9)
-	stacked.advance(Simulation.STEP, -1, false, true)
+	stacked.advance(Simulation.STEP, 0, false, true)
 	stacked.advance(.55, 0)
 	check(float(upper.y) > 9.0 and is_equal_approx(float(upper.x), 4.0) and crates_separate(stacked),
 		"Moving a supporting crate must leave the crate above to fall at its own column")
 	var helmet := gloved()
 	helmet.helmet_charges = 1
-	helmet.advance(14 * Simulation.STEP, -1, false, true)
+	helmet.advance(14 * Simulation.STEP, 0, false, true)
 	helmet.add_crate(2, 9.10, 6)
 	helmet.advance(.35, 0)
 	check(helmet.helmet_charges == 0 and helmet.gloves_charges == 5 and helmet.state == "playing"
 		and helmet.events.size() == 2 and helmet.events[0].type == "helmet_hit"
 		and helmet.events[1].type == "gloves_pull",
 		"Moving with a crate must preserve the helmet response to a falling head strike")
+	var crushed := gloved()
+	crushed.advance(14 * Simulation.STEP, 0, false, true)
+	crushed.add_crate(2, 9.10, 6)
+	crushed.advance(Simulation.STEP, 0, false, true)
+	check(crushed.state == "over" and crushed.loss_reason == "crushed" and not crushed.is_pulling()
+		and crushed.grabbed_crate_id == -1 and crushed.gloves_charges == 6,
+		"A fatal hit while holding must clear the unfinished pull without spending a charge")
 
 	var cleared := empty(4, 6)
 	cleared.gloves_charges = 6
@@ -627,12 +633,47 @@ func gloves_detachment() -> void:
 	check(cleared.grabbed_crate_id == int(upper_crate.id), "A crate can be grabbed while standing on the same row")
 	cleared.add_crate(0, 5)
 	cleared.add_crate(3, 5)
-	cleared.advance(Simulation.STEP, -1)
+	cleared.advance(Simulation.STEP, 0, false, true)
 	check(cleared.state == "clearing" and cleared.grabbed_crate_id == -1 and cleared.gloves_charges == 6,
 		"A row clear must release an unfinished grip without spending a charge")
 	cleared.advance(.8, 0)
 	check(cleared.state == "playing" and float(upper_crate.x) == 2.0 and cleared.gloves_charges == 6,
 		"Collapse must settle the interrupted crate without restoring the old grip")
+
+
+func gloves_input_priority() -> void:
+	var game := gloved()
+	game.boots_equipped = true
+	game.boots_charges = Simulation.BOOTS_MAX_CHARGES
+	var initial := game.player
+	game.advance(Simulation.STEP * .25, 0, true)
+	game.advance(Simulation.STEP * .75, 1, true, true)
+	check(game.player.x < initial.x and game.player.y == initial.y and game.facing == 1 and game.events.is_empty(),
+		"Held gloves must ignore movement and jumps, including an already buffered jump")
+	game.advance(Simulation.STEP, -1, true)
+	check(game.facing == 1 and game.player.y == initial.y and game.events.is_empty(),
+		"The unfinished cell must keep control and discard jump input even after release")
+	game.advance(.4, 0)
+	check(game.player.y == initial.y and game.grounded and game.gloves_charges == 5
+		and game.boots_charges == Simulation.BOOTS_MAX_CHARGES,
+		"A discarded jump must not fire or consume the boots when the cell finishes")
+	game.advance(Simulation.STEP, 0, true)
+	check(game.events == [{"type": "jump"}], "A fresh jump input after completion must take effect")
+	game.advance(Simulation.STEP, 0, true, true)
+	check(game.events.is_empty() and game.boots_charges == Simulation.BOOTS_MAX_CHARGES,
+		"Held gloves must also discard an airborne jump input even without a grabbable crate")
+	game.advance(Simulation.STEP, 0)
+	check(game.events.is_empty(), "Releasing the button must not replay the discarded air jump")
+	game.advance(Simulation.STEP, 0, true)
+	check(game.events == [{"type": "air_jump"}] and game.boots_charges == Simulation.BOOTS_MAX_CHARGES - 1,
+		"A new airborne jump input must use the equipped boots as usual")
+
+	var bare := gloved()
+	bare.gloves_charges = 0
+	initial = bare.player
+	bare.advance(Simulation.STEP, -1, true, true)
+	check(bare.player.x < initial.x and bare.facing == -1 and bare.events == [{"type": "jump"}],
+		"The glove button without charges must leave ordinary movement and jumping available")
 
 
 func helmet_falling_hits() -> void:

@@ -19,8 +19,9 @@ var helmet_count: Label
 var gloves_count: Label
 var pointers := {}
 var jump_pointers := {}
+var pull_pointers := {}
 var jump_pending := false
-var grab_pending := false
+var pull_key_held := false
 var session := 0
 var result_saved := false
 var crush_elapsed := -1.0
@@ -481,13 +482,18 @@ func _resize() -> void:
 func _release_controls() -> void:
 	pointers.clear()
 	jump_pointers.clear()
+	pull_pointers.clear()
 	jump_pending = false
-	grab_pending = false
+	pull_key_held = false
 	if model != null:
-		model.clear_grab_input()
+		model.release_pull_input()
 	if world != null:
 		world.pressed_actions.clear()
 		world.axis = 0.0
+
+
+func _pull_held() -> bool:
+	return model != null and model.gloves_charges > 0 and (pull_key_held or pull_pointers.values().has(true))
 
 
 func _input(event: InputEvent) -> void:
@@ -503,47 +509,61 @@ func _input(event: InputEvent) -> void:
 		return
 	if screen != "playing":
 		return
+	if event is InputEventKey and event.physical_keycode == KEY_G and crush_elapsed < 0.0:
+		if not event.echo:
+			pull_key_held = event.pressed and model.gloves_charges > 0
+			if pull_key_held:
+				jump_pending = false
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.physical_keycode == KEY_ESCAPE:
 			_pause()
 			get_viewport().set_input_as_handled()
 		elif event.physical_keycode in [KEY_SPACE, KEY_UP] and crush_elapsed < 0.0:
-			jump_pending = true
-			get_viewport().set_input_as_handled()
-		elif event.physical_keycode == KEY_G and crush_elapsed < 0.0 and model.gloves_charges > 0:
-			grab_pending = true
+			jump_pending = not _pull_held() and not model.is_pulling()
 			get_viewport().set_input_as_handled()
 	elif crush_elapsed >= 0.0:
 		return
 	elif event is InputEventScreenTouch:
 		_pointer(event.index, event.position, event.pressed, event.pressed)
-	elif event is InputEventScreenDrag and pointers.has(event.index):
+	elif event is InputEventScreenDrag and (pointers.has(event.index) or pull_pointers.has(event.index)):
 		_pointer(event.index, event.position, true)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		_pointer(-1, event.position, event.pressed, event.pressed)
-	elif event is InputEventMouseMotion and pointers.has(-1):
+		var real_press: bool = event.pressed and event.device != InputEvent.DEVICE_ID_EMULATION
+		_pointer(-1, event.position, event.pressed, real_press)
+	elif event is InputEventMouseMotion and (pointers.has(-1) or pull_pointers.has(-1)):
 		_pointer(-1, event.position, true)
 
 
 func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false) -> void:
 	if not down:
 		jump_pointers.erase(id)
-		if pointers.has(id):
-			pointers.erase(id)
+		var was_pulling := pull_pointers.erase(id)
+		if pointers.erase(id) or was_pulling:
 			get_viewport().set_input_as_handled()
+		return
+	var pull_control: Rect2 = world.controls.get("grab", Rect2())
+	var on_pull := pull_control.has_point(position)
+	if just_pressed and on_pull:
+		pull_pointers[id] = true
+		pointers.erase(id)
+		jump_pending = false
+	if pull_pointers.has(id):
+		pull_pointers[id] = on_pull
+		get_viewport().set_input_as_handled()
 		return
 	var action := ""
 	for candidate in world.controls:
-		if world.controls[candidate].has_point(position):
+		if candidate != "grab" and world.controls[candidate].has_point(position):
 			action = candidate
 			break
 	if not action.is_empty():
 		pointers[id] = action
 		if action == "jump" and not jump_pointers.has(id):
 			jump_pointers[id] = true
-			jump_pending = true
-		elif action == "grab" and just_pressed:
-			grab_pending = true
+			if not _pull_held() and not model.is_pulling():
+				jump_pending = true
 		get_viewport().set_input_as_handled()
 	elif pointers.has(id):
 		pointers.erase(id)
@@ -561,13 +581,18 @@ func _advance_game(delta: float) -> void:
 	for action in pointers.values():
 		if not actions.has(action):
 			actions.append(action)
-	world.pressed_actions = actions
 	var axis := float(Input.is_physical_key_pressed(KEY_RIGHT) or actions.has("right")) - float(
 		Input.is_physical_key_pressed(KEY_LEFT) or actions.has("left"))
-	world.axis = axis
-	model.advance(delta, axis, jump_pending, grab_pending)
+	var pull_held := _pull_held()
+	var pulling := pull_held or model.is_pulling()
+	if pulling:
+		actions.clear()
+	if pull_held:
+		actions.append("grab")
+	world.pressed_actions = actions
+	world.axis = 0.0 if pulling else axis
+	model.advance(delta, axis, jump_pending, pull_held)
 	jump_pending = false
-	grab_pending = false
 	for event in model.events:
 		match event.type:
 			"jump": sound.effect("jump")
@@ -704,7 +729,7 @@ func _publish_qa() -> void:
 		"lines": model.lines, "cleared_crates": model.cleared_crates, "loss_reason": model.loss_reason,
 		"session": session, "ticks": model.ticks, "state": model.state,
 		"animation_held": qa_animation_held,
-		"jump_pending": jump_pending, "grab_pending": grab_pending,
+		"jump_pending": jump_pending, "pull_held": _pull_held(), "pull_in_progress": model.is_pulling(),
 		"equipment_rows": model.equipment_rows, "equipment_pending": model.equipment_pending,
 		"equipment_options": model.equipment_options() if model.equipment_pending else [],
 		"boots_equipped": model.boots_equipped, "boots_charges": model.boots_charges,
