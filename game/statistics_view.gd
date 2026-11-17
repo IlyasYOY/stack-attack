@@ -92,6 +92,7 @@ static func _summary(parent: Control, width: float, compact: bool, stats: Dictio
 		["max_lines", "Макс. рядов", str(stats.get("max_lines", 0))],
 		["best_combo", "Лучшее комбо", "x%d" % stats.get("best_combo", 0)],
 		["duration", "Время: ср. / макс.", time if played > 0 else "— / —"],
+		["broken_crates", "Учтено сломанных", str(stats.get("total_broken_crates", "—"))],
 	]
 	var row_height := 0.0
 	for metric in metrics:
@@ -161,7 +162,8 @@ static func _history_row(parent: Control, width: float, entry: Dictionary, index
 		return
 	_pair(text, body, width, "Длительность " + duration, id + "_duration", reason, id + "_reason")
 	_pair(text, body, width, "Ряды %s" % entry.lines, id + "_lines", "Ящики %s" % entry.crates, id + "_crates")
-	_label(text, body, "Лучшее комбо x%s" % entry.best_combo, id + "_combo", 12, MINT)
+	_pair(text, body, width, "Лучшее комбо x%s" % entry.best_combo, id + "_combo",
+		"Сломано %s" % entry.get("broken_crates", "—"), id + "_broken_crates")
 
 
 static func _pair(text: Callable, parent: Control, width: float, left: String, left_id: String,

@@ -1,7 +1,7 @@
 class_name StackProfile
 extends RefCounted
 const SAVE_PATH := "user://stack-attack-profile-v1.json"
-const SAVE_VERSION := 2
+const SAVE_VERSION := 3
 const MATCH_METRICS := ["duration_ms", "score", "lines", "crates", "best_combo"]
 const MAX_EXACT_JSON_INTEGER := 9007199254740991
 const DAYS_IN_MONTH := [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
@@ -50,12 +50,19 @@ func _validated_match(entry: Variant) -> Dictionary:
 	var result := {"ended_at": ended_at, "reason": reason}
 	for key in MATCH_METRICS:
 		var value: Variant = entry.get(key)
-		if not (value is int or value is float):
-			return {}
-		if not is_finite(value) or value < 0 or value > MAX_EXACT_JSON_INTEGER or value != floorf(value):
+		if not _valid_count(value):
 			return {}
 		result[key] = int(value)
+	# Older matches recorded cleared rows, but had no record of individual destruction.
+	var broken: Variant = entry.get("broken_crates")
+	if _valid_count(broken):
+		result.broken_crates = int(broken)
 	return result
+
+
+func _valid_count(value: Variant) -> bool:
+	return (value is int or value is float) and is_finite(value) and value >= 0 \
+		and value <= MAX_EXACT_JSON_INTEGER and value == floorf(value)
 
 
 func load_profile() -> void:
@@ -135,6 +142,8 @@ func statistics() -> Dictionary:
 		result.best_score = maxi(result.best_score, entry.score)
 		result.total_lines += entry.lines
 		result.total_crates += entry.crates
+		if entry.has("broken_crates"):
+			result.total_broken_crates = result.get("total_broken_crates", 0) + int(entry.broken_crates)
 		result.max_lines = maxi(result.max_lines, entry.lines)
 		result.best_combo = maxi(result.best_combo, entry.best_combo)
 		result[entry.reason] += 1

@@ -113,3 +113,55 @@ def crate_slide(duration):
 
 SLIDE_DURATION = 1.6
 write('crate_slide', SLIDE_DURATION, crate_slide(SLIDE_DURATION))
+
+
+def mallet_swing():
+    noise = random.Random(2437)
+    air = 0.0
+
+    def sample(t):
+        nonlocal air
+        air = .78 * air + .22 * noise.uniform(-1, 1)
+        pressure = math.sin(math.pi * t / .12) ** 3
+        return .26 * air * pressure
+
+    return sample
+
+
+def mallet_impact():
+    noise = random.Random(71072)
+    grain = 0.0
+
+    def sample(t):
+        nonlocal grain
+        grain = .58 * grain + .42 * noise.uniform(-1, 1)
+        body = math.sin(2 * math.pi * (196 * t + 70 * t * t)) * .17 * math.exp(-t * 47)
+        rim = math.sin(2 * math.pi * 506 * t) * .075 * math.exp(-t * 68)
+        wood = grain * .17 * math.exp(-t * 32)
+        return min(1, t / .004) * (body + rim + wood)
+
+    return sample
+
+
+def mallet_break():
+    noise = random.Random(7494)
+    grain = 0.0
+
+    def sample(t):
+        nonlocal grain
+        grain = .34 * grain + .66 * noise.uniform(-1, 1)
+        tail = t - .055
+        if tail <= 0.0:
+            return 0.0
+        splinter = .19 * grain * math.exp(-tail * 38)
+        echo = t - .133
+        if echo > 0.0:
+            splinter += min(1, echo / .005) * .085 * math.sin(2 * math.pi * 487 * echo) * math.exp(-echo * 66)
+        return min(1, tail / .004) * splinter
+
+    return sample
+
+
+write('mallet_swing', .12, mallet_swing())
+write('mallet_hit', .17, mallet_impact())
+write('mallet_break', .24, mallet_break())

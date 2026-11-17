@@ -4,12 +4,15 @@ const ICONS := {
 	"boots": preload("res://art/rocket_boots.png"),
 	"helmet": preload("res://art/helmet.png"),
 	"gloves": preload("res://art/work_gloves.png"),
+	"mallet": preload("res://art/wooden_mallet.png"),
 }
-const NAMES := {"boots": "Ботинки-ракеты", "helmet": "Каска", "gloves": "Рабочие перчатки"}
-const EFFECTS := {"boots": "Двойной прыжок", "helmet": "Разбивает ящики", "gloves": "Тянут ящики"}
+const NAMES := {"boots": "Ботинки-ракеты", "helmet": "Каска", "gloves": "Рабочие перчатки",
+	"mallet": "Киянка"}
+const EFFECTS := {"boots": "Двойной прыжок", "helmet": "Разбивает ящики", "gloves": "Тянут ящики",
+	"mallet": "Бьёт ящик спереди"}
 const CAPACITIES := {"boots": StackSimulation.BOOTS_MAX_CHARGES, "helmet": StackSimulation.HELMET_MAX_CHARGES,
-	"gloves": StackSimulation.GLOVES_MAX_CHARGES}
-const CHARGE_UNITS := {"boots": "прыжков", "helmet": "удара", "gloves": "подтягиваний"}
+	"gloves": StackSimulation.GLOVES_MAX_CHARGES, "mallet": StackSimulation.MALLET_MAX_CHARGES}
+const CHARGE_UNITS := {"boots": "прыжков", "helmet": "удара", "gloves": "подтягиваний", "mallet": "удара"}
 const CREAM := Color("f4e3ba")
 const GOLD := Color("e7b46b")
 const MINT := Color("8dc6ac")
@@ -29,12 +32,14 @@ static func build_offer(panel: PanelContainer, content: VBoxContainer, compact: 
 	var options := model.equipment_options()
 	var narrow := panel.get_viewport_rect().size.x < 420.0
 	var tight := compact or (options.size() > 1 and narrow)
+	var short_rows := compact and options.size() == 4
 	var charges := _loadout_charges(model)
 	_frame(panel, GOLD, 10 if tight else 16)
-	content.add_theme_constant_override("separation", 5 if tight else 9)
-	if options.size() == 3:
+	content.add_theme_constant_override("separation", 3 if short_rows else (5 if tight else 9))
+	if options.size() >= 3:
 		for item in options:
-			_offer_row(content, item, charges[item], narrow, button, text, resolve)
+			_offer_row(content, item, charges[item], _replaces_hands(item, charges), narrow, short_rows,
+				button, text, resolve)
 	elif options.size() == 2:
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 8)
@@ -47,23 +52,28 @@ static func build_offer(panel: PanelContainer, content: VBoxContainer, compact: 
 			var card := VBoxContainer.new()
 			card.add_theme_constant_override("separation", 4)
 			backing.add_child(card)
-			_offer_item(card, item, charges[item], compact, true, button, text, resolve)
+			_offer_item(card, item, charges[item], _replaces_hands(item, charges), compact, true, button, text, resolve)
 	elif options.size() == 1:
 		var item: String = options[0]
-		_offer_item(content, item, charges[item], compact, false, button, text, resolve)
+		_offer_item(content, item, charges[item], _replaces_hands(item, charges), compact, false, button, text, resolve)
 	button.call(content, "Пропустить", "skip", resolve.bind(""))
 
 
 static func _loadout_charges(model: StackSimulation) -> Dictionary:
 	return {"boots": model.boots_charges if model.boots_equipped else -1,
 		"helmet": model.helmet_charges if model.helmet_charges > 0 else -1,
-		"gloves": model.gloves_charges if model.gloves_charges > 0 else -1}
+		"gloves": model.gloves_charges if model.gloves_charges > 0 else -1,
+		"mallet": model.mallet_charges if model.mallet_charges > 0 else -1}
 
 
-static func _offer_row(parent: VBoxContainer, item: String, charges: int,
-		narrow: bool, button: Callable, text: Callable, resolve: Callable) -> void:
+static func _replaces_hands(item: String, charges: Dictionary) -> bool:
+	return (item == "mallet" and charges.gloves >= 0) or (item == "gloves" and charges.mallet >= 0)
+
+
+static func _offer_row(parent: VBoxContainer, item: String, charges: int, replaces_hands: bool,
+		narrow: bool, short_rows: bool, button: Callable, text: Callable, resolve: Callable) -> void:
 	var backing := PanelContainer.new()
-	backing.add_theme_stylebox_override("panel", _style(DARK.darkened(.12), EDGE, 5))
+	backing.add_theme_stylebox_override("panel", _style(DARK.darkened(.12), EDGE, 2 if short_rows else 5))
 	parent.add_child(backing)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
@@ -86,14 +96,14 @@ static func _offer_row(parent: VBoxContainer, item: String, charges: int,
 		var capacity := _label(text, details, _capacity_label(item, true), prefix + "_capacity", 12, MINT)
 		capacity.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 
-	var action := _offer_action(row, item, charges >= 0, button, resolve)
+	var action := _offer_action(row, item, charges >= 0 or replaces_hands, button, resolve)
 	action.add_theme_font_size_override("font_size", 14)
 	action.size_flags_horizontal = Control.SIZE_SHRINK_END
 	action.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	action.custom_minimum_size.x = 94
 
 
-static func _offer_item(parent: VBoxContainer, item: String, charges: int,
+static func _offer_item(parent: VBoxContainer, item: String, charges: int, replaces_hands: bool,
 		compact: bool, paired: bool, button: Callable, text: Callable, resolve: Callable) -> void:
 	var equipped := charges >= 0
 	var capacity: int = CAPACITIES[item]
@@ -121,7 +131,7 @@ static func _offer_item(parent: VBoxContainer, item: String, charges: int,
 
 	_label(text, parent, EFFECTS[item], prefix + "_effect", effect_size, CREAM)
 	_label(text, parent, _capacity_label(item, paired), prefix + "_capacity", 13 if paired else 14, MINT)
-	var action := _offer_action(parent, item, equipped, button, resolve)
+	var action := _offer_action(parent, item, equipped or replaces_hands, button, resolve)
 	if paired:
 		action.add_theme_font_size_override("font_size", 16)
 
@@ -139,9 +149,9 @@ static func _capacity_label(item: String, compact: bool) -> String:
 	return "%d %s" % [CAPACITIES[item], unit]
 
 
-static func _offer_action(parent: Control, item: String, equipped: bool, button: Callable,
+static func _offer_action(parent: Control, item: String, replaces: bool, button: Callable,
 		resolve: Callable) -> Button:
-	return button.call(parent, "Заменить" if equipped else "Надеть",
+	return button.call(parent, "Заменить" if replaces else "Надеть",
 		"equip" if item == "boots" else "equip_" + item, resolve.bind(item))
 
 
@@ -171,7 +181,8 @@ static func build_pause(panel: PanelContainer, content: VBoxContainer, compact: 
 	center.add_child(slots)
 	var charges := _loadout_charges(model)
 	_equipment_slot(text, slots, "Голова", "slot_head", "helmet", charges.helmet)
-	_equipment_slot(text, slots, "Руки", "slot_hands", "gloves", charges.gloves)
+	var hands := "mallet" if charges.mallet >= 0 else "gloves"
+	_equipment_slot(text, slots, "Руки", "slot_hands", hands, charges[hands])
 	_equipment_slot(text, slots, "Ноги", "slot_feet", "boots", charges.boots)
 
 
@@ -214,13 +225,14 @@ static func build_hud(parent: Control, item: String) -> Label:
 	return count
 
 
-static func update_hud(boots: Label, helmet: Label, gloves: Label, model: StackSimulation) -> void:
+static func update_hud(boots: Label, helmet: Label, gloves: Label, mallet: Label, model: StackSimulation) -> void:
 	var charges := _loadout_charges(model)
-	var visible_count := int(model.boots_equipped) + int(model.helmet_charges > 0) + int(model.gloves_charges > 0)
+	var visible_count := int(model.boots_equipped) + int(model.helmet_charges > 0) + int(
+		model.gloves_charges > 0 or model.mallet_charges > 0)
 	var width := HUD_TRIPLE_WIDTH if visible_count == 3 else (HUD_PAIR_WIDTH if visible_count == 2 else HUD_SINGLE_WIDTH)
 	var gap := HUD_TRIPLE_GAP if visible_count == 3 else HUD_GAP
 	var x := HUD_START
-	var badges := {"boots": boots, "helmet": helmet, "gloves": gloves}
+	var badges := {"boots": boots, "helmet": helmet, "gloves": gloves, "mallet": mallet}
 	for item in badges:
 		var charge_count: int = charges[item]
 		_update_badge(badges[item], item, charge_count, x, width, visible_count)

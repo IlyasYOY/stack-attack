@@ -30,7 +30,7 @@ func setup(settings: StackProfile) -> void:
 		add_child(player)
 		effects_players.append(player)
 	for name in ["click", "jump", "land", "line", "over", "helmet_hit", "helmet_break",
-		"gloves_tear"]:
+		"gloves_tear", "mallet_swing", "mallet_hit", "mallet_break"]:
 		sounds[name] = load("res://audio/" + name + ".wav")
 	slide_player = AudioStreamPlayer.new()
 	slide_player.bus = "Effects"

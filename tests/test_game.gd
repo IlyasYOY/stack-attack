@@ -49,6 +49,7 @@ func run() -> void:
 	clearing()
 	equipment_rewards()
 	equipment_jumps()
+	mallet_actions()
 	gloves_pull_and_break()
 	gloves_blockers()
 	gloves_detachment()
@@ -61,6 +62,7 @@ func run() -> void:
 	crane_cycles()
 	crane_contention()
 	storage()
+	broken_crate_history()
 	random_sessions()
 	demo_games()
 	await app_flow()
@@ -312,7 +314,7 @@ func clearing() -> void:
 	chain_game.advance(Simulation.STEP, 0)
 	var result := chain_game.match_result(ended_at)
 	check(result == {"ended_at": ended_at, "duration_ms": 1208, "score": 200, "lines": 2,
-		"crates": 8, "best_combo": 2, "reason": "overflow"}, "A match result must count clear ticks and preserve the final counters and loss reason")
+		"crates": 8, "broken_crates": 0, "best_combo": 2, "reason": "overflow"}, "A match result must count clear ticks and preserve the final counters and loss reason")
 	check(result.duration_ms > chain_game.elapsed * 1000, "The match duration must include time spent in clear animations")
 	chain_game.reset(7481)
 	check(chain_game.cleared_crates == 0 and chain_game.best_combo == 0 and chain_game.ticks == 0,
@@ -364,7 +366,8 @@ func equipment_rewards() -> void:
 		"A long frame must stop on the first playable boundary after the final collapse")
 	check(game.equipment_pending and game.equipment_rows == 7 and game.accumulator == 0.0,
 		"Opening the first offer must preserve the second threshold and surplus, and discard leftover frame time")
-	check(game.equipment_options() == ["boots", "helmet", "gloves"], "The first offer must make all three equipment slots available")
+	check(game.equipment_options() == ["boots", "helmet", "gloves", "mallet"],
+		"The first offer must present both hands items and both independent slots")
 	var frozen := [game.ticks, game.elapsed, game.player, game.player_velocity, game.cranes.duplicate(true), game._rng.state]
 	game.advance(20.0, 1, true)
 	check(frozen == [game.ticks, game.elapsed, game.player, game.player_velocity, game.cranes, game._rng.state],
@@ -385,28 +388,36 @@ func equipment_rewards() -> void:
 
 	add_full_rows(game, 9)
 	game.advance(5.0, 0)
-	check(game.equipment_pending and game.equipment_rows == 6 and game.equipment_options() == ["helmet", "gloves"],
-		"Full boots must leave the helmet and gloves available and preserve queued thresholds")
+	check(game.equipment_pending and game.equipment_rows == 6 and game.equipment_options() == ["helmet", "gloves", "mallet"],
+		"Full boots must leave the helmet and both hands items available and preserve queued thresholds")
 	game.resolve_equipment("boots")
 	check(game.equipment_pending and game.equipment_rows == 6, "Choosing an unavailable full item must leave the offer open")
 	game.resolve_equipment("helmet")
-	check(game.equipment_pending and game.equipment_rows == 1 and game.equipment_options() == ["gloves"],
-		"Choosing a helmet must leave the queued gloves offer available with boots and helmet full")
+	check(game.equipment_pending and game.equipment_rows == 1 and game.equipment_options() == ["gloves", "mallet"],
+		"Choosing a helmet must leave both hands items available with boots and helmet full")
 	game.resolve_equipment("gloves")
-	check(not game.equipment_pending and game.equipment_rows == 1 and game.equipment_options().is_empty()
+	check(not game.equipment_pending and game.equipment_rows == 1 and game.equipment_options() == ["mallet"]
 		and game.helmet_charges == Simulation.HELMET_MAX_CHARGES and game.boots_charges == 10
 		and game.gloves_charges == Simulation.GLOVES_MAX_CHARGES,
 		"All three equipment slots must stay equipped after choosing gloves")
-	start = game.ticks
 	add_full_rows(game, 10)
 	game.advance(5.0, 0)
-	check(not game.equipment_pending and game.equipment_rows == 1 and game.ticks == start + 600,
-		"With all items full, a combo must consume all crossed thresholds without pausing or dropping the remainder")
+	check(game.equipment_pending and game.equipment_rows == 6 and game.equipment_options() == ["mallet"],
+		"A full hands item must leave the other item available on the next reward")
+	game.resolve_equipment("mallet")
+	check(game.equipment_pending and game.equipment_rows == 1 and game.equipment_options() == ["gloves"]
+		and game.mallet_charges == Simulation.MALLET_MAX_CHARGES and game.gloves_charges == 0
+		and game.helmet_charges == 3 and game.boots_charges == 10,
+		"The mallet must replace the gloves without affecting the independent slots")
+	game.resolve_equipment("gloves")
+	check(not game.equipment_pending and game.equipment_rows == 1 and game.mallet_charges == 0
+		and game.gloves_charges == Simulation.GLOVES_MAX_CHARGES,
+		"Choosing gloves from the queued offer must replace the mallet")
 
 	game.helmet_charges -= 1
 	add_full_rows(game, 4)
 	game.advance(3.0, 0)
-	check(game.equipment_pending and game.equipment_options() == ["helmet"],
+	check(game.equipment_pending and game.equipment_options() == ["helmet", "mallet"],
 		"A partly spent helmet must be available while the boots are full")
 	game.resolve_equipment("")
 	check(not game.equipment_pending and game.helmet_charges == 2 and game.boots_charges == 10,
@@ -423,7 +434,7 @@ func equipment_rewards() -> void:
 	add_full_rows(game, 5)
 	game.advance(3.0, 0)
 	check(game.equipment_pending and game.equipment_rows == 0 and game.boots_charges == 9
-		and game.equipment_options() == ["boots"], "Partially spent boots must remain available while the helmet is full")
+		and game.equipment_options() == ["boots", "mallet"], "Partially spent boots must remain available while the helmet is full")
 	game.resolve_equipment("")
 	check(not game.equipment_pending and game.boots_equipped and game.boots_charges == 9,
 		"Skipping a replacement must keep the equipped pair and its remaining charges")
@@ -431,12 +442,15 @@ func equipment_rewards() -> void:
 	game.advance(5.0, 0)
 	check(game.equipment_pending and game.equipment_rows == 5, "An earlier skip must not prevent future offers")
 	game.resolve_equipment("boots")
+	check(game.equipment_pending and game.equipment_options() == ["mallet"],
+		"Refilling boots leaves the hands replacement in the second queued reward")
+	game.resolve_equipment("")
 	check(not game.equipment_pending and game.equipment_rows == 0 and game.boots_charges == 10,
-		"A replacement must restore ten charges and silently consume the next threshold at full capacity")
+		"A replacement must restore ten charges after both queued rewards are resolved")
 	game.gloves_charges -= 1
 	add_full_rows(game, 5)
 	game.advance(3.0, 0)
-	check(game.equipment_pending and game.equipment_options() == ["gloves"],
+	check(game.equipment_pending and game.equipment_options() == ["gloves", "mallet"],
 		"Partly spent gloves must remain available while the helmet and boots are full")
 	game.resolve_equipment("")
 	check(not game.equipment_pending and game.gloves_charges == 5,
@@ -449,8 +463,85 @@ func equipment_rewards() -> void:
 	game.reset(7481)
 	check(game.equipment_enabled and not game.equipment_pending and not game.boots_equipped
 		and game.boots_charges == 0 and game.helmet_charges == 0 and game.gloves_charges == 0
-		and game.grabbed_crate_id == -1 and game.equipment_rows == 0,
+		and game.mallet_charges == 0 and game.grabbed_crate_id == -1 and game.equipment_rows == 0,
 		"Reset must retain the opt-in and clear all equipment slots and the grip")
+
+
+func mallet_actions() -> void:
+	for direction in [-1, 1]:
+		var game := empty()
+		game.equipment_enabled = true
+		game.equipment_rows = Simulation.ROWS_PER_EQUIPMENT - 1
+		game.mallet_charges = 1
+		game.facing = direction
+		var target_x := game.player.x + game.tuning.player_width + .08 if direction > 0 else game.player.x - 1.08
+		var target := game.add_crate(target_x, 10)
+		var above := game.add_crate(target_x, 9)
+		var behind := game.add_crate(0.0 if direction > 0 else 4.0, 10)
+		game.advance(0.0, 0.0, false, false, true)
+		check(game.events.is_empty() and game.mallet_charges == 1, "A tap between steps must wait for simulation time")
+		game.advance(Simulation.STEP, 0)
+		check(game.events.size() == 1 and game.events[0].type == "mallet_swing" and game.events[0].facing == direction
+			and game.crates.has(target), "A mallet must announce a facing-aware windup before changing the board")
+		game.advance(Simulation.MALLET_WINDUP_TIME - Simulation.STEP, 0)
+		check(game.events.is_empty() and game.crates.has(target), "The target must remain until the windup completes")
+		game.advance(Simulation.STEP, 0)
+		check(game.events.size() == 1 and game.events[0].type == "mallet_hit" and game.events[0].mallet_broke
+			and game.events[0].crate_id == target.id and game.mallet_charges == 0 and not game.crates.has(target),
+			"The last mallet charge must break exactly the crate in front, then break the tool")
+		check(game.crates.has(behind) and game.crates.has(above) and float(above.y) > 9.0,
+			"A struck lower crate must lose support immediately without breaking or moving another crate laterally")
+		check(game.broken_crates == 1 and game.score == 0 and game.lines == 0 and game.cleared_crates == 0
+			and game.equipment_rows == 4 and not game.equipment_pending,
+			"Breaking a crate must be counted separately and leave the reward threshold and score alone")
+		game.advance(.5, 0, false, false, true)
+		check(game.broken_crates == 1 and float(above.y) == 10.0,
+			"An exhausted tool must leave the upper crate to fall and settle normally")
+
+	var miss := empty()
+	miss.player.x = 0.0
+	miss.facing = -1
+	miss.mallet_charges = 3
+	var wrong_side := miss.add_crate(miss.tuning.player_width + .02, 10)
+	miss.advance(.2, 0, false, false, true)
+	check(miss.events.size() == 2 and miss.events[1].type == "mallet_miss"
+		and miss.crates.has(wrong_side) and miss.mallet_charges == 3,
+		"An outward swing at the boundary must miss without spending a charge or reaching behind")
+	miss.facing = 1
+	miss.advance(Simulation.STEP, 0, false, false, true)
+	miss.cancel_mallet_swing()
+	miss.advance(.3, 0)
+	check(miss.crates.has(wrong_side) and miss.broken_crates == 0,
+		"Cancelling a swing on pause must prevent a late impact after resuming")
+	miss.advance(.2, 0, false, false, true)
+	var next := miss.add_crate(miss.tuning.player_width + .02, 10)
+	miss.advance(.5, 0)
+	check(miss.crates.has(next) and miss.mallet_charges == 2 and miss.broken_crates == 1,
+		"A new crate must survive until another distinct tap")
+	miss.advance(.2, 0, false, false, true)
+	check(not miss.crates.has(next) and miss.mallet_charges == 1 and miss.broken_crates == 2,
+		"A later tap must strike the newly adjacent crate")
+	var distant := miss.add_crate(miss.tuning.player_width + Simulation.MALLET_REACH + .01, 10)
+	miss.advance(.2, 0, false, false, true)
+	check(miss.crates.has(distant) and miss.mallet_charges == 1,
+		"The mallet must not reach a crate outside its neighboring space")
+	miss.advance(0, 0, false, false, true)
+	miss.reset(7481)
+	check(miss.broken_crates == 0 and miss.mallet_charges == 0,
+		"Restart must clear the tool, buffered action and broken-crate counter")
+
+	for charges in [0, 1]:
+		var game := empty()
+		game.mallet_charges = 3
+		game.helmet_charges = charges
+		var x := game.player.x + game.tuning.player_width
+		game.add_crate(x, 10)
+		game.add_crate(x, 9)
+		game.advance(Simulation.STEP + Simulation.MALLET_WINDUP_TIME, 0, false, false, true)
+		game.advance(.23, 1)
+		check(game.mallet_charges == 2 and game.broken_crates == 1 + charges
+			and game.helmet_charges == 0 and game.state == ("playing" if charges > 0 else "over"),
+			"Walking under the crate freed by the mallet must follow existing crush and helmet rules")
 
 
 func equipment_jumps() -> void:
@@ -907,7 +998,7 @@ func loss_conditions() -> void:
 	var ended_at := "2026-11-15T21:52:35"
 	var crush_result := crushed.match_result(ended_at)
 	check(crush_result == {"ended_at": ended_at, "duration_ms": 317, "score": 0, "lines": 0,
-		"crates": 0, "best_combo": 0, "reason": "crushed"}, "Crush must preserve the ordinary final result and duration")
+		"crates": 0, "broken_crates": 0, "best_combo": 0, "reason": "crushed"}, "Crush must preserve the ordinary final result and duration")
 	var final_ticks := crushed.ticks
 	var final_player := crushed.player
 	var final_crates := crushed.crates.duplicate(true)
@@ -1072,7 +1163,7 @@ func storage() -> void:
 		"crushed": 1, "overflow": 1, "average_duration_ms": 10351, "max_duration_ms": 12601},
 		"Aggregates must use all finished matches and a rounded average duration")
 	var migrated: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(path))
-	check(migrated.version == 2, "The next save must upgrade the existing profile file")
+	check(migrated.version == 3, "The next save must upgrade the existing profile file")
 	var migrated_profile := Profile.new(path)
 	check(is_equal_approx(migrated_profile.music, .2) and migrated_profile.effects == 0 and not migrated_profile.vibration,
 		"The upgraded save must retain the legacy settings on reload")
@@ -1107,6 +1198,35 @@ func storage() -> void:
 	var recovered := Profile.new(path)
 	check(recovered.records.is_empty() and recovered.matches.is_empty() and not recovered.last_error.is_empty(),
 		"Corrupt storage must fall back safely")
+	DirAccess.remove_absolute(path)
+
+
+func broken_crate_history() -> void:
+	var path := "user://test-broken-crates-%d.json" % Time.get_ticks_usec()
+	var old_match := {"ended_at": "2026-11-15T19:30:20", "duration_ms": 8100, "score": 200,
+		"lines": 2, "crates": 20, "best_combo": 1, "reason": "crushed"}
+	var old_save := JSON.stringify({"version": 2, "matches": [old_match]})
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(old_save)
+	file.close()
+	var profile := Profile.new(path)
+	check(profile.matches == [old_match] and not profile.statistics().has("total_broken_crates")
+		and FileAccess.get_file_as_string(path) == old_save,
+		"An old history must survive with unknown breaks and without a migration write on load")
+	var fresh_match := old_match.duplicate()
+	fresh_match.broken_crates = 3
+	profile.add_match(fresh_match)
+	var zero_match := old_match.duplicate()
+	zero_match.broken_crates = 0
+	profile.add_match(zero_match)
+	var invalid_count := old_match.duplicate()
+	invalid_count.broken_crates = -1
+	profile.add_match(invalid_count)
+	var restored := Profile.new(path)
+	var stats := restored.statistics()
+	check(restored.matches == [old_match, zero_match, fresh_match, old_match]
+		and stats.total_broken_crates == 3 and stats.total_crates == 80 and stats.total_lines == 8,
+		"Count measured breaks separately and preserve matches without a valid break count")
 	DirAccess.remove_absolute(path)
 
 

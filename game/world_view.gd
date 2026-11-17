@@ -19,6 +19,11 @@ var helmet_impacts: Array[Dictionary] = []
 var gloves_break_life := 0.0
 var gloves_break_origin := Vector2.ZERO
 var gloves_break_facing := 1
+var _mallet_windup_age := -1.0
+var _mallet_follow_age := -1.0
+var _mallet_facing := 1
+var _mallet_broke := false
+var _mallet_impacts: Array[Dictionary] = []
 var _layout_model_id := 0
 var _reserve_grab_space := false
 const FONT: Font = preload("res://art/workshop_font.fnt")
@@ -29,6 +34,9 @@ const HERO_FRAME_COLUMNS := {"idle": 0, "walk": 1, "jump": 2, "push": 3, "grab":
 const HERO_BOOTS_ATLAS: Texture2D = preload("res://art/hero_rocket_boots.png")
 const HERO_HELMET_ATLAS: Texture2D = preload("res://art/hero_helmet.png")
 const HERO_GLOVES_ATLAS: Texture2D = preload("res://art/hero_work_gloves.png")
+const HERO_MALLET_ATLAS: Texture2D = preload("res://art/hero_mallet.png")
+const MALLET_TEXTURE: Texture2D = preload("res://art/wooden_mallet.png")
+const MALLET_FRAGMENTS: Texture2D = preload("res://art/mallet_fragments.png")
 const HERO_TEXTURES := {
 	"idle": preload("res://art/hero_idle.png"), "walk": preload("res://art/hero_walk.png"),
 	"jump": preload("res://art/hero_jump.png"), "push": preload("res://art/hero_push.png")}
@@ -67,6 +75,10 @@ const FRAGMENT_TILE := Vector2(20, 16)
 const GLOVES_BREAK_TIME := 0.64
 const GLOVE_FRAGMENTS: Texture2D = preload("res://art/glove_fragments.png")
 const GLOVE_FRAGMENT_SIZE := Vector2(12, 8)
+const MALLET_CONTACT_TIME := 0.055
+const MALLET_RECOVERY_TIME := 0.19
+const MALLET_DEBRIS_TIME := 0.54
+const MALLET_GRIP := Vector2(16, 23)
 # Horizontal flight, initial lift, and width in board pixels.
 const WOOD_FLIGHT := [Vector3(-29, -21, 15), Vector3(30, -16, 14),
 	Vector3(-42, -6, 6), Vector3(38, -2, 5), Vector3(14, -32, 6), Vector3(-11, -34, 4)]
@@ -104,9 +116,11 @@ func _layout() -> void:
 			"jump": jump_button}
 	var grab_y := jump_button.position.y - GRAB_BUTTON_GAP - GRAB_BUTTON_HEIGHT
 	var grab_button := Rect2(jump_button.position.x, grab_y, jump_button.size.x, GRAB_BUTTON_HEIGHT)
-	var has_gloves := model.gloves_charges > 0
-	if has_gloves:
+	if model.gloves_charges > 0:
 		controls["grab"] = grab_button
+		_reserve_grab_space = true
+	elif model.mallet_charges > 0:
+		controls["mallet"] = grab_button
 		_reserve_grab_space = true
 	var free_height := size.y - (84.0 if landscape else 204.0)
 	cell = maxf(8.0, floorf(minf(free_width / model.tuning.columns, free_height / (model.tuning.rows + 2))))
@@ -114,8 +128,7 @@ func _layout() -> void:
 	var frame_clearance := WAREHOUSE_FRAME + 3.0
 	var centered_right := floorf((size.x + model.tuning.columns * cell) * 0.5)
 	if not landscape and _reserve_grab_space and centered_right + frame_clearance > grab_button.position.x:
-		# Fit the lower frame above the grab control with the rail still below the HUD.
-		# Keep this space through the current game so a tear does not move the field.
+		# Keep space for the hand action through the current game, even when the item breaks.
 		field_bottom = grab_button.position.y - frame_clearance
 		var rows_with_crane := model.tuning.rows - CRANE_TOP / PIXELS_PER_CELL
 		cell = maxf(8.0, minf(cell, floorf((field_bottom - HUD_CLEARANCE_Y) / rows_with_crane)))
@@ -141,6 +154,18 @@ func animate(delta: float) -> void:
 	caption_life = maxf(0.0, caption_life - delta)
 	boots_exhaust_life = maxf(0.0, boots_exhaust_life - delta)
 	gloves_break_life = maxf(0.0, gloves_break_life - delta)
+	if _mallet_windup_age >= 0.0:
+		_mallet_windup_age += delta
+		if _mallet_windup_age > StackSimulation.MALLET_WINDUP_TIME + MALLET_RECOVERY_TIME:
+			cancel_mallet_swing()
+	if _mallet_follow_age >= 0.0:
+		_mallet_follow_age += delta
+		if _mallet_follow_age >= MALLET_RECOVERY_TIME:
+			_mallet_follow_age = -1.0
+	for index in range(_mallet_impacts.size() - 1, -1, -1):
+		_mallet_impacts[index].age += delta
+		if _mallet_impacts[index].age >= MALLET_DEBRIS_TIME:
+			_mallet_impacts.remove_at(index)
 	for index in range(helmet_impacts.size() - 1, -1, -1):
 		var impact := helmet_impacts[index]
 		impact.age += delta
@@ -156,6 +181,43 @@ func gloves_break(event: Dictionary) -> void:
 	gloves_break_facing = int(event.facing)
 	gloves_break_origin = _crate_origin(float(event.player_x) + model.tuning.player_width * 0.5,
 		float(event.player_y) + model.tuning.player_height)
+
+func mallet_swing(event: Dictionary) -> void:
+	_mallet_windup_age = 0.0
+	_mallet_follow_age = -1.0
+	_mallet_facing = int(event.facing)
+	_mallet_broke = false
+
+func mallet_miss() -> void:
+	_mallet_windup_age = -1.0
+	_mallet_follow_age = 0.0
+
+func mallet_hit(event: Dictionary) -> void:
+	mallet_miss()
+	_mallet_broke = bool(event.mallet_broke)
+	var crate := _crate_origin(float(event.x), float(event.y))
+	var center := crate + Vector2(12, 12)
+	var player := _crate_origin(float(event.player_x), float(event.player_y))
+	var contact := crate + Vector2(1.0 if _mallet_facing > 0 else PIXELS_PER_CELL - 1.0,
+		clampf(player.y + 14.0 - crate.y, 3.0, PIXELS_PER_CELL - 3.0))
+	_mallet_impacts.append({"age": 0.0, "crate": center, "contact": contact,
+		"facing": _mallet_facing, "broke": _mallet_broke})
+
+func cancel_mallet_swing() -> void:
+	_mallet_windup_age = -1.0
+
+func reset_mallet_effects() -> void:
+	cancel_mallet_swing()
+	_mallet_follow_age = -1.0
+	_mallet_broke = false
+	_mallet_impacts.clear()
+
+func mallet_animation_phase() -> String:
+	if _mallet_windup_age >= 0.0:
+		return "windup"
+	if _mallet_follow_age >= 0.0:
+		return "strike" if _mallet_follow_age < MALLET_CONTACT_TIME else "recovery"
+	return "none"
 
 func helmet_hit(event: Dictionary) -> void:
 	var crate := _crate_origin(float(event.x), float(event.y))
@@ -461,6 +523,44 @@ func _draw_hero(bounds: Rect2, frame: String) -> void:
 	else:
 		draw_texture_rect(HERO_TEXTURES[frame], bounds, false)
 
+func _draw_mallet_hero(bounds: Rect2, frame: String) -> void:
+	var phase := mallet_animation_phase()
+	var carrying := model.mallet_charges > 0
+	if phase == "none" and not carrying:
+		_draw_hero(bounds, frame)
+		return
+	var facing := model.facing if phase == "none" else _mallet_facing
+	var hand := Vector2(24.5, 36.5)
+	if frame == "push":
+		hand = Vector2(27.5, 35.5)
+	var angle := 0.34
+	var column := -1
+	if phase == "windup":
+		var progress := _mallet_windup_age / StackSimulation.MALLET_WINDUP_TIME
+		column = 0
+		hand = Vector2(28, 19)
+		angle = lerpf(-0.82, 0.72, smoothstep(0.50, 1.0, progress))
+	elif phase == "strike" or phase == "recovery":
+		column = 1
+		hand = Vector2(29, 33.5)
+		angle = lerpf(1.44, 0.34, smoothstep(MALLET_CONTACT_TIME, MALLET_RECOVERY_TIME, _mallet_follow_age))
+	if carrying or (phase == "strike" and _mallet_broke):
+		if facing < 0:
+			hand.x = HERO_FRAME_PIXELS.x - hand.x
+		var grip := (bounds.position + hand / HERO_FRAME_PIXELS * bounds.size).round()
+		var board := Transform2D(0.0, Vector2.ONE * cell / PIXELS_PER_CELL, 0.0, field.position)
+		var motion := Transform2D(angle * facing, Vector2(0.66 * facing, 0.66), 0.0, grip)
+		draw_set_transform_matrix(board * motion)
+		draw_texture(MALLET_TEXTURE, -MALLET_GRIP)
+		draw_set_transform_matrix(board)
+	if column < 0:
+		_draw_hero(bounds, frame)
+	else:
+		var row := int(model.boots_equipped) + 2 * int(model.helmet_charges > 0)
+		bounds.size.x *= facing
+		var source := Rect2(Vector2(column, row) * HERO_FRAME_PIXELS, HERO_FRAME_PIXELS)
+		draw_texture_rect_region(HERO_MALLET_ATLAS, bounds, source)
+
 static func pause_portrait(boots_equipped: bool, helmet_equipped: bool = false,
 		gloves_equipped: bool = false) -> Texture2D:
 	var atlas := _hero_atlas(boots_equipped, helmet_equipped, gloves_equipped)
@@ -513,6 +613,39 @@ func _draw_helmet_impacts(width: float, floor_y: float) -> void:
 			_draw_helmet_shell(impact.head, age, bool(impact.facing_left), width, floor_y)
 		if age < HELMET_FLASH_TIME:
 			_draw_helmet_flash(impact.contact, age, width)
+
+func _draw_mallet_impacts(width: float, floor_y: float) -> void:
+	for impact in _mallet_impacts:
+		var age := float(impact.age)
+		var facing := int(impact.facing)
+		var contact: Vector2 = impact.contact
+		if age < HELMET_WOOD_TIME:
+			_draw_wood_fragments(impact.crate, age, false, width, floor_y)
+		if age < MALLET_CONTACT_TIME * 1.7:
+			var opacity: float = 1.0 - smoothstep(0.02, MALLET_CONTACT_TIME * 1.7, age)
+			var flash := PackedVector2Array([Vector2(-4, 0), Vector2(2, -2), Vector2(5, -7),
+				Vector2(6, -2), Vector2(11, -3), Vector2(7, 1), Vector2(9, 4),
+				Vector2(4, 3), Vector2(5, 7), Vector2(1, 3)])
+			for index in range(flash.size()):
+				flash[index] = contact + Vector2(flash[index].x * facing, flash[index].y)
+			draw_colored_polygon(flash, Color(EFFECT_AMBER, opacity))
+			draw_rect(Rect2(contact - Vector2(1, 1), Vector2(3, 3)), Color(CREAM, opacity))
+		if impact.broke and age >= MALLET_CONTACT_TIME:
+			_draw_mallet_fragments(contact, facing, age - MALLET_CONTACT_TIME, width, floor_y)
+
+func _draw_mallet_fragments(contact: Vector2, facing: int, age: float, width: float, floor_y: float) -> void:
+	var progress := age / (MALLET_DEBRIS_TIME - MALLET_CONTACT_TIME)
+	var opacity: float = 1.0 - smoothstep(0.64, 1.0, progress)
+	for index in range(3):
+		var drift := float([-11, 27, -23][index]) * facing
+		var lift := float([16, 24, 10][index])
+		var at := contact + Vector2(drift * progress, 64.0 * progress * progress - lift * progress)
+		var piece := Vector2(13.0, 10.0) if index < 2 else Vector2(10.0, 8.0)
+		var corner := (at - piece * 0.5).round().clamp(Vector2(0, -PIXELS_PER_CELL),
+			Vector2(width, floor_y) - piece)
+		var source := Rect2(index * 20.0, 0.0, 20.0, 16.0)
+		piece.x *= facing
+		draw_texture_rect_region(MALLET_FRAGMENTS, Rect2(corner, piece), source, Color(Color.WHITE, opacity))
 
 func _draw_wood_fragments(origin: Vector2, age: float, jumped: bool, width: float, floor_y: float) -> void:
 	var progress := age / HELMET_WOOD_TIME
@@ -703,12 +836,13 @@ func _draw_field_objects() -> void:
 	if impact.is_empty():
 		var bounds := _hero_bounds()
 		_draw_boots_exhaust(bounds, floor_y)
-		_draw_hero(bounds, hero_frame())
+		_draw_mallet_hero(bounds, hero_frame())
 	else:
 		_draw_crush(impact, width)
 	if active:
 		_draw_helmet_impacts(width, floor_y)
 		_draw_glove_fragments(width, floor_y)
+		_draw_mallet_impacts(width, floor_y)
 	if phase == "collapse":
 		_draw_clear_dust(width, floor_y, collapse_elapsed)
 
@@ -749,7 +883,7 @@ func _draw_warehouse() -> void:
 func _draw_controls() -> void:
 	for action in controls:
 		var rect: Rect2 = controls[action]
-		var down := pressed_actions.has(action)
+		var down: bool = pressed_actions.has(action) or (action == "mallet" and mallet_animation_phase() != "none")
 		var grabbing: bool = action == "grab" and model.grabbed_crate_id >= 0
 		var p := rect.position
 		var s := rect.size
@@ -772,6 +906,9 @@ func _draw_controls() -> void:
 				draw_circle(indicator, 3.0, EFFECT_AMBER)
 				draw_rect(Rect2(indicator - Vector2.ONE, Vector2(2, 2)), CREAM)
 			draw_texture_rect_region(GRAB_ICONS, Rect2(icon_at, GRAB_ICON_SIZE), source)
+		elif action == "mallet":
+			var icon_size := Vector2(32, 32)
+			draw_texture_rect(MALLET_TEXTURE, Rect2(rect.get_center() - icon_size * 0.5, icon_size), false)
 		else:
 			var direction := Vector2.UP if action == "jump" else (Vector2.LEFT if action == "left" else Vector2.RIGHT)
 			_draw_arrow(rect.get_center() + Vector2(1, 2), direction, Color("0b2632"))

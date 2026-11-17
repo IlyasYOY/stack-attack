@@ -173,11 +173,12 @@ def hero_frame(frame, rocket_boots=False, helmet=False, gloves=False):
     d.rectangle((15, 37, 17, 38), fill='#705237')
     d.rectangle((6, 26, 9, 35), fill='#ac936d')
     d.rectangle((7, 27, 8, 32), fill='#e2cfa0')
-    arm = (23, 28, 28, 34) if frame in ('push', 'grab') else (22, 27, 25, 36)
-    d.rectangle(arm, fill='#9a825f')
-    d.rectangle((arm[0], arm[1], arm[2] - 1, arm[1] + 3), fill='#d4c59f')
-    d.rectangle((arm[0], arm[3] - 1, min(31, arm[2] + 1), arm[3] + 3), fill='#f1bb83')
-    d.line((arm[0], arm[3] + 3, min(31, arm[2] + 1), arm[3] + 3), fill='#81573f')
+    if frame not in ('mallet_windup', 'mallet_strike'):
+        arm = (23, 28, 28, 34) if frame in ('push', 'grab') else (22, 27, 25, 36)
+        d.rectangle(arm, fill='#9a825f')
+        d.rectangle((arm[0], arm[1], arm[2] - 1, arm[1] + 3), fill='#d4c59f')
+        d.rectangle((arm[0], arm[3] - 1, min(31, arm[2] + 1), arm[3] + 3), fill='#f1bb83')
+        d.line((arm[0], arm[3] + 3, min(31, arm[2] + 1), arm[3] + 3), fill='#81573f')
     d.rectangle((8, 21, 23, 25), fill='#8f4232')
     d.rectangle((9, 22, 22, 24), fill='#e97843')
     d.line((10, 22, 21, 22), fill='#ffb46b')
@@ -206,6 +207,17 @@ def hero_frame(frame, rocket_boots=False, helmet=False, gloves=False):
             d.rectangle((x + 2, 6, x + 3, 7), fill='#e5f2da')
         d.rectangle((19, 6, 20, 7), fill='#987047')
     d.rectangle((6, 29, 9, 32), fill='#f2be88')
+    if frame == 'mallet_windup':
+        d.polygon([(21, 27), (24, 23), (24, 15), (30, 15), (31, 21),
+                   (28, 28), (25, 32), (21, 31)], fill=INK)
+        d.polygon([(22, 27), (26, 22), (29, 23), (26, 28), (24, 30), (22, 30)], fill='#d4c59f')
+        d.polygon([(25, 16), (29, 16), (30, 20), (28, 23), (26, 22), (25, 20)], fill='#f1bb83')
+    elif frame == 'mallet_strike':
+        d.polygon([(21, 26), (25, 27), (27, 30), (30, 29), (31, 31),
+                   (31, 37), (26, 37), (21, 32)], fill=INK)
+        d.polygon([(22, 27), (25, 28), (27, 32), (26, 35), (22, 32)], fill='#d4c59f')
+        d.rectangle((27, 31, 30, 36), fill='#f1bb83')
+        d.line((28, 35, 30, 35), fill='#b47855')
     if gloves:
         draw_worn_gloves(d, frame)
     return image
@@ -228,6 +240,66 @@ for row, (boots, helmet) in enumerate(((False, False), (True, False), (False, Tr
         gloves_atlas.paste(hero_frame(frame, rocket_boots=boots, helmet=helmet, gloves=True),
                           (column * 32, row * 48))
 gloves_atlas.save(ROOT / 'hero_work_gloves.png')
+
+mallet_atlas = Image.new('RGBA', (64, 192))
+for row, (boots, helmet) in enumerate(((False, False), (True, False), (False, True), (True, True))):
+    for column, frame in enumerate(('mallet_windup', 'mallet_strike')):
+        mallet_atlas.paste(hero_frame(frame, rocket_boots=boots, helmet=helmet), (column * 32, row * 48))
+mallet_atlas.save(ROOT / 'hero_mallet.png')
+
+mallet = Image.new('RGBA', (32, 32))
+d = ImageDraw.Draw(mallet)
+# Dark outline, reddish ash handle and a brass heel.
+d.polygon([(11, 15), (20, 15), (20, 25), (21, 25), (21, 29),
+           (19, 31), (12, 31), (10, 29), (10, 25), (11, 25)], fill=INK)
+d.rectangle((13, 16, 18, 28), fill='#854332')
+d.rectangle((13, 17, 14, 26), fill='#c7734b')
+d.line((16, 19, 16, 26), fill='#a85637')
+d.rectangle((12, 27, 19, 29), fill='#c6893d')
+d.line((12, 27, 19, 27), fill='#f7ce78')
+d.line((19, 28, 19, 29), fill='#80512c')
+# A horizontal laminated wooden head with raised bands and pin heads.
+d.polygon([(1, 5), (5, 1), (25, 1), (30, 5), (30, 15), (26, 19),
+           (5, 19), (1, 15)], fill=INK)
+d.polygon([(3, 6), (6, 3), (25, 3), (28, 6), (28, 15), (25, 17),
+           (6, 17), (3, 15)], fill='#a45b32')
+d.polygon([(3, 6), (6, 4), (25, 4), (28, 6), (25, 7), (6, 7)], fill='#d58d4e')
+d.line((3, 9, 28, 9), fill='#713f2e')
+d.line((3, 10, 28, 10), fill='#cf8244')
+d.line((3, 13, 28, 13), fill='#713f2e')
+d.line((3, 14, 28, 14), fill='#bf743d')
+d.line((6, 16, 25, 16), fill='#81492d')
+d.line((13, 6, 20, 6), fill='#eeaf65')
+d.line((12, 11, 15, 11), fill='#e79a56')
+d.line((17, 15, 20, 15), fill='#d68a49')
+for left in (6, 22):
+    d.rectangle((left - 1, 2, left + 4, 17), fill='#654328')
+    d.rectangle((left, 2, left + 3, 17), fill='#ca8c3f')
+    d.line((left, 3, left, 16), fill='#f4bd63')
+    d.line((left, 2, left + 3, 2), fill='#ffe3a2')
+    for y in (6, 13):
+        d.rectangle((left + 1, y, left + 2, y + 1), fill='#6c4b34')
+        d.point((left + 1, y), fill='#fff0b0')
+mallet.save(ROOT / 'wooden_mallet.png')
+
+# A broken half of the head and a splintered handle preserve the material palette.
+mallet_pieces = Image.new('RGBA', (60, 16))
+seam = (16, 17, 18, 16, 15, 17, 19, 18, 16, 15, 17, 16, 14, 13, 15, 16)
+head = mallet.crop((0, 2, 32, 18))
+for y, split in enumerate(seam):
+    for x in range(32):
+        pixel = head.getpixel((x, y))
+        if pixel[3]:
+            destination = x if x < split else x + 8
+            mallet_pieces.putpixel((destination, y), pixel)
+d = ImageDraw.Draw(mallet_pieces)
+d.polygon([(50, 2), (54, 0), (53, 4), (54, 6), (54, 14), (52, 15), (48, 15),
+           (46, 13), (47, 5)], fill=INK)
+d.polygon([(50, 3), (52, 2), (51, 5), (53, 7), (52, 12), (48, 12), (49, 6)], fill='#a85637')
+d.line((49, 6, 49, 11), fill='#e29862')
+d.line((48, 12, 53, 12), fill='#f7ce78')
+d.line((48, 13, 52, 13), fill='#c6893d')
+mallet_pieces.save(ROOT / 'mallet_fragments.png')
 
 icon = Image.new('RGBA', (32, 32))
 icon.paste(HELMET, (-1, 8))

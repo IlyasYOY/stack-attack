@@ -9,7 +9,10 @@ const ROWS_PER_EQUIPMENT := 5
 const BOOTS_MAX_CHARGES := 10
 const HELMET_MAX_CHARGES := 3
 const GLOVES_MAX_CHARGES := 6
+const MALLET_MAX_CHARGES := 3
 const GRAB_REACH := 0.18
+const MALLET_REACH := 0.22
+const MALLET_WINDUP_TIME := 0.10
 var tuning: StackTuning
 var crates: Array[Dictionary] = []
 var cranes: Array[Dictionary] = []
@@ -21,6 +24,7 @@ var facing := 1
 var score := 0
 var lines := 0
 var cleared_crates := 0
+var broken_crates := 0
 var best_combo := 0
 var elapsed := 0.0
 var ticks := 0
@@ -38,6 +42,7 @@ var boots_equipped := false
 var boots_charges := 0
 var helmet_charges := 0
 var gloves_charges := 0
+var mallet_charges := 0
 var grabbed_crate_id := -1
 var _rng := RandomNumberGenerator.new()
 var _next_id := 0
@@ -53,6 +58,9 @@ var _pushed_crate_id := -1
 var _push_contact_id := -1
 var _sliding_push_direction := 0.0
 var _sliding_pull := false
+var _mallet_pending := false
+var _mallet_impact_tick := -1
+var _mallet_facing := 1
 var _clear_ids: Array[int] = []
 var _collapse_started := false
 var _player_clear_start := Vector2.ZERO
@@ -66,6 +74,7 @@ func _init(settings: StackTuning = null, seed_value: int = 1) -> void:
 func reset(seed_value: int) -> void:
 	_rng.seed = seed_value
 	cancel_grab()
+	cancel_mallet_swing()
 	_pushed_crate_id = -1
 	_push_contact_id = -1
 	_sliding_push_direction = 0.0
@@ -80,6 +89,7 @@ func reset(seed_value: int) -> void:
 	score = 0
 	lines = 0
 	cleared_crates = 0
+	broken_crates = 0
 	best_combo = 0
 	elapsed = 0.0
 	ticks = 0
@@ -94,6 +104,7 @@ func reset(seed_value: int) -> void:
 	boots_charges = 0
 	helmet_charges = 0
 	gloves_charges = 0
+	mallet_charges = 0
 	_jump_buffer = 0.0
 	_coyote = 0.0
 	_air_jump_available = false
@@ -134,10 +145,11 @@ func match_result(ended_at: String) -> Dictionary:
 		return {}
 	return {"ended_at": ended_at, "duration_ms": roundi(ticks * STEP * 1000.0),
 		"score": score, "lines": lines, "crates": cleared_crates, "best_combo": best_combo,
-		"reason": loss_reason}
+		"reason": loss_reason, "broken_crates": broken_crates}
 
 
-func advance(delta: float, axis: float, jump_pressed: bool = false, pull_held: bool = false) -> void:
+func advance(delta: float, axis: float, jump_pressed: bool = false, pull_held: bool = false,
+		mallet_pressed: bool = false) -> void:
 	events.clear()
 	if not pull_held:
 		release_pull_input()
@@ -145,6 +157,8 @@ func advance(delta: float, axis: float, jump_pressed: bool = false, pull_held: b
 		_sliding_push_direction = 0.0
 	if state == "over" or equipment_pending:
 		return
+	if mallet_pressed and mallet_charges > 0 and state == "playing":
+		_mallet_pending = true
 	if _gloves_take_control(pull_held):
 		_jump_buffer = 0.0
 		_air_jump_requested = false
@@ -178,6 +192,8 @@ func equipment_options() -> Array[String]:
 		options.append("helmet")
 	if gloves_charges < GLOVES_MAX_CHARGES:
 		options.append("gloves")
+	if mallet_charges < MALLET_MAX_CHARGES:
+		options.append("mallet")
 	return options
 
 
@@ -192,15 +208,18 @@ func resolve_equipment(item: String) -> void:
 		"helmet":
 			helmet_charges = HELMET_MAX_CHARGES
 		"gloves":
+			cancel_mallet_swing()
+			mallet_charges = 0
 			gloves_charges = GLOVES_MAX_CHARGES
+		"mallet":
+			cancel_grab()
+			gloves_charges = 0
+			mallet_charges = MALLET_MAX_CHARGES
 	_offer_equipment_if_due()
 
 
 func _offer_equipment_if_due() -> void:
 	if equipment_rows < ROWS_PER_EQUIPMENT:
-		return
-	if equipment_options().is_empty():
-		equipment_rows %= ROWS_PER_EQUIPMENT
 		return
 	equipment_rows -= ROWS_PER_EQUIPMENT
 	equipment_pending = true
@@ -223,6 +242,7 @@ func _tick(axis: float, pull_held: bool) -> void:
 		_move_with_gloves(pull_held and gloves_charges > 0)
 	else:
 		_walk_player(axis)
+	_advance_mallet()
 	_move_player_vertically()
 	_move_crates()
 	if state == "over":
@@ -245,6 +265,59 @@ func _tick(axis: float, pull_held: bool) -> void:
 
 func _overlap(a: float, aw: float, b: float, bw: float, margin: float = 0.002) -> bool:
 	return a + aw > b + margin and a < b + bw - margin
+
+
+func cancel_mallet_swing() -> void:
+	_mallet_pending = false
+	_mallet_impact_tick = -1
+
+
+func _advance_mallet() -> void:
+	if _mallet_impact_tick >= 0:
+		if ticks >= _mallet_impact_tick:
+			_mallet_impact_tick = -1
+			_finish_mallet_swing()
+		return
+	if not _mallet_pending or mallet_charges <= 0:
+		return
+	_mallet_pending = false
+	_mallet_facing = facing
+	_mallet_impact_tick = ticks + roundi(MALLET_WINDUP_TIME / STEP)
+	events.append(_mallet_event("mallet_swing"))
+
+
+func _mallet_event(kind: String) -> Dictionary:
+	return {"type": kind, "player_x": player.x, "player_y": player.y,
+		"facing": _mallet_facing, "tick": ticks}
+
+
+func _finish_mallet_swing() -> void:
+	var target := {}
+	var closest_gap := INF
+	var closest_height := INF
+	for crate in crates:
+		var x := float(crate.x)
+		var y := float(crate.y)
+		var gap := x - (player.x + tuning.player_width) if _mallet_facing > 0 else player.x - (x + 1.0)
+		if gap < -0.03 or gap > MALLET_REACH or not _overlap(player.y, tuning.player_height, y, 1.0, 0.12):
+			continue
+		var height := absf(y + 0.5 - (player.y + tuning.player_height * 0.5))
+		if gap < closest_gap - EPS or (absf(gap - closest_gap) <= EPS and height < closest_height):
+			target = crate
+			closest_gap = gap
+			closest_height = height
+	if target.is_empty():
+		events.append(_mallet_event("mallet_miss"))
+		return
+	crates.erase(target)
+	broken_crates += 1
+	mallet_charges -= 1
+	if mallet_charges == 0:
+		cancel_mallet_swing()
+	var impact := _mallet_event("mallet_hit")
+	impact.merge({"crate_id": int(target.id), "x": float(target.x), "y": float(target.y),
+		"color": int(target.color), "charges": mallet_charges, "mallet_broke": mallet_charges == 0})
+	events.append(impact)
 
 
 func _move_player_vertically() -> void:
@@ -555,6 +628,7 @@ func _move_crates() -> void:
 func _break_crate_with_helmet(crate: Dictionary, crate_y: float, player_y: float, direction: String) -> void:
 	helmet_charges -= 1
 	crates.erase(crate)
+	broken_crates += 1
 	events.append({"type": "helmet_hit", "crate_id": int(crate.id), "x": float(crate.x),
 		"y": crate_y, "player_x": player.x, "player_y": player_y, "direction": direction,
 		"helmet_broke": helmet_charges == 0, "charges": helmet_charges, "tick": ticks})
@@ -580,6 +654,7 @@ func _begin_clear_if_full() -> bool:
 	if ids.is_empty():
 		return false
 	cancel_grab()
+	cancel_mallet_swing()
 	_clear_ids = ids
 	state = "clearing"
 	clear_elapsed = 0.0
@@ -686,6 +761,7 @@ func _lose(reason: String) -> void:
 	if state == "over":
 		return
 	cancel_grab()
+	cancel_mallet_swing()
 	state = "over"
 	loss_reason = reason
 	events.append({"type": "over", "reason": reason, "score": score})
