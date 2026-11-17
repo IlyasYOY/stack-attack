@@ -27,6 +27,7 @@ var mallet_pending := false
 var lamp_pending := false
 var lamp_key_held := false
 var spring_meter_peak := 0
+var spring_meter_limit := 0
 var spring_meter_flash := 0.0
 var pull_key_held := false
 var slide_active := false
@@ -688,6 +689,7 @@ func _advance_game(delta: float) -> bool:
 				sound.effect("spring_jump_auto" if event.automatic else "spring_jump")
 				world.spring_jump_effect(event)
 				spring_meter_peak = int(event.stages)
+				spring_meter_limit = int(event.limit)
 				spring_meter_flash = SPRING_METER_FLASH_TIME
 				_record_bonus_event(event)
 			"lamp_reveal":
@@ -744,7 +746,8 @@ func _advance_game(delta: float) -> bool:
 		return false
 	if score_label != null:
 		_update_hud_score()
-		EQUIPMENT_VIEW.update_hud(gear_counts, model, spring_meter_peak if spring_meter_flash > 0.0 else 0)
+		EQUIPMENT_VIEW.update_hud(gear_counts, model,
+			spring_meter_peak if spring_meter_flash > 0.0 else 0, spring_meter_limit)
 	return screen == "playing" and crush_elapsed < 0.0 and model.is_crate_sliding(axis, pull_held)
 
 
@@ -953,6 +956,7 @@ func _gear_hud_snapshot(count: Label) -> Dictionary:
 	if meter != null:
 		var meter_rect := meter.get_global_rect()
 		result.meter_rect = [meter_rect.position.x, meter_rect.position.y, meter_rect.size.x, meter_rect.size.y]
+		result.meter_limit = meter.get_meta("limit", 0)
 		result.meter_stages = meter.get_meta("stages", 0)
 	return result
 

@@ -2877,15 +2877,17 @@ def bonuses_checks(browser):
 
         board = set_bonus_board(page, combination)
         page.keyboard.down('Space')
-        meter = animation_step(page, 46)
-        assert meter['grounded'] and meter['spring_charge_stages'] == 2
-        assert meter['spring_boots_hud']['meter_stages'] == 2
+        meter = animation_step(page, 110)
+        assert meter['grounded'] and meter['spring_charge_stages'] == 5
+        assert meter['spring_boots_hud']['meter_stages'] == 5
+        assert meter['spring_boots_hud']['meter_limit'] == board['spring_charge_limit'] > 5
         check_boots_rect(meter, meter['spring_boots_hud']['meter_rect'])
         shots.append(screenshot(page, 'bonuses-spring-meter.png'))
         page.keyboard.up('Space')
         launched = animation_step(page, 1)
         jump, = bonus_events(launched, 'spring_jump')
-        assert jump['stages'] == 2 and not jump['automatic'] and launched['spring_boots_charges'] == board['spring_boots_charges'] - 2
+        assert jump['stages'] == 5 and not jump['automatic'] and launched['spring_boots_charges'] == board['spring_boots_charges'] - 5
+        assert launched['spring_boots_hud']['meter_limit'] == board['spring_charge_limit']
 
         board = set_bonus_board(page, combination)
         touch = context.new_cdp_session(page)
@@ -2926,7 +2928,7 @@ def bonuses_checks(browser):
             press.send('Input.dispatchTouchEvent', {'type':'touchStart', 'touchPoints':[{'x':px,'y':py,'id':1}]})
             released = animation_step(page, 90)
             assert released['spring_boots_charges'] == 0 and released['player'][1] < auto['player'][1]
-            assert released['spring_boots_hud']['meter_stages'] == 4
+            assert released['spring_boots_hud']['meter_stages'] == released['spring_boots_hud']['meter_limit'] == 4
             auto_jump, = bonus_events(released, 'spring_jump')
             assert auto_jump['automatic'] and auto_jump['stages'] == 4
             shots.append(screenshot(page, 'bonuses-spring-auto.png'))

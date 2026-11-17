@@ -221,7 +221,8 @@ static func build_hud(parent: Control, item: String) -> Label:
 	return count
 
 
-static func update_hud(badges: Dictionary, model: StackSimulation, spring_peak: int = 0) -> void:
+static func update_hud(badges: Dictionary, model: StackSimulation, spring_peak: int = 0,
+		spring_peak_limit: int = 0) -> void:
 	var charges := _loadout_charges(model)
 	if spring_peak > 0:
 		charges.spring_boots = model.spring_boots_charges
@@ -237,7 +238,9 @@ static func update_hud(badges: Dictionary, model: StackSimulation, spring_peak: 
 	var spring: Label = badges.spring_boots
 	var meter := spring.get_parent().get_node("spring_charge_meter") as Control
 	var stages := maxi(model.spring_charge_stages, spring_peak)
-	if meter.get_meta("stages", 0) != stages:
+	var limit := spring_peak_limit if spring_peak > 0 else model.spring_charge_limit()
+	if meter.get_meta("limit", 0) != limit or meter.get_meta("stages", 0) != stages:
+		meter.set_meta("limit", limit)
 		meter.set_meta("stages", stages)
 		meter.queue_redraw()
 
@@ -270,10 +273,17 @@ static func _draw_spring_charge(meter: Control) -> void:
 	var stages := int(meter.get_meta("stages", 0))
 	meter.draw_rect(Rect2(Vector2.ZERO, meter.size), EDGE)
 	meter.draw_rect(Rect2(1, 1, meter.size.x - 2, meter.size.y - 2), Color("172a33"))
-	for index in range(StackSimulation.SPRING_MAX_STAGES):
-		var y := meter.size.y - 7.0 - 6.0 * index
-		var tint: Color = SPRING_COLORS[index] if index < stages else Color("31454c")
-		meter.draw_rect(Rect2(1.0, y, meter.size.x - 2.0, 4.0), tint)
+	var limit := int(meter.get_meta("limit", 0))
+	for index in range(limit):
+		var height := (meter.size.y - 2.0) / limit
+		var y := meter.size.y - 1.0 - height * (index + 1)
+		var tint := Color("31454c")
+		if index < stages:
+			var fraction := float(index) / (limit - 1) if limit > 1 else 1.0
+			var stop := fraction * (SPRING_COLORS.size() - 1)
+			var low := floori(stop)
+			tint = SPRING_COLORS[low].lerp(SPRING_COLORS[mini(low + 1, SPRING_COLORS.size() - 1)], stop - low)
+		meter.draw_rect(Rect2(1.0, y, meter.size.x - 2.0, height - (1.0 if height >= 2.0 else 0.0)), tint)
 
 
 static func _charge_change(parent: Control, before: int, after: int, prefix: String, text: Callable) -> void:

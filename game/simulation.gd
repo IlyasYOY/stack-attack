@@ -17,7 +17,6 @@ const LAMP_HELMET_MAX_CHARGES := 4
 const SPRING_BOOTS_MAX_CHARGES := 8
 const SPEED_BOOTS_MULTIPLIER := 1.55
 const LAMP_REVEAL_TIME := 1.5
-const SPRING_MAX_STAGES := 4
 const SPRING_STAGE_TIME := 0.18
 const SPRING_STAGE_SPEED := 2.4
 const PLAYER_TOP := -1.0
@@ -471,12 +470,13 @@ func _request_jump() -> void:
 
 
 func spring_charge_limit() -> int:
-	var room := player.y - PLAYER_TOP
-	if spring_boots_charges <= 0 or room <= EPS:
-		return 0
-	var ceiling_speed := sqrt(2.0 * tuning.gravity * room) + tuning.gravity * STEP * 0.5
-	var ceiling_stage := maxi(1, ceili((ceiling_speed - tuning.jump_speed) / SPRING_STAGE_SPEED))
-	return mini(mini(spring_boots_charges, SPRING_MAX_STAGES), ceiling_stage)
+	var extra_speed := maxf(0.0, _spring_ceiling_speed() - tuning.jump_speed)
+	return mini(spring_boots_charges, ceili(extra_speed / SPRING_STAGE_SPEED))
+
+
+func _spring_ceiling_speed() -> float:
+	var room := maxf(0.0, player.y - PLAYER_TOP)
+	return sqrt(2.0 * tuning.gravity * room) + tuning.gravity * STEP * 0.5
 
 
 func _cancel_spring_charge() -> void:
@@ -498,20 +498,18 @@ func _advance_spring_jump(jump_held: bool) -> void:
 		_spring_charge_time += STEP
 		var timed_stages := floori((_spring_charge_time + EPS) / SPRING_STAGE_TIME)
 		spring_charge_stages = mini(timed_stages, limit)
-		if spring_charge_stages < limit or limit == 0:
+		if spring_charge_stages < limit:
 			return
 	var stages := mini(spring_charge_stages, limit)
 	_cancel_spring_charge()
-	if stages == 0:
+	if stages == 0 and not jump_held:
 		_jump_buffer = 0.12
 		return
-	var room := maxf(0.0, player.y - PLAYER_TOP)
-	var ceiling_speed := sqrt(2.0 * tuning.gravity * room) + tuning.gravity * STEP * 0.5
-	var speed := minf(tuning.jump_speed + SPRING_STAGE_SPEED * stages, ceiling_speed)
+	var speed := minf(tuning.jump_speed + SPRING_STAGE_SPEED * stages, _spring_ceiling_speed())
 	spring_boots_charges -= stages
 	_spring_flight = true
 	_launch_ground_jump(speed)
-	events.append({"type": "spring_jump", "stages": stages, "automatic": jump_held,
+	events.append({"type": "spring_jump", "stages": stages, "limit": limit, "automatic": jump_held,
 		"player_x": player.x, "player_y": player.y, "facing": facing})
 
 

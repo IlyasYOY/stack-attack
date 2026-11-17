@@ -774,19 +774,43 @@ func bonus_equipment() -> void:
 	spring.advance(.5, 0)
 	check(spring.grounded and spring.spring_boots_charges == 4 and spring.spring_charge_stages == 0,
 		"Cancelling a charge for pause must discard the pending jump")
-	var ceiling := empty()
-	ceiling.spring_boots_charges = 6
-	for row in range(1, ceiling.tuning.rows):
-		ceiling.add_crate(2, row)
-	ceiling.player.y = 1.0 - ceiling.tuning.player_height
-	check(ceiling.spring_charge_limit() == 1, "Spring charge cap must be calculated from the current elevated position")
-	ceiling.advance(.22, 0, true, false, false, {"jump_held": true})
-	check(ceiling.spring_boots_charges == 5 and ceiling.events.any(func(event: Dictionary) -> bool:
-		return event.type == "spring_jump" and event.automatic and event.stages == 1),
-		"A high perch reaches the height cap and auto-launches before later stages")
-	for tick in range(60):
-		ceiling.advance(Simulation.STEP, 0, false, false, false, {"jump_held": true})
-		check(ceiling.player.y >= Simulation.PLAYER_TOP - .001, "Boosted vertical motion must respect the top of the field")
+	var charged := empty()
+	charged.spring_boots_charges = 8
+	var floor_limit := charged.spring_charge_limit()
+	check(floor_limit > 5 and floor_limit < 8, "Headroom on the normal board allows more than five stages")
+	charged.advance(.91, 0, true, false, false, {"jump_held": true})
+	check(charged.grounded and charged.spring_charge_stages == 5, "Five stages can be held on the floor")
+	charged.advance(Simulation.STEP, 0)
+	check(charged.spring_boots_charges == 3 and charged.events.any(func(event: Dictionary) -> bool:
+		return event.type == "spring_jump" and not event.automatic and event.stages == 5 and event.limit == floor_limit),
+		"Early release spends five charges and remembers the launch-time HUD scale")
+	check(is_equal_approx(charged.player_velocity.y, -charged.tuning.jump_speed - 5 * Simulation.SPRING_STAGE_SPEED
+		+ charged.tuning.gravity * Simulation.STEP), "The fifth stage contributes its full launch speed")
+
+	for row in [11, 3, 1]:
+		var ceiling := empty()
+		ceiling.spring_boots_charges = 8
+		for support_row in range(row, ceiling.tuning.rows):
+			ceiling.add_crate(2, support_row)
+		ceiling.player.y = row - ceiling.tuning.player_height
+		var expected := floor_limit if row == 11 else (2 if row == 3 else 0)
+		check(ceiling.spring_charge_limit() == expected, "Available stages depend on platform elevation")
+		ceiling.advance(maxf(Simulation.STEP, ceilf(expected * Simulation.SPRING_STAGE_TIME / Simulation.STEP)
+			* Simulation.STEP), 0, true, false, false, {"jump_held": true})
+		check(not ceiling.grounded and ceiling.spring_boots_charges == 8 - expected
+			and ceiling.events.any(func(event: Dictionary) -> bool:
+			return event.type == "spring_jump" and event.automatic and event.stages == expected),
+			"Reaching the height limit fires automatically, including a free jump under a low ceiling")
+		var apex := ceiling.player.y
+		for tick in range(300):
+			ceiling.advance(Simulation.STEP, 0, false, false, false, {"jump_held": true})
+			apex = minf(apex, ceiling.player.y)
+		check(absf(apex - Simulation.PLAYER_TOP) < .002, "Height-limited launch reaches the top of the field")
+		check(ceiling.grounded and ceiling.spring_boots_charges == 8 - expected,
+			"Holding through landing does not start another charge even with resources left")
+		ceiling.advance(Simulation.STEP, 0)
+		ceiling.advance(.2, 0, true, false, false, {"jump_held": true})
+		check(not ceiling.grounded or ceiling.spring_charge_stages == 1, "A fresh press works after landing")
 
 
 func gloved(facing: int = 1, crate_x: float = 4.0, gap: float = 0.14) -> StackSimulation:
