@@ -3,6 +3,7 @@ const TUNING: StackTuning = preload("res://game/prototype.tres")
 const STATISTICS_VIEW = preload("res://game/statistics_view.gd")
 const EQUIPMENT_VIEW = preload("res://game/equipment_view.gd")
 const CRUSH_ANIMATION_TIME := 0.42
+const SPRING_METER_FLASH_TIME := 0.18
 var model: StackSimulation
 var demo: StackDemo
 var profile: StackProfile
@@ -14,16 +15,19 @@ var buttons := {}
 var sliders := {}
 var panel: PanelContainer
 var score_label: Label
-var boots_count: Label
-var helmet_count: Label
-var gloves_count: Label
-var mallet_count: Label
+var gear_counts := {}
 var pointers := {}
+var jump_keys := {}
 var jump_pointers := {}
 var pull_pointers := {}
 var mallet_pointers := {}
+var lamp_pointers := {}
 var jump_pending := false
 var mallet_pending := false
+var lamp_pending := false
+var lamp_key_held := false
+var spring_meter_peak := 0
+var spring_meter_flash := 0.0
 var pull_key_held := false
 var slide_active := false
 var slide_focused := true
@@ -44,6 +48,7 @@ var qa_crane_releases: Array[Dictionary] = []
 var qa_helmet_hits: Array[Dictionary] = []
 var qa_gloves_pulls: Array[Dictionary] = []
 var qa_mallet_events: Array[Dictionary] = []
+var qa_bonus_events: Array[Dictionary] = []
 var qa_animation_held := false
 const CREAM := Color("f4e3ba")
 const MINT := Color("8dc6ac")
@@ -154,10 +159,7 @@ func _clear_ui() -> void:
 	sliders.clear()
 	panel = null
 	score_label = null
-	boots_count = null
-	helmet_count = null
-	gloves_count = null
-	mallet_count = null
+	gear_counts.clear()
 
 
 func _show_screen(value: String) -> void:
@@ -265,7 +267,7 @@ func _position_panel() -> void:
 
 func _panel_width() -> float:
 	if screen == "equipment":
-		return minf(440 if model.equipment_options().size() > 1 else 330, size.x - 32)
+		return minf(EQUIPMENT_VIEW.OFFER_MAX_WIDTH, size.x - 32)
 	if screen == "paused":
 		return minf(360, size.x - 32)
 	return minf(720 if _wide_panel() and screen != "menu" else 440, size.x - 32)
@@ -402,11 +404,9 @@ func _build_hud() -> void:
 	score_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_update_hud_score()
 	ui.add_child(score_label)
-	boots_count = EQUIPMENT_VIEW.build_hud(ui, "boots")
-	helmet_count = EQUIPMENT_VIEW.build_hud(ui, "helmet")
-	gloves_count = EQUIPMENT_VIEW.build_hud(ui, "gloves")
-	mallet_count = EQUIPMENT_VIEW.build_hud(ui, "mallet")
-	EQUIPMENT_VIEW.update_hud(boots_count, helmet_count, gloves_count, mallet_count, model)
+	for item in EQUIPMENT_VIEW.ICONS:
+		gear_counts[item] = EQUIPMENT_VIEW.build_hud(ui, item)
+	EQUIPMENT_VIEW.update_hud(gear_counts, model)
 	if screen == "equipment":
 		return
 	var pause := _button(ui, "II", "pause", _pause)
@@ -438,6 +438,7 @@ func _start_game() -> void:
 	qa_helmet_hits.clear()
 	qa_gloves_pulls.clear()
 	qa_mallet_events.clear()
+	qa_bonus_events.clear()
 	qa_animation_held = false
 	crush_elapsed = -1.0
 	session += 1
@@ -449,6 +450,7 @@ func _start_game() -> void:
 	world.helmet_impacts.clear()
 	world.gloves_break_life = 0.0
 	world.reset_mallet_effects()
+	world.reset_bonus_effects()
 	world._layout()
 	result_saved = false
 	_show_screen("playing")
@@ -491,16 +493,23 @@ func _resize() -> void:
 
 func _release_controls() -> void:
 	pointers.clear()
+	jump_keys.clear()
 	jump_pointers.clear()
 	pull_pointers.clear()
 	mallet_pointers.clear()
+	lamp_pointers.clear()
 	jump_pending = false
 	mallet_pending = false
+	lamp_pending = false
+	lamp_key_held = false
+	spring_meter_peak = 0
+	spring_meter_flash = 0.0
 	pull_key_held = false
 	_stop_crate_slide()
 	if model != null:
 		model.release_pull_input()
 		model.cancel_mallet_swing()
+		model.cancel_bonus_input()
 	if world != null:
 		world.pressed_actions.clear()
 		world.axis = 0.0
@@ -515,6 +524,10 @@ func _stop_crate_slide() -> void:
 
 func _pull_held() -> bool:
 	return model != null and model.gloves_charges > 0 and (pull_key_held or pull_pointers.values().has(true))
+
+
+func _jump_held() -> bool:
+	return not jump_keys.is_empty() or not jump_pointers.is_empty()
 
 
 func _input(event: InputEvent) -> void:
@@ -539,24 +552,43 @@ func _input(event: InputEvent) -> void:
 				jump_pending = false
 		get_viewport().set_input_as_handled()
 		return
+	if event is InputEventKey and event.physical_keycode == KEY_F and crush_elapsed < 0.0:
+		if not event.echo:
+			if event.pressed and not lamp_key_held:
+				lamp_pending = model.lamp_helmet_charges > 0
+			lamp_key_held = event.pressed
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and event.physical_keycode in [KEY_SPACE, KEY_UP] and crush_elapsed < 0.0:
+		if not event.echo:
+			if event.pressed:
+				if not jump_keys.has(event.physical_keycode) and not _pull_held() and not model.is_pulling():
+					jump_pending = true
+				jump_keys[event.physical_keycode] = true
+			else:
+				jump_keys.erase(event.physical_keycode)
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.physical_keycode == KEY_ESCAPE:
 			_pause()
 			get_viewport().set_input_as_handled()
-		elif event.physical_keycode in [KEY_SPACE, KEY_UP] and crush_elapsed < 0.0:
-			jump_pending = not _pull_held() and not model.is_pulling()
-			get_viewport().set_input_as_handled()
 	elif crush_elapsed >= 0.0:
 		return
 	elif event is InputEventScreenTouch:
-		_pointer(event.index, event.position, event.pressed, event.pressed)
+		if event.canceled and jump_pointers.has(event.index) and jump_pointers.size() == 1 and jump_keys.is_empty():
+			jump_pending = false
+			model.cancel_jump_input()
+		var down: bool = event.pressed and not event.canceled
+		_pointer(event.index, event.position, down, down)
 	elif event is InputEventScreenDrag and (pointers.has(event.index) or pull_pointers.has(event.index)
-			or mallet_pointers.has(event.index)):
+			or mallet_pointers.has(event.index) or lamp_pointers.has(event.index)):
 		_pointer(event.index, event.position, true)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		var real_press: bool = event.pressed and event.device != InputEvent.DEVICE_ID_EMULATION
 		_pointer(-1, event.position, event.pressed, real_press)
-	elif event is InputEventMouseMotion and (pointers.has(-1) or pull_pointers.has(-1) or mallet_pointers.has(-1)):
+	elif event is InputEventMouseMotion and (pointers.has(-1) or pull_pointers.has(-1)
+			or mallet_pointers.has(-1) or lamp_pointers.has(-1)):
 		_pointer(-1, event.position, true)
 
 
@@ -565,8 +597,18 @@ func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false
 		jump_pointers.erase(id)
 		var was_pulling := pull_pointers.erase(id)
 		var was_hitting := mallet_pointers.erase(id)
-		if pointers.erase(id) or was_pulling or was_hitting:
+		var was_lighting := lamp_pointers.erase(id)
+		if pointers.erase(id) or was_pulling or was_hitting or was_lighting:
 			get_viewport().set_input_as_handled()
+		return
+	var lamp_control: Rect2 = world.controls.get("lamp", Rect2())
+	var on_lamp := lamp_control.has_point(position)
+	if just_pressed and on_lamp:
+		lamp_pointers[id] = true
+		lamp_pending = true
+	if lamp_pointers.has(id):
+		lamp_pointers[id] = on_lamp
+		get_viewport().set_input_as_handled()
 		return
 	var mallet_control: Rect2 = world.controls.get("mallet", Rect2())
 	var on_mallet := mallet_control.has_point(position)
@@ -589,7 +631,7 @@ func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false
 		return
 	var action := ""
 	for candidate in world.controls:
-		if candidate not in ["grab", "mallet"] and world.controls[candidate].has_point(position):
+		if candidate not in ["grab", "mallet", "lamp"] and world.controls[candidate].has_point(position):
 			action = candidate
 			break
 	if not action.is_empty():
@@ -611,6 +653,7 @@ func _advance_game(delta: float) -> bool:
 		if crush_elapsed >= CRUSH_ANIMATION_TIME:
 			_end_game()
 		return false
+	spring_meter_flash = maxf(0.0, spring_meter_flash - delta)
 	var actions: Array[String] = []
 	for action in pointers.values():
 		if not actions.has(action):
@@ -625,17 +668,40 @@ func _advance_game(delta: float) -> bool:
 		actions.append("grab")
 	if model.mallet_charges > 0 and (mallet_pointers.values().has(true) or Input.is_physical_key_pressed(KEY_G)):
 		actions.append("mallet")
+	if model.lamp_helmet_charges > 0 and (lamp_key_held or lamp_pointers.values().has(true)):
+		actions.append("lamp")
 	world.pressed_actions = actions
 	world.axis = 0.0 if pulling else axis
-	model.advance(delta, axis, jump_pending, pull_held, mallet_pending)
+	model.advance(delta, axis, jump_pending, pull_held, mallet_pending,
+		{"jump_held": _jump_held() and not pulling, "lamp_pressed": lamp_pending})
 	jump_pending = false
 	mallet_pending = false
+	lamp_pending = false
 	for event in model.events:
 		match event.type:
 			"jump": sound.effect("jump")
 			"air_jump":
 				sound.effect("jump")
 				world.boots_jump_effect()
+				_record_bonus_event(event)
+			"spring_jump":
+				sound.effect("spring_jump_auto" if event.automatic else "spring_jump")
+				world.spring_jump_effect(event)
+				spring_meter_peak = int(event.stages)
+				spring_meter_flash = SPRING_METER_FLASH_TIME
+				_record_bonus_event(event)
+			"lamp_reveal":
+				sound.effect("lamp_reveal")
+				if model.lamp_helmet_charges == 0:
+					world._layout()
+				_record_bonus_event(event)
+			"lamp_break":
+				sound.effect("lamp_break")
+				world.lamp_break_effect(event)
+				world._layout()
+				_record_bonus_event(event)
+			"strong_push", "speed_step":
+				_record_bonus_event(event)
 			"helmet_hit":
 				sound.effect("helmet_break" if event.helmet_broke else "helmet_hit")
 				world.helmet_hit(event)
@@ -678,8 +744,15 @@ func _advance_game(delta: float) -> bool:
 		return false
 	if score_label != null:
 		_update_hud_score()
-		EQUIPMENT_VIEW.update_hud(boots_count, helmet_count, gloves_count, mallet_count, model)
+		EQUIPMENT_VIEW.update_hud(gear_counts, model, spring_meter_peak if spring_meter_flash > 0.0 else 0)
 	return screen == "playing" and crush_elapsed < 0.0 and model.is_crate_sliding(axis, pull_held)
+
+
+func _record_bonus_event(event: Dictionary) -> void:
+	if qa_enabled:
+		qa_bonus_events.append(event)
+		if qa_bonus_events.size() > 48:
+			qa_bonus_events.pop_front()
 
 
 func _mallet_effect(event: Dictionary) -> void:
@@ -803,15 +876,28 @@ func _publish_qa() -> void:
 		"loss_reason": model.loss_reason,
 		"session": session, "ticks": model.ticks, "state": model.state,
 		"animation_held": qa_animation_held,
-		"jump_pending": jump_pending, "pull_held": _pull_held(), "pull_in_progress": model.is_pulling(),
+		"jump_pending": jump_pending, "jump_held": _jump_held(),
+		"pull_held": _pull_held(), "pull_in_progress": model.is_pulling(),
 		"equipment_rows": model.equipment_rows, "equipment_pending": model.equipment_pending,
 		"equipment_options": model.equipment_options() if model.equipment_pending else [],
 		"boots_equipped": model.boots_equipped, "boots_charges": model.boots_charges,
-		"boots_hud": _gear_hud_snapshot(boots_count),
-		"helmet_charges": model.helmet_charges, "helmet_hud": _gear_hud_snapshot(helmet_count),
+		"boots_hud": _gear_hud_snapshot(gear_counts.get("boots")),
+		"helmet_charges": model.helmet_charges, "helmet_hud": _gear_hud_snapshot(gear_counts.get("helmet")),
 		"helmet_hits": qa_helmet_hits,
-		"gloves_charges": model.gloves_charges, "gloves_hud": _gear_hud_snapshot(gloves_count),
-		"mallet_charges": model.mallet_charges, "mallet_hud": _gear_hud_snapshot(mallet_count),
+		"gloves_charges": model.gloves_charges, "gloves_hud": _gear_hud_snapshot(gear_counts.get("gloves")),
+		"mallet_charges": model.mallet_charges, "mallet_hud": _gear_hud_snapshot(gear_counts.get("mallet")),
+		"strong_arms_charges": model.strong_arms_charges,
+		"strong_arms_hud": _gear_hud_snapshot(gear_counts.get("strong_arms")),
+		"speed_boots_charges": model.speed_boots_charges, "speed_boots_progress": model.speed_boots_progress,
+		"speed_boost_active": model.speed_boost_active,
+		"speed_boots_hud": _gear_hud_snapshot(gear_counts.get("speed_boots")),
+		"lamp_helmet_charges": model.lamp_helmet_charges, "lamp_helmet_equipped": model.lamp_helmet_equipped,
+		"lamp_helmet_hud": _gear_hud_snapshot(gear_counts.get("lamp_helmet")),
+		"lamp_columns": model.lamp_columns(), "lamp_active_time": model.lamp_active_time,
+		"spring_boots_charges": model.spring_boots_charges, "spring_charge_stages": model.spring_charge_stages,
+		"spring_charge_limit": model.spring_charge_limit(),
+		"spring_boots_hud": _gear_hud_snapshot(gear_counts.get("spring_boots")),
+		"bonus_events": qa_bonus_events,
 		"mallet_animation": world.mallet_animation_phase(),
 		"mallet_swings": qa_mallet_events.filter(func(event): return event.type == "mallet_swing"),
 		"mallet_hits": qa_mallet_events.filter(func(event): return event.type == "mallet_hit"),
@@ -862,7 +948,13 @@ func _gear_hud_snapshot(count: Label) -> Dictionary:
 		return {}
 	var plate := count.get_parent().get_parent() as Control
 	var bounds := plate.get_global_rect()
-	return {"text": count.text, "rect": [bounds.position.x, bounds.position.y, bounds.size.x, bounds.size.y]}
+	var result := {"text": count.text, "rect": [bounds.position.x, bounds.position.y, bounds.size.x, bounds.size.y]}
+	var meter := count.get_parent().get_node_or_null("spring_charge_meter") as Control
+	if meter != null:
+		var meter_rect := meter.get_global_rect()
+		result.meter_rect = [meter_rect.position.x, meter_rect.position.y, meter_rect.size.x, meter_rect.size.y]
+		result.meter_stages = meter.get_meta("stages", 0)
+	return result
 
 
 func _missing_menu_glyphs() -> String:
@@ -970,6 +1062,10 @@ func _qa_command() -> void:
 		return
 	if screen != "playing":
 		return
+	if str(request.get("scenario", "")) == "bonus_board":
+		if crush_elapsed < 0.0:
+			_qa_set_bonus_board(request)
+		return
 	if str(request.get("scenario", "")) in ["helmet_board", "gloves_board"]:
 		if crush_elapsed < 0.0:
 			_qa_set_test_board(request)
@@ -1015,7 +1111,7 @@ func _qa_command() -> void:
 		model.boots_equipped = bool(request.get("boots", false))
 		model.boots_charges = StackSimulation.BOOTS_MAX_CHARGES if model.boots_equipped else 0
 		world.boots_exhaust_life = 0.0
-		EQUIPMENT_VIEW.update_hud(boots_count, helmet_count, gloves_count, mallet_count, model)
+		EQUIPMENT_VIEW.update_hud(gear_counts, model)
 		if pose == "push":
 			model.add_crate(model.player.x + TUNING.player_width if model.facing > 0 else model.player.x - 1, float(TUNING.rows - 1))
 		world.clock = 0.15 if pose == "walk_recover" else 0.0
@@ -1107,11 +1203,13 @@ func _qa_prepare_equipment_board(hold: bool) -> void:
 	qa_helmet_hits.clear()
 	qa_gloves_pulls.clear()
 	qa_mallet_events.clear()
+	qa_bonus_events.clear()
 	world.caption_life = 0.0
 	world.boots_exhaust_life = 0.0
 	world.helmet_impacts.clear()
 	world.gloves_break_life = 0.0
 	world.reset_mallet_effects()
+	world.reset_bonus_effects()
 	_release_controls()
 	model.cancel_grab()
 	model.crates.clear()
@@ -1165,6 +1263,41 @@ func _qa_set_mallet_board(request: Dictionary) -> void:
 	else:
 		model.equipment_pending = true
 		_show_screen("equipment")
+
+
+func _qa_set_bonus_board(request: Dictionary) -> void:
+	model.reset(7481)
+	_qa_set_test_board(request)
+	qa_crane_releases.clear()
+	if request.has("grounded"):
+		model.grounded = bool(request.grounded)
+	var loadout: Variant = request.get("loadout", {})
+	var charges: Variant = request.get("charges", {})
+	if loadout is Dictionary and charges is Dictionary:
+		for slot in EQUIPMENT_VIEW.SLOTS:
+			var item := str(loadout.get(slot, ""))
+			if item not in EQUIPMENT_VIEW.SLOTS[slot]:
+				continue
+			var capacity: int = EQUIPMENT_VIEW.CAPACITIES[item]
+			var count := clampi(int(charges.get(item, capacity)), 0, capacity)
+			model.set(item + "_charges", count)
+			if item in ["boots", "lamp_helmet"]:
+				model.set(item + "_equipped", true)
+	model.cranes_enabled = bool(request.get("cranes_enabled", false))
+	var crane_states: Variant = request.get("cranes", [])
+	if crane_states is Array:
+		for index in range(mini(crane_states.size(), model.cranes.size())):
+			var overrides: Variant = crane_states[index]
+			if not overrides is Dictionary:
+				continue
+			var crane := model.cranes[index]
+			crane.x = clampf(float(overrides.get("x", crane.x)), -StackSimulation.CRANE_EDGE_MARGIN,
+				TUNING.columns + StackSimulation.CRANE_EDGE_MARGIN)
+			crane.loaded = bool(overrides.get("loaded", crane.loaded))
+			crane.waiting = bool(overrides.get("waiting", crane.waiting))
+			crane.wait_remaining = maxf(0.0, float(overrides.get("wait_remaining", crane.wait_remaining)))
+			crane.release_column = clampi(int(overrides.get("release_column", crane.release_column)), -1, TUNING.columns - 1)
+	_show_screen("playing")
 
 
 func _qa_set_test_board(request: Dictionary) -> void:

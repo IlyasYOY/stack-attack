@@ -165,3 +165,46 @@ def mallet_break():
 write('mallet_swing', .12, mallet_swing())
 write('mallet_hit', .17, mallet_impact())
 write('mallet_break', .24, mallet_break())
+
+
+def spring_release(automatic):
+    rng = random.Random(43187)
+    air = 0.0
+
+    def sample(t):
+        nonlocal air
+        start = min(1.0, t * 180)
+        bend = 232 * t + 34 * (1 - math.exp(-t * 12))
+        spring = (.13 * math.sin(2 * math.pi * bend)
+                  + .046 * math.sin(2 * math.pi * bend * 1.93)) * math.exp(-t * 17)
+        air = .69 * air + .31 * rng.uniform(-1, 1)
+        steam = .105 * air * math.exp(-t * 9) if automatic else 0.0
+        return (spring + steam) * start * max(0.0, 1 - (t / .25) ** 6)
+
+    return sample
+
+
+def lamp_reveal(t):
+    start = min(1.0, t * 150)
+    bell = .085 * math.sin(2 * math.pi * 590 * t) + .032 * math.sin(2 * math.pi * 883 * t)
+    return bell * start * math.exp(-t * 22) * max(0.0, 1 - (t / .16) ** 4)
+
+
+def lamp_break():
+    rng = random.Random(15073)
+
+    def sample(t):
+        start = min(1.0, t * 260)
+        shell = .09 * math.sin(2 * math.pi * 196 * t) * math.exp(-t * 34)
+        shard = (.07 * math.sin(2 * math.pi * 900 * t) + rng.uniform(-.12, .12)) * math.exp(-t * 37)
+        tail = max(0.0, t - .036)
+        ring = .075 * min(1.0, tail * 180) * math.sin(2 * math.pi * 1170 * tail) * math.exp(-tail * 38)
+        return (shell + shard + ring) * start * max(0.0, 1 - (t / .22) ** 5)
+
+    return sample
+
+
+write('spring_jump', .25, spring_release(False))
+write('spring_jump_auto', .25, spring_release(True))
+write('lamp_reveal', .16, lamp_reveal)
+write('lamp_break', .22, lamp_break())

@@ -30,7 +30,8 @@ func setup(settings: StackProfile) -> void:
 		add_child(player)
 		effects_players.append(player)
 	for name in ["click", "jump", "land", "line", "over", "helmet_hit", "helmet_break",
-		"gloves_tear", "mallet_swing", "mallet_hit", "mallet_break"]:
+		"gloves_tear", "mallet_swing", "mallet_hit", "mallet_break",
+		"spring_jump", "spring_jump_auto", "lamp_reveal", "lamp_break"]:
 		sounds[name] = load("res://audio/" + name + ".wav")
 	slide_player = AudioStreamPlayer.new()
 	slide_player.bus = "Effects"
@@ -62,7 +63,7 @@ func effect(name: String, haptics: bool = true) -> void:
 			_vibrate(40)
 		elif name == "over":
 			_vibrate(90)
-		elif name == "jump":
+		elif name in ["jump", "spring_jump", "spring_jump_auto"]:
 			_vibrate(12)
 
 

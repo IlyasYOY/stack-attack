@@ -19,6 +19,8 @@ var helmet_impacts: Array[Dictionary] = []
 var gloves_break_life := 0.0
 var gloves_break_origin := Vector2.ZERO
 var gloves_break_facing := 1
+var spring_steam_life := 0.0
+var _spring_steam_origin := Vector2.ZERO
 var _mallet_windup_age := -1.0
 var _mallet_follow_age := -1.0
 var _mallet_facing := 1
@@ -26,6 +28,7 @@ var _mallet_broke := false
 var _mallet_impacts: Array[Dictionary] = []
 var _layout_model_id := 0
 var _reserve_grab_space := false
+var _reserve_lamp_space := false
 const FONT: Font = preload("res://art/workshop_font.fnt")
 const HERO_SIZE := Vector2(16, 24)
 const HERO_OFFSET := Vector2(-1, -2)
@@ -35,6 +38,12 @@ const HERO_BOOTS_ATLAS: Texture2D = preload("res://art/hero_rocket_boots.png")
 const HERO_HELMET_ATLAS: Texture2D = preload("res://art/hero_helmet.png")
 const HERO_GLOVES_ATLAS: Texture2D = preload("res://art/hero_work_gloves.png")
 const HERO_MALLET_ATLAS: Texture2D = preload("res://art/hero_mallet.png")
+const HERO_BONUS_GEAR: Texture2D = preload("res://art/hero_bonus_gear.png")
+const BONUS_GEAR_ROWS := ["strong_arms", "speed_boots", "spring_boots", "lamp_helmet"]
+const BONUS_GEAR_DRAW_ORDER := [1, 2, 0, 3]
+const LAMP_HELMET_TEXTURE: Texture2D = preload("res://art/lamp_helmet.png")
+const LAMP_HELMET_FRAGMENTS: Texture2D = preload("res://art/lamp_helmet_fragments.png")
+const SPRING_STEAM_TIME := 0.37
 const MALLET_TEXTURE: Texture2D = preload("res://art/wooden_mallet.png")
 const MALLET_FRAGMENTS: Texture2D = preload("res://art/mallet_fragments.png")
 const HERO_TEXTURES := {
@@ -96,6 +105,7 @@ func _layout() -> void:
 	if _layout_model_id != model_id:
 		_layout_model_id = model_id
 		_reserve_grab_space = false
+		_reserve_lamp_space = false
 	var landscape := size.x > size.y
 	var button_size := Vector2(66, 64)
 	var jump_button: Rect2
@@ -123,13 +133,19 @@ func _layout() -> void:
 	elif model.mallet_charges > 0:
 		controls["mallet"] = grab_button
 		_reserve_grab_space = true
+	var lamp_button := Rect2(float(controls["left"].position.x), grab_y, button_size.x, GRAB_BUTTON_HEIGHT)
+	if model.lamp_helmet_equipped and model.lamp_helmet_charges > 0:
+		controls["lamp"] = lamp_button
+		_reserve_lamp_space = true
 	var free_height := size.y - (84.0 if landscape else 204.0)
 	cell = maxf(8.0, floorf(minf(free_width / model.tuning.columns, free_height / (model.tuning.rows + 2))))
 	var field_bottom := INF
 	var frame_clearance := WAREHOUSE_FRAME + 3.0
 	var centered_right := floorf((size.x + model.tuning.columns * cell) * 0.5)
-	if not landscape and _reserve_grab_space and centered_right + frame_clearance > grab_button.position.x:
-		# Keep space for the hand action through the current game, even when the item breaks.
+	var hand_overlap := _reserve_grab_space and centered_right + frame_clearance > grab_button.position.x
+	var lamp_overlap := _reserve_lamp_space and size.x - centered_right - frame_clearance < lamp_button.end.x
+	if not landscape and (hand_overlap or lamp_overlap):
+		# Keep the field still when an equipment control disappears during the game.
 		field_bottom = grab_button.position.y - frame_clearance
 		var rows_with_crane := model.tuning.rows - CRANE_TOP / PIXELS_PER_CELL
 		cell = maxf(8.0, minf(cell, floorf((field_bottom - HUD_CLEARANCE_Y) / rows_with_crane)))
@@ -155,6 +171,7 @@ func animate(delta: float) -> void:
 	caption_life = maxf(0.0, caption_life - delta)
 	boots_exhaust_life = maxf(0.0, boots_exhaust_life - delta)
 	gloves_break_life = maxf(0.0, gloves_break_life - delta)
+	spring_steam_life = maxf(0.0, spring_steam_life - delta)
 	if _mallet_windup_age >= 0.0:
 		_mallet_windup_age += delta
 		if _mallet_windup_age > StackSimulation.MALLET_WINDUP_TIME + MALLET_RECOVERY_TIME:
@@ -176,6 +193,15 @@ func animate(delta: float) -> void:
 
 func boots_jump_effect() -> void:
 	boots_exhaust_life = BOOTS_EXHAUST_TIME
+
+func spring_jump_effect(event: Dictionary) -> void:
+	if bool(event.automatic):
+		_spring_steam_origin = _crate_origin(float(event.player_x) + model.tuning.player_width * 0.5,
+			float(event.player_y) + model.tuning.player_height)
+		spring_steam_life = SPRING_STEAM_TIME
+
+func reset_bonus_effects() -> void:
+	spring_steam_life = 0.0
 
 func gloves_break(event: Dictionary) -> void:
 	gloves_break_life = GLOVES_BREAK_TIME
@@ -220,7 +246,10 @@ func mallet_animation_phase() -> String:
 		return "strike" if _mallet_follow_age < MALLET_CONTACT_TIME else "recovery"
 	return "none"
 
-func helmet_hit(event: Dictionary) -> void:
+func lamp_break_effect(event: Dictionary) -> void:
+	helmet_hit(event, true)
+
+func helmet_hit(event: Dictionary, lamp: bool = false) -> void:
 	var crate := _crate_origin(float(event.x), float(event.y))
 	var player := _crate_origin(float(event.player_x), float(event.player_y))
 	var head := player + HERO_OFFSET + Vector2(HERO_SIZE.x * 0.5, 1.0)
@@ -228,7 +257,7 @@ func helmet_hit(event: Dictionary) -> void:
 	helmet_impacts.append({"age": 0.0, "crate": crate + Vector2(12, 13),
 		"head": head, "contact": contact,
 		"jump": event.direction == "jump", "broke": bool(event.helmet_broke),
-		"facing_left": model.facing < 0})
+		"facing_left": model.facing < 0, "lamp": lamp})
 
 func line_effect(chain: int) -> void:
 	caption_life = 1.4
@@ -319,6 +348,7 @@ func _draw_scenery() -> void:
 func hero_frame() -> String:
 	if model.grabbed_crate_id >= 0 or model.is_pulling(): return "grab"
 	if not model.grounded: return "jump"
+	if model.is_strong_pushing(): return "push"
 	if absf(axis) > 0.1:
 		for crate in model.crates:
 			var gap := float(crate.x) - model.player.x - model.tuning.player_width if axis > 0 else model.player.x - float(crate.x) - 1
@@ -535,6 +565,17 @@ func _draw_hero(bounds: Rect2, frame: String) -> void:
 		draw_texture_rect_region(atlas, bounds, _hero_region(frame, boots, helmet, gloves))
 	else:
 		draw_texture_rect(HERO_TEXTURES[frame], bounds, false)
+	_draw_bonus_gear(bounds, frame)
+
+func _draw_bonus_gear(bounds: Rect2, frame: String) -> void:
+	var present := [model.strong_arms_charges > 0 or model.is_strong_pushing(),
+		model.speed_boots_charges > 0, model.spring_boots_charges > 0 or spring_steam_life > 0.0,
+		model.lamp_helmet_equipped]
+	var column: int = HERO_FRAME_COLUMNS[frame]
+	for row in BONUS_GEAR_DRAW_ORDER:
+		if present[row]:
+			var source := Rect2(Vector2(column, row) * HERO_FRAME_PIXELS, HERO_FRAME_PIXELS)
+			draw_texture_rect_region(HERO_BONUS_GEAR, bounds, source)
 
 func _draw_mallet_hero(bounds: Rect2, frame: String) -> void:
 	var phase := mallet_animation_phase()
@@ -573,15 +614,25 @@ func _draw_mallet_hero(bounds: Rect2, frame: String) -> void:
 		bounds.size.x *= facing
 		var source := Rect2(Vector2(column, row) * HERO_FRAME_PIXELS, HERO_FRAME_PIXELS)
 		draw_texture_rect_region(HERO_MALLET_ATLAS, bounds, source)
+		_draw_bonus_gear(bounds, "idle")
 
 static func pause_portrait(boots_equipped: bool, helmet_equipped: bool = false,
-		gloves_equipped: bool = false) -> Texture2D:
+		gloves_equipped: bool = false, bonus_gear: Dictionary = {}) -> Texture2D:
 	var atlas := _hero_atlas(boots_equipped, helmet_equipped, gloves_equipped)
+	var idle_region := _hero_region("idle", boots_equipped, helmet_equipped, gloves_equipped)
+	if bonus_gear.values().has(true):
+		var image: Image = HERO_TEXTURES.idle.get_image() if atlas == null else atlas.get_image().get_region(Rect2i(idle_region))
+		var overlays := HERO_BONUS_GEAR.get_image()
+		for row in BONUS_GEAR_DRAW_ORDER:
+			if bonus_gear.get(BONUS_GEAR_ROWS[row], false):
+				var source := Rect2i(Vector2i(0, int(HERO_FRAME_PIXELS.y) * row), Vector2i(HERO_FRAME_PIXELS))
+				image.blend_rect(overlays, source, Vector2i.ZERO)
+		return ImageTexture.create_from_image(image)
 	if atlas == null:
 		return HERO_TEXTURES.idle
 	var portrait := AtlasTexture.new()
 	portrait.atlas = atlas
-	portrait.region = _hero_region("idle", boots_equipped, helmet_equipped, gloves_equipped)
+	portrait.region = idle_region
 	portrait.filter_clip = true
 	return portrait
 
@@ -623,7 +674,7 @@ func _draw_helmet_impacts(width: float, floor_y: float) -> void:
 		if age < HELMET_WOOD_TIME:
 			_draw_wood_fragments(impact.crate, age, bool(impact.jump), width, floor_y)
 		if bool(impact.broke):
-			_draw_helmet_shell(impact.head, age, bool(impact.facing_left), width, floor_y)
+			_draw_helmet_shell(impact.head, age, bool(impact.facing_left), width, floor_y, bool(impact.lamp))
 		if age < HELMET_FLASH_TIME:
 			_draw_helmet_flash(impact.contact, age, width)
 
@@ -671,7 +722,8 @@ func _draw_wood_fragments(origin: Vector2, age: float, jumped: bool, width: floa
 			(flight.y - lift) * travel + 43.0 * progress * progress)
 		_draw_helmet_fragment(origin + offset, flight.z, index % 4, 0, opacity, false, width, floor_y)
 
-func _draw_helmet_shell(head: Vector2, age: float, facing_left: bool, width: float, floor_y: float) -> void:
+func _draw_helmet_shell(head: Vector2, age: float, facing_left: bool, width: float, floor_y: float,
+		lamp: bool) -> void:
 	var progress := age / HELMET_SHELL_TIME
 	var opacity: float = smoothstep(0.025, 0.062, age) * (1.0 - smoothstep(0.69, 1.0, progress))
 	for index in range(2):
@@ -679,18 +731,19 @@ func _draw_helmet_shell(head: Vector2, age: float, facing_left: bool, width: flo
 		var drift := 29.0 * progress - 11.0 * progress * progress
 		var fall := 63.0 * progress * progress - 42.0 * progress
 		var at := head + Vector2(side * (4.0 + drift), fall - 4.0 - index * 2.0)
-		_draw_helmet_fragment(at, 12.0, 1 - index if facing_left else index, 1,
-			opacity, facing_left, width, floor_y)
+		_draw_helmet_fragment(at, 12.0, 1 - index if facing_left else index, 0 if lamp else 1,
+			opacity, facing_left, width, floor_y, LAMP_HELMET_FRAGMENTS if lamp else HELMET_FRAGMENTS)
 
 func _draw_helmet_fragment(at: Vector2, piece_width: float, column: int, row: int,
-		opacity: float, flip: bool, width: float, floor_y: float) -> void:
+		opacity: float, flip: bool, width: float, floor_y: float,
+		texture: Texture2D = HELMET_FRAGMENTS) -> void:
 	var piece_size := Vector2(piece_width, roundf(piece_width * FRAGMENT_TILE.y / FRAGMENT_TILE.x))
 	var corner := (at - piece_size * 0.5).round().clamp(
 		Vector2(0, -PIXELS_PER_CELL), Vector2(width, floor_y) - piece_size)
 	var source := Rect2(Vector2(column, row) * FRAGMENT_TILE, FRAGMENT_TILE)
 	if flip:
 		piece_size.x = -piece_size.x
-	draw_texture_rect_region(HELMET_FRAGMENTS, Rect2(corner, piece_size), source, Color(Color.WHITE, opacity))
+	draw_texture_rect_region(texture, Rect2(corner, piece_size), source, Color(Color.WHITE, opacity))
 
 func _draw_helmet_flash(contact: Vector2, age: float, width: float) -> void:
 	var progress := age / HELMET_FLASH_TIME
@@ -726,6 +779,62 @@ func _draw_boots_exhaust(bounds: Rect2, floor_y: float) -> void:
 			at + Vector2(-1, taper), at + Vector2(-2, shoulder)])
 		draw_colored_polygon(flame, Color(EXHAUST_FLAME, opacity))
 		draw_rect(Rect2(at + Vector2(-1, 0), Vector2(2, roundf(shoulder))), Color(EXHAUST_CORE, opacity))
+
+func _draw_spring_steam(width: float, floor_y: float) -> void:
+	if spring_steam_life <= 0.0:
+		return
+	var elapsed := 1.0 - spring_steam_life / SPRING_STEAM_TIME
+	var opacity: float = 1.0 - smoothstep(0.26, 1.0, elapsed)
+	for index in range(5):
+		var spread := float(index - 2)
+		var radius := roundf(2.0 + absf(spread) * 0.35 + elapsed * 2.0)
+		var center := _spring_steam_origin + Vector2(spread * (4.0 + elapsed * 6.0),
+			-4.0 - elapsed * (13.0 - absf(spread) * 3.0))
+		center.x = roundf(clampf(center.x, radius, width - radius))
+		center.y = roundf(clampf(center.y, radius, floor_y - radius))
+		draw_circle(center + Vector2(0, 1), radius + 1.0, Color(Color("80a39d"), opacity * 0.70))
+		draw_circle(center, radius, Color(Color("e7ead2"), opacity))
+		draw_rect(Rect2(center - Vector2(1, 2), Vector2(2, 1)), Color(Color("fff4d4"), opacity))
+
+func _draw_speed_trail(bounds: Rect2, width: float) -> void:
+	if not model.speed_boost_active:
+		return
+	var facing := float(model.facing)
+	var center := bounds.get_center()
+	for index in range(3):
+		var x := center.x - (9.0 + index * 1.5) * facing
+		var start := clampf(x, 0.0, width)
+		var end := clampf(x - (13.0 - index * 2.0) * facing, 0.0, width)
+		var y := roundf(center.y + 2.0 + index * 4.0)
+		if absf(end - start) >= 2.0:
+			draw_line(Vector2(start, y), Vector2(end, y), Color(Color("bddecb"), 0.62 - index * 0.12), 1.0)
+
+func _draw_lamp_guides(width: float, floor_y: float) -> void:
+	if model.lamp_active_time <= 0.0:
+		return
+	var fade := clampf(model.lamp_active_time * 4.0, 0.0, 1.0)
+	var bounds := _hero_bounds()
+	var facing := float(model.facing)
+	var lens := bounds.get_center() + Vector2(6.0 * facing, -8.0)
+	lens = lens.clamp(Vector2.ZERO, Vector2(width, floor_y))
+	var far_x := clampf(lens.x + 55.0 * facing, 0.0, width)
+	if absf(far_x - lens.x) >= 3.0:
+		var spread := absf(far_x - lens.x) * 0.30
+		var upper := Vector2(far_x, maxf(0.0, lens.y - spread))
+		var lower := Vector2(far_x, minf(floor_y, lens.y + spread))
+		draw_colored_polygon(PackedVector2Array([lens, upper, lower]), Color(EFFECT_AMBER, fade * 0.11))
+		draw_colored_polygon(PackedVector2Array([lens, upper.lerp(lower, 0.25), upper.lerp(lower, 0.75)]),
+			Color(CREAM, fade * 0.12))
+	for column in model.lamp_columns():
+		var x := (float(column) + 0.5) * PIXELS_PER_CELL
+		for y in range(2, int(floor_y) - 7, 12):
+			draw_rect(Rect2(x - 2.0, float(y), 4.0, 7.0), Color(INK, fade * 0.50))
+			draw_rect(Rect2(x - 1.0, float(y) + 1.0, 2.0, 5.0), Color(CREAM, fade * 0.72))
+		var mark := Vector2(x, floor_y - 7.0)
+		draw_rect(Rect2(mark - Vector2(7, 2), Vector2(14, 4)), Color(EFFECT_AMBER, fade))
+		draw_rect(Rect2(mark - Vector2(2, 7), Vector2(4, 14)), Color(EFFECT_AMBER, fade))
+		draw_rect(Rect2(mark - Vector2(4, 1), Vector2(8, 2)), Color(CREAM, fade))
+		draw_rect(Rect2(mark - Vector2(1, 4), Vector2(2, 8)), Color(CREAM, fade))
 
 func crush_geometry(impact: Dictionary) -> Dictionary[String, Rect2]:
 	var strength: float = smoothstep(0.0, 0.39, crush_progress)
@@ -848,6 +957,12 @@ func _draw_field_objects() -> void:
 		_draw_crate(Rect2(position, Vector2.ONE * PIXELS_PER_CELL), int(crate.variant))
 	if impact.is_empty():
 		var bounds := _hero_bounds()
+		var compression := float(model.spring_charge_stages)
+		bounds.position.y += compression
+		bounds.size.y -= compression
+		_draw_lamp_guides(width, floor_y)
+		_draw_speed_trail(bounds, width)
+		_draw_spring_steam(width, floor_y)
 		_draw_boots_exhaust(bounds, floor_y)
 		_draw_mallet_hero(bounds, hero_frame())
 	else:
@@ -896,7 +1011,9 @@ func _draw_warehouse() -> void:
 func _draw_controls() -> void:
 	for action in controls:
 		var rect: Rect2 = controls[action]
-		var down: bool = pressed_actions.has(action) or (action == "mallet" and mallet_animation_phase() != "none")
+		var down: bool = (pressed_actions.has(action)
+			or (action == "mallet" and mallet_animation_phase() != "none")
+			or (action == "lamp" and model.lamp_active_time > 0.0))
 		var grabbing: bool = action == "grab" and model.grabbed_crate_id >= 0
 		var p := rect.position
 		var s := rect.size
@@ -919,9 +1036,10 @@ func _draw_controls() -> void:
 				draw_circle(indicator, 3.0, EFFECT_AMBER)
 				draw_rect(Rect2(indicator - Vector2.ONE, Vector2(2, 2)), CREAM)
 			draw_texture_rect_region(GRAB_ICONS, Rect2(icon_at, GRAB_ICON_SIZE), source)
-		elif action == "mallet":
+		elif action in ["mallet", "lamp"]:
 			var icon_size := Vector2(32, 32)
-			draw_texture_rect(MALLET_TEXTURE, Rect2(rect.get_center() - icon_size * 0.5, icon_size), false)
+			var icon := MALLET_TEXTURE if action == "mallet" else LAMP_HELMET_TEXTURE
+			draw_texture_rect(icon, Rect2(rect.get_center() - icon_size * 0.5, icon_size), false)
 		else:
 			var direction := Vector2.UP if action == "jump" else (Vector2.LEFT if action == "left" else Vector2.RIGHT)
 			_draw_arrow(rect.get_center() + Vector2(1, 2), direction, Color("0b2632"))

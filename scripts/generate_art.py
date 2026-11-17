@@ -528,3 +528,175 @@ for x in [2, 10]:
     d.rectangle((x, 1, x + 3, 12), fill='#f4e3ba')
     d.line((x, 1, x + 3, 1), fill='#fff2cb')
 image.save(ROOT / 'pause_icon.png')
+
+
+# Workshop equipment overlays share the hero frame and its contact points.
+def bare_arm(draw, contour, muscle, fold, light):
+    draw.polygon(contour, fill=INK)
+    draw.polygon(muscle, fill='#efa36d')
+    draw.line(fold, fill='#bd704b', width=2)
+    draw.line(light, fill='#ffd398', width=2)
+
+
+def bare_arms(frame):
+    image = Image.new('RGBA', (32, 48))
+    draw = ImageDraw.Draw(image)
+    bare_arm(draw, [(7, 24), (11, 26), (11, 31), (9, 35), (10, 38),
+                    (8, 40), (4, 39), (3, 35), (3, 29), (5, 25)],
+             [(7, 25), (10, 27), (10, 31), (8, 35), (9, 38), (5, 38),
+              (4, 35), (4, 29), (6, 26)],
+             [(9, 30), (6, 33), (7, 36)], [(6, 27), (5, 31)])
+    if frame == 'push':
+        bare_arm(draw, [(20, 25), (25, 25), (27, 27), (28, 29), (31, 27),
+                        (31, 38), (26, 38), (22, 36), (18, 32), (18, 28)],
+                 [(20, 26), (24, 26), (26, 28), (27, 31), (30, 29), (30, 36),
+                  (27, 37), (23, 35), (19, 32), (19, 28)],
+                 [(20, 32), (24, 34), (28, 34), (29, 32)],
+                 [(21, 28), (24, 29), (25, 32)])
+        draw.line((29, 31, 31, 30), fill='#ffd398')
+        draw.point((30, 34), fill='#ffebbb')
+    else:
+        bare_arm(draw, [(22, 24), (26, 25), (29, 28), (30, 33), (29, 35),
+                        (30, 38), (28, 41), (23, 40), (21, 37), (21, 34),
+                        (19, 31), (19, 28)],
+                 [(22, 25), (26, 26), (28, 28), (29, 33), (28, 35), (29, 38),
+                  (27, 40), (24, 39), (22, 37), (22, 34), (20, 31), (20, 28)],
+                 [(27, 28), (27, 31), (24, 33), (25, 36), (27, 37)],
+                 [(22, 27), (21, 30), (23, 32)])
+        draw.line((25, 38, 27, 38), fill='#ffd398')
+    return image
+
+
+EQUIPMENT_BOOT_PIXELS = {
+    'speed_boots': (
+        '.#######.....',
+        '#HCCCCCC#....',
+        '#hcccccT#....',
+        '#LcccttT#....',
+        '#ccTttbb#....',
+        '#Tttbbbc#....',
+        '#tbBccct##...',
+        '#bBcccttCH#..',
+        '#BCtttTCCCH#.',
+        '#CCTTCCHHHc#.',
+        '#hhcccccttt#.',
+        '#Mmmmmmmmmm#.',
+        '.##########..',
+    ),
+    'spring_boots': (
+        '..######.....',
+        '.#Haaaaa#....',
+        '.#aarrrr#....',
+        '.#amarr#.....',
+        '.#arrr#......',
+        '.#arrR##.....',
+        '.#arRRaa###..',
+        '.#rRaaaaaaH#.',
+        '.#Hbbbbbbbb#.',
+        '.##########..',
+        '..#MMmmM#....',
+        '.#mMMMmmM#...',
+        '.#MMmmMMM#...',
+        '..########...',
+    )
+}
+EQUIPMENT_BOOT_PALETTE = {
+    '#': INK, 'H': '#fbdfa2', 'h': '#8accad',
+    'C': '#58b8aa', 'c': '#258681', 'T': '#166370', 't': '#16535e',
+    'L': '#a1e2bd', 'b': '#c18142', 'B': '#f7cb78', 'M': '#d2ddd6',
+    'm': '#72868a', 'a': '#ae542f', 'r': '#793e2d', 'R': '#96503b',
+}
+EQUIPMENT_FOOT_POSITIONS = {
+    'idle': ((6, 38), (16, 38)),
+    'walk': ((4, 38), (18, 38)),
+    'jump': ((3, 36), (18, 36)),
+}
+
+
+def draw_equipment_boot(draw, item, at):
+    for y, row in enumerate(EQUIPMENT_BOOT_PIXELS[item]):
+        for x, pixel in enumerate(row):
+            if pixel != '.':
+                draw.point((at[0] + x, at[1] + y), fill=EQUIPMENT_BOOT_PALETTE[pixel])
+
+
+def equipment_boots(frame, item):
+    image = Image.new('RGBA', (32, 48))
+    rows = EQUIPMENT_BOOT_PIXELS[item]
+    boot = Image.new('RGBA', (len(rows[0]), len(rows)))
+    draw_equipment_boot(ImageDraw.Draw(boot), item, (0, 0))
+    boot = boot.resize((boot.width, 10), Image.Resampling.NEAREST)
+    for at in reversed(EQUIPMENT_FOOT_POSITIONS.get(frame, EQUIPMENT_FOOT_POSITIONS['idle'])):
+        image.alpha_composite(boot, at)
+    return image
+
+
+def lamp_hat():
+    image = Image.new('RGBA', (32, 16))
+    draw = ImageDraw.Draw(image)
+    draw.polygon([(2, 11), (4, 7), (6, 4), (9, 2), (12, 0), (20, 0), (24, 2),
+                  (27, 5), (28, 8), (31, 9), (31, 12), (28, 14), (11, 14),
+                  (5, 15), (2, 13)], fill=INK)
+    draw.polygon([(4, 11), (6, 7), (8, 4), (12, 2), (19, 1), (24, 3), (27, 6),
+                  (28, 9), (24, 11), (5, 13)], fill='#227e82')
+    draw.polygon([(6, 9), (8, 5), (12, 3), (17, 2), (20, 3), (17, 5), (15, 6),
+                  (14, 9), (11, 10)], fill='#59b8a8')
+    draw.line([(9, 5), (13, 3), (17, 2)], fill='#a9e0ba')
+    draw.line([(4, 12), (12, 11), (20, 10), (24, 10)], fill='#123e52', width=2)
+    draw.line([(5, 13), (14, 12), (22, 12), (27, 13), (29, 12)], fill='#75b9ab')
+    draw.rectangle((9, 10, 11, 12), fill='#cf9a57')
+    draw.point((10, 10), fill='#ffde94')
+    draw.polygon([(19, 5), (22, 3), (27, 3), (30, 5), (31, 8), (29, 11),
+                  (26, 13), (22, 12), (19, 10)], fill=INK)
+    draw.polygon([(20, 6), (23, 4), (27, 4), (29, 6), (30, 8), (28, 11),
+                  (26, 12), (23, 11), (20, 9)], fill='#b47837')
+    draw.polygon([(22, 6), (24, 5), (27, 5), (29, 7), (29, 9), (27, 11),
+                  (24, 11), (22, 9)], fill='#ffd976')
+    draw.rectangle((24, 6, 27, 9), fill='#fff0ae')
+    draw.line((25, 6, 26, 6), fill='#fff9dd')
+    return image
+
+
+def break_lamp_hat(helmet):
+    result = Image.new('RGBA', (40, 16))
+    crack = [17, 17, 16, 16, 15, 15, 16, 16, 14, 14, 13, 13, 12, 12, 12, 12]
+    for y, seam in enumerate(crack):
+        for x in range(32):
+            pixel = helmet.getpixel((x, y))
+            if not pixel[3]:
+                continue
+            target_x = x if x < seam else 20 + x - 12
+            result.putpixel((target_x, y), pixel)
+        for x, target in ((seam - 1, seam - 1), (seam, 20 + seam - 12)):
+            if helmet.getpixel((x, y))[3]:
+                result.putpixel((target, y), (16, 39, 51, 255))
+    return result
+
+
+lamp = lamp_hat()
+hat_icon = Image.new('RGBA', (32, 32))
+hat_icon.paste(lamp, (0, 9))
+hat_icon.save(ROOT / 'lamp_helmet.png')
+break_lamp_hat(lamp).save(ROOT / 'lamp_helmet_fragments.png')
+
+for item in EQUIPMENT_BOOT_PIXELS:
+    icon = Image.new('RGBA', (32, 32))
+    draw = ImageDraw.Draw(icon)
+    draw_equipment_boot(draw, item, (15, 10))
+    draw_equipment_boot(draw, item, (4, 6))
+    icon.save(ROOT / f'{item}.png')
+
+arms_icon = Image.new('RGBA', (32, 32))
+arm = bare_arms('idle').crop((19, 24, 31, 42))
+arms_icon.paste(arm.transpose(Image.Transpose.FLIP_LEFT_RIGHT), (3, 7))
+arms_icon.paste(arm, (17, 7))
+arms_icon.save(ROOT / 'strong_arms.png')
+
+bonus_overlay = Image.new('RGBA', (160, 192))
+for column, frame in enumerate([*frames, 'grab']):
+    at = column * 32
+    bonus_overlay.paste(bare_arms(frame), (at, 0))
+    bonus_overlay.paste(equipment_boots(frame, 'speed_boots'), (at, 48))
+    bonus_overlay.paste(equipment_boots(frame, 'spring_boots'), (at, 96))
+    bonus_overlay.paste(lamp, (at, 144))
+bonus_overlay.save(ROOT / 'hero_bonus_gear.png')

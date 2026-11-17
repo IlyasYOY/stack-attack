@@ -4,6 +4,7 @@ var assertions := 0
 const Config = preload("res://game/tuning.gd")
 const Simulation = preload("res://game/simulation.gd")
 const Profile = preload("res://game/profile.gd")
+const NEW_EQUIPMENT := ["strong_arms", "speed_boots", "lamp_helmet", "spring_boots"]
 
 class HapticProbe extends StackSound:
 	var pulses: Array[int] = []
@@ -50,6 +51,7 @@ func run() -> void:
 	clearing()
 	equipment_rewards()
 	equipment_jumps()
+	bonus_equipment()
 	mallet_actions()
 	gloves_pull_and_break()
 	gloves_blockers()
@@ -406,7 +408,7 @@ func equipment_rewards() -> void:
 		"A long frame must stop on the first playable boundary after the final collapse")
 	check(game.equipment_pending and game.equipment_rows == 7 and game.accumulator == 0.0,
 		"Opening the first offer must preserve the second threshold and surplus, and discard leftover frame time")
-	check(game.equipment_options() == ["boots", "helmet", "gloves", "mallet"],
+	check(game.equipment_options() == ["boots", "helmet", "gloves", "mallet"] + NEW_EQUIPMENT,
 		"The first offer must present both hands items and both independent slots")
 	var frozen := [game.ticks, game.elapsed, game.player, game.player_velocity, game.cranes.duplicate(true), game._rng.state]
 	game.advance(20.0, 1, true)
@@ -428,24 +430,24 @@ func equipment_rewards() -> void:
 
 	add_full_rows(game, 9)
 	game.advance(5.0, 0)
-	check(game.equipment_pending and game.equipment_rows == 6 and game.equipment_options() == ["helmet", "gloves", "mallet"],
+	check(game.equipment_pending and game.equipment_rows == 6 and game.equipment_options() == ["helmet", "gloves", "mallet"] + NEW_EQUIPMENT,
 		"Full boots must leave the helmet and both hands items available and preserve queued thresholds")
 	game.resolve_equipment("boots")
 	check(game.equipment_pending and game.equipment_rows == 6, "Choosing an unavailable full item must leave the offer open")
 	game.resolve_equipment("helmet")
-	check(game.equipment_pending and game.equipment_rows == 1 and game.equipment_options() == ["gloves", "mallet"],
+	check(game.equipment_pending and game.equipment_rows == 1 and game.equipment_options() == ["gloves", "mallet"] + NEW_EQUIPMENT,
 		"Choosing a helmet must leave both hands items available with boots and helmet full")
 	game.resolve_equipment("gloves")
-	check(not game.equipment_pending and game.equipment_rows == 1 and game.equipment_options() == ["mallet"]
+	check(not game.equipment_pending and game.equipment_rows == 1 and game.equipment_options() == ["mallet"] + NEW_EQUIPMENT
 		and game.helmet_charges == Simulation.HELMET_MAX_CHARGES and game.boots_charges == 10
 		and game.gloves_charges == Simulation.GLOVES_MAX_CHARGES,
 		"All three equipment slots must stay equipped after choosing gloves")
 	add_full_rows(game, 10)
 	game.advance(5.0, 0)
-	check(game.equipment_pending and game.equipment_rows == 6 and game.equipment_options() == ["mallet"],
+	check(game.equipment_pending and game.equipment_rows == 6 and game.equipment_options() == ["mallet"] + NEW_EQUIPMENT,
 		"A full hands item must leave the other item available on the next reward")
 	game.resolve_equipment("mallet")
-	check(game.equipment_pending and game.equipment_rows == 1 and game.equipment_options() == ["gloves"]
+	check(game.equipment_pending and game.equipment_rows == 1 and game.equipment_options() == ["gloves"] + NEW_EQUIPMENT
 		and game.mallet_charges == Simulation.MALLET_MAX_CHARGES and game.gloves_charges == 0
 		and game.helmet_charges == 3 and game.boots_charges == 10,
 		"The mallet must replace the gloves without affecting the independent slots")
@@ -457,7 +459,7 @@ func equipment_rewards() -> void:
 	game.helmet_charges -= 1
 	add_full_rows(game, 4)
 	game.advance(3.0, 0)
-	check(game.equipment_pending and game.equipment_options() == ["helmet", "mallet"],
+	check(game.equipment_pending and game.equipment_options() == ["helmet", "mallet"] + NEW_EQUIPMENT,
 		"A partly spent helmet must be available while the boots are full")
 	game.resolve_equipment("")
 	check(not game.equipment_pending and game.helmet_charges == 2 and game.boots_charges == 10,
@@ -474,7 +476,7 @@ func equipment_rewards() -> void:
 	add_full_rows(game, 5)
 	game.advance(3.0, 0)
 	check(game.equipment_pending and game.equipment_rows == 0 and game.boots_charges == 9
-		and game.equipment_options() == ["boots", "mallet"], "Partially spent boots must remain available while the helmet is full")
+		and game.equipment_options() == ["boots", "mallet"] + NEW_EQUIPMENT, "Partially spent boots must remain available while the helmet is full")
 	game.resolve_equipment("")
 	check(not game.equipment_pending and game.boots_equipped and game.boots_charges == 9,
 		"Skipping a replacement must keep the equipped pair and its remaining charges")
@@ -482,7 +484,7 @@ func equipment_rewards() -> void:
 	game.advance(5.0, 0)
 	check(game.equipment_pending and game.equipment_rows == 5, "An earlier skip must not prevent future offers")
 	game.resolve_equipment("boots")
-	check(game.equipment_pending and game.equipment_options() == ["mallet"],
+	check(game.equipment_pending and game.equipment_options() == ["mallet"] + NEW_EQUIPMENT,
 		"Refilling boots leaves the hands replacement in the second queued reward")
 	game.resolve_equipment("")
 	check(not game.equipment_pending and game.equipment_rows == 0 and game.boots_charges == 10,
@@ -490,7 +492,7 @@ func equipment_rewards() -> void:
 	game.gloves_charges -= 1
 	add_full_rows(game, 5)
 	game.advance(3.0, 0)
-	check(game.equipment_pending and game.equipment_options() == ["gloves", "mallet"],
+	check(game.equipment_pending and game.equipment_options() == ["gloves", "mallet"] + NEW_EQUIPMENT,
 		"Partly spent gloves must remain available while the helmet and boots are full")
 	game.resolve_equipment("")
 	check(not game.equipment_pending and game.gloves_charges == 5,
@@ -605,9 +607,9 @@ func equipment_jumps() -> void:
 		check(game.events == [{"type": "air_jump"}] and game.boots_charges == charges - 1
 			and game.player_velocity.y == jump_velocity and game.boots_equipped,
 			"One separate airborne press must spend one charge and launch a full jump, including the last charge")
-		game.advance(Simulation.STEP, 0, true)
+		game.advance(Simulation.STEP, 0, false, false, false, {"jump_held": true})
 		check(game.events.is_empty() and game.boots_charges == charges - 1 and game.player_velocity.y > jump_velocity,
-			"Additional presses before landing must not launch another air jump")
+			"Holding jump after an airborne press must not consume another charge")
 		game.advance(1.0, 0)
 		check(game.grounded and game.boots_equipped == (charges > 1),
 			"Landing must end the flight and remove the boots when the last charge is spent")
@@ -624,17 +626,167 @@ func equipment_jumps() -> void:
 	game.advance(Simulation.STEP, 1)
 	game.advance(.11, 1)
 	game.advance(Simulation.STEP, 0, true)
-	check(not game.grounded and game.player_velocity.y > 0.0 and game.events.is_empty() and game.boots_charges == 10,
-		"Walking off a ledge must not grant an air jump after coyote time expires")
-	game.advance(1.0, 0)
-	game.player = ledge
-	game.advance(Simulation.STEP, 1)
-	game.advance(Simulation.STEP, 0, true)
-	check(game.events == [{"type": "jump"}] and game.boots_charges == 10,
+	check(not game.grounded and game.player_velocity.y < 0.0 and game.events == [{"type": "air_jump"}]
+		and game.boots_charges == 9, "Walking off a ledge qualifies for paid rocket thrust once coyote time expires")
+	var coyote := empty(4)
+	for row in range(7, coyote.tuning.rows):
+		coyote.add_crate(2, row)
+	coyote.boots_equipped = true
+	coyote.boots_charges = 10
+	coyote.player = ledge
+	coyote.advance(Simulation.STEP, 0)
+	coyote.advance(Simulation.STEP, 1)
+	coyote.advance(Simulation.STEP, 0, true)
+	check(coyote.events == [{"type": "jump"}] and coyote.boots_charges == 10,
 		"Coyote takeoff must still use an ordinary jump")
-	game.advance(Simulation.STEP, 0, true)
-	check(game.events == [{"type": "air_jump"}] and game.boots_charges == 9,
-		"Coyote takeoff must qualify for the second jump")
+	coyote.advance(Simulation.STEP, 0, true)
+	check(coyote.events == [{"type": "air_jump"}] and coyote.boots_charges == 9,
+		"Coyote takeoff must qualify for rocket thrust")
+	coyote.advance(Simulation.STEP, 0, true)
+	check(coyote.events == [{"type": "air_jump"}] and coyote.boots_charges == 8,
+		"A fresh press triggers another rocket thrust within the same flight")
+
+
+func bonus_equipment() -> void:
+	var gear := empty()
+	gear.equipment_enabled = true
+	for item in ["gloves", "helmet", "boots", "strong_arms", "lamp_helmet", "spring_boots"]:
+		gear.equipment_pending = true
+		gear.resolve_equipment(item)
+	check(gear.strong_arms_charges == Simulation.STRONG_ARMS_MAX_CHARGES and gear.gloves_charges == 0
+		and gear.lamp_helmet_equipped and gear.helmet_charges == 0 and gear.boots_charges == 0
+		and not gear.boots_equipped and gear.spring_boots_charges == Simulation.SPRING_BOOTS_MAX_CHARGES,
+		"New gear replaces in its own slot and coexists across slots")
+	gear.equipment_pending = true
+	gear.resolve_equipment("speed_boots")
+	check(gear.spring_boots_charges == 0 and gear.speed_boots_charges == Simulation.SPEED_BOOTS_MAX_CHARGES
+		and gear.lamp_helmet_equipped and gear.strong_arms_charges > 0,
+		"Exchanging footwear must preserve the independent slots")
+	gear.reset(7481)
+	check(gear.strong_arms_charges == 0 and gear.speed_boots_charges == 0
+		and not gear.lamp_helmet_equipped and gear.lamp_helmet_charges == 0 and gear.spring_boots_charges == 0,
+		"A new game clears every new item")
+
+	for direction: int in [-1, 1]:
+		var pair := empty()
+		pair.strong_arms_charges = 1
+		var near := pair.add_crate(4, 10)
+		var far := pair.add_crate(4 + direction, 10)
+		var upper := pair.add_crate(4, 9)
+		pair.player.x = 4 - pair.tuning.player_width if direction > 0 else 5
+		var completed := false
+		for tick in range(70):
+			pair.advance(Simulation.STEP, direction)
+			check(crates_separate(pair), "A linked push must preserve collision in either direction")
+			if pair.strong_arms_charges == 0:
+				completed = pair.events.any(func(event: Dictionary) -> bool: return event.type == "strong_push")
+				break
+		check(completed and near.x == 4 + direction and far.x == 4 + 2 * direction,
+			"The last charge completes both cells in the same pair action")
+		pair.player.x = 0
+		pair.advance(.7, 0)
+		check(upper.x == 4 and upper.y == 10, "An unsupported upper crate must fall without being dragged sideways")
+	var blocked := empty()
+	blocked.strong_arms_charges = 1
+	blocked.player.x = 7 - blocked.tuning.player_width
+	var first := blocked.add_crate(7, 10)
+	blocked.add_crate(8, 10)
+	blocked.add_crate(9, 10)
+	blocked.advance(.65, 1)
+	check(first.x == 7 and blocked.strong_arms_charges == 1 and crates_separate(blocked),
+		"A blocked pair and a third adjacent crate must not consume strength")
+	var interrupted := empty()
+	interrupted.strong_arms_charges = 1
+	interrupted.player.x = 4 - interrupted.tuning.player_width
+	interrupted.add_crate(4, 10)
+	var leading := interrupted.add_crate(5, 10)
+	interrupted.advance(4 * Simulation.STEP, 1)
+	var obstacle := interrupted.add_crate(6.3, 9.2, 4.0)
+	interrupted.advance(.4, 1)
+	check(leading.x < 6 and leading.x + 1 <= obstacle.x + .001 and interrupted.strong_arms_charges == 1
+		and crates_separate(interrupted), "Both crates must stop safely on a new obstruction without spending a charge")
+
+	var runner := empty()
+	runner.speed_boots_charges = 1
+	var start := runner.player.x
+	runner.advance(.4, 0)
+	check(runner.speed_boots_charges == 1 and runner.player.x == start, "Idle speed boots must not drain")
+	for tick in range(120):
+		runner.advance(Simulation.STEP, 1)
+		if runner.speed_boots_charges == 0:
+			break
+	check(runner.speed_boots_charges == 0 and absf(runner.player.x - start - 1) < .055,
+		"Speed boosts finish the last full cell before removing the equipment")
+	var normal_at := runner.player.x
+	runner.advance(.25, 1)
+	check(absf(runner.player.x - normal_at - .25 * runner.tuning.player_speed) < .002,
+		"After the last charge, the same input continues at ordinary speed")
+	runner.player.x = runner.tuning.columns - runner.tuning.player_width
+	runner.speed_boots_charges = 2
+	runner.advance(.5, 1)
+	check(runner.speed_boots_charges == 2, "Walking against the field edge must not drain speed boots")
+
+	var lamp := empty()
+	lamp.lamp_helmet_equipped = true
+	lamp.lamp_helmet_charges = 1
+	lamp.cranes_enabled = true
+	lamp.cranes[0].release_column = 3
+	lamp.cranes[0].loaded = false
+	lamp.cranes[1].loaded = false
+	lamp.advance(Simulation.STEP, 0, false, false, false, {"lamp_pressed": true})
+	check(lamp.lamp_helmet_charges == 1 and lamp.lamp_active_time == 0.0, "An empty lamp call costs nothing")
+	lamp.cranes[0].loaded = true
+	lamp.advance(Simulation.STEP, 0, false, false, false, {"lamp_pressed": true})
+	check(lamp.lamp_helmet_charges == 0 and lamp.lamp_active_time > 0.0 and lamp.lamp_columns() == [3],
+		"The last lamp charge reveals a loaded crane only")
+	lamp.cranes_enabled = false
+	for hit in range(2):
+		lamp.add_crate(floorf(lamp.player.x), lamp.player.y - 1.10, 6.0)
+		lamp.advance(.1, 0)
+		check(not lamp.lamp_helmet_equipped and lamp.broken_crates == 1
+			and lamp.state == ("playing" if hit == 0 else "over") and lamp.score == 0,
+			"An exhausted lamp helmet protects exactly once and preserves the score")
+
+	var spring := empty()
+	spring.spring_boots_charges = Simulation.SPRING_BOOTS_MAX_CHARGES
+	spring.advance(Simulation.STEP, 0, true, false, false, {"jump_held": false})
+	check(not spring.grounded and spring.spring_boots_charges == Simulation.SPRING_BOOTS_MAX_CHARGES,
+		"A complete short tap launches a normal jump without using spring resources")
+	spring.advance(2.0, 0)
+	spring.advance(.38, 0, true, false, false, {"jump_held": true})
+	check(spring.grounded and spring.spring_charge_stages == 2,
+		"Holding the control charges in steps without taking off early")
+	spring.advance(Simulation.STEP, 0)
+	check(not spring.grounded and spring.spring_boots_charges == Simulation.SPRING_BOOTS_MAX_CHARGES - 2
+		and spring.events.any(func(event: Dictionary) -> bool: return event.type == "spring_jump" and not event.automatic),
+		"Release spends exactly the displayed stages")
+	spring.advance(2.0, 0)
+	spring.spring_boots_charges = 1
+	spring.advance(.25, 0, true, false, false, {"jump_held": true})
+	check(not spring.grounded and spring.spring_boots_charges == 0
+		and spring.events.any(func(event: Dictionary) -> bool: return event.type == "spring_jump" and event.automatic),
+		"The last stage auto-launches when the available resource is exhausted")
+	spring.advance(2.0, 0, false, false, false, {"jump_held": true})
+	check(spring.grounded and spring.events.is_empty(), "A continued hold must not start a second charge")
+	spring.spring_boots_charges = 4
+	spring.advance(.24, 0, true, false, false, {"jump_held": true})
+	spring.cancel_bonus_input()
+	spring.advance(.5, 0)
+	check(spring.grounded and spring.spring_boots_charges == 4 and spring.spring_charge_stages == 0,
+		"Cancelling a charge for pause must discard the pending jump")
+	var ceiling := empty()
+	ceiling.spring_boots_charges = 6
+	for row in range(1, ceiling.tuning.rows):
+		ceiling.add_crate(2, row)
+	ceiling.player.y = 1.0 - ceiling.tuning.player_height
+	check(ceiling.spring_charge_limit() == 1, "Spring charge cap must be calculated from the current elevated position")
+	ceiling.advance(.22, 0, true, false, false, {"jump_held": true})
+	check(ceiling.spring_boots_charges == 5 and ceiling.events.any(func(event: Dictionary) -> bool:
+		return event.type == "spring_jump" and event.automatic and event.stages == 1),
+		"A high perch reaches the height cap and auto-launches before later stages")
+	for tick in range(60):
+		ceiling.advance(Simulation.STEP, 0, false, false, false, {"jump_held": true})
+		check(ceiling.player.y >= Simulation.PLAYER_TOP - .001, "Boosted vertical motion must respect the top of the field")
 
 
 func gloved(facing: int = 1, crate_x: float = 4.0, gap: float = 0.14) -> StackSimulation:

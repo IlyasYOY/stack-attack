@@ -2,17 +2,28 @@ extends RefCounted
 
 const ICONS := {
 	"boots": preload("res://art/rocket_boots.png"),
+	"speed_boots": preload("res://art/speed_boots.png"),
+	"spring_boots": preload("res://art/spring_boots.png"),
 	"helmet": preload("res://art/helmet.png"),
+	"lamp_helmet": preload("res://art/lamp_helmet.png"),
 	"gloves": preload("res://art/work_gloves.png"),
 	"mallet": preload("res://art/wooden_mallet.png"),
+	"strong_arms": preload("res://art/strong_arms.png"),
 }
+const SLOTS := {"feet": ["boots", "speed_boots", "spring_boots"],
+	"head": ["helmet", "lamp_helmet"], "hands": ["gloves", "mallet", "strong_arms"]}
 const NAMES := {"boots": "Ботинки-ракеты", "helmet": "Каска", "gloves": "Рабочие перчатки",
-	"mallet": "Киянка"}
-const EFFECTS := {"boots": "Двойной прыжок", "helmet": "Разбивает ящики", "gloves": "Тянут ящики",
-	"mallet": "Бьёт ящик спереди"}
+	"mallet": "Киянка", "strong_arms": "Накачанные руки", "speed_boots": "Сапоги-скороходы",
+	"lamp_helmet": "Каска с фонарём", "spring_boots": "Пружинные ботинки"}
+const EFFECTS := {"boots": "Рывки в воздухе", "helmet": "Разбивает ящики", "gloves": "Тянут ящики",
+	"mallet": "Бьёт ящик спереди", "strong_arms": "Толкают 2 ящика", "speed_boots": "Ускоряют бег",
+	"lamp_helmet": "Показывает сбросы", "spring_boots": "Прыжок с зарядкой"}
 const CAPACITIES := {"boots": StackSimulation.BOOTS_MAX_CHARGES, "helmet": StackSimulation.HELMET_MAX_CHARGES,
-	"gloves": StackSimulation.GLOVES_MAX_CHARGES, "mallet": StackSimulation.MALLET_MAX_CHARGES}
-const CHARGE_UNITS := {"boots": "прыжков", "helmet": "удара", "gloves": "подтягиваний", "mallet": "удара"}
+	"gloves": StackSimulation.GLOVES_MAX_CHARGES, "mallet": StackSimulation.MALLET_MAX_CHARGES,
+	"strong_arms": StackSimulation.STRONG_ARMS_MAX_CHARGES, "speed_boots": StackSimulation.SPEED_BOOTS_MAX_CHARGES,
+	"lamp_helmet": StackSimulation.LAMP_HELMET_MAX_CHARGES, "spring_boots": StackSimulation.SPRING_BOOTS_MAX_CHARGES}
+const CHARGE_UNITS := {"boots": "рывков", "helmet": "удара", "gloves": "подтягиваний", "mallet": "удара",
+	"strong_arms": "клеток", "speed_boots": "клеток", "lamp_helmet": "включения", "spring_boots": "зарядов"}
 const CREAM := Color("f4e3ba")
 const GOLD := Color("e7b46b")
 const MINT := Color("8dc6ac")
@@ -25,134 +36,105 @@ const HUD_GAP := 8.0
 const HUD_TRIPLE_WIDTH := 46.0
 const HUD_TRIPLE_GAP := 3.0
 const HUD_RIGHT := HUD_START + HUD_TRIPLE_WIDTH * 3.0 + HUD_TRIPLE_GAP * 2.0
+const SPRING_COLORS := [Color("8bdb64"), Color("f2d858"), Color("f1a047"), Color("e66252")]
+const OFFER_MAX_WIDTH := 520.0
 
 
 static func build_offer(panel: PanelContainer, content: VBoxContainer, compact: bool,
 		model: StackSimulation, button: Callable, text: Callable, resolve: Callable) -> void:
 	var options := model.equipment_options()
-	var narrow := panel.get_viewport_rect().size.x < 420.0
-	var tight := compact or (options.size() > 1 and narrow)
-	var short_rows := compact and options.size() == 4
+	var width := minf(OFFER_MAX_WIDTH, panel.get_viewport_rect().size.x - 32.0)
+	var narrow := width < 395.0
+	var margin := 10 if compact or narrow else 14
+	var gap := 5 if compact else 7
 	var charges := _loadout_charges(model)
-	_frame(panel, GOLD, 10 if tight else 16)
-	content.add_theme_constant_override("separation", 3 if short_rows else (5 if tight else 9))
-	if options.size() >= 3:
+	_frame(panel, GOLD, margin)
+	content.add_theme_constant_override("separation", gap)
+	if not options.is_empty():
+		var grid := GridContainer.new()
+		grid.columns = 2 if options.size() > 1 else 1
+		grid.add_theme_constant_override("h_separation", gap)
+		grid.add_theme_constant_override("v_separation", gap)
+		content.add_child(grid)
+		var card_width := (width - margin * 2 - gap * (grid.columns - 1)) / grid.columns
 		for item in options:
-			_offer_row(content, item, charges[item], _replaces_hands(item, charges), narrow, short_rows,
-				button, text, resolve)
-	elif options.size() == 2:
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 8)
-		content.add_child(row)
-		for item in options:
-			var backing := PanelContainer.new()
-			backing.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			backing.add_theme_stylebox_override("panel", _style(DARK.darkened(.12), EDGE, 5))
-			row.add_child(backing)
-			var card := VBoxContainer.new()
-			card.add_theme_constant_override("separation", 4)
-			backing.add_child(card)
-			_offer_item(card, item, charges[item], _replaces_hands(item, charges), compact, true, button, text, resolve)
-	elif options.size() == 1:
-		var item: String = options[0]
-		_offer_item(content, item, charges[item], _replaces_hands(item, charges), compact, false, button, text, resolve)
+			_offer_card(grid, item, charges[item], _equipped_alternative(item, charges), card_width,
+				compact, narrow, button, text, resolve)
 	button.call(content, "Пропустить", "skip", resolve.bind(""))
 
 
 static func _loadout_charges(model: StackSimulation) -> Dictionary:
 	return {"boots": model.boots_charges if model.boots_equipped else -1,
+		"speed_boots": model.speed_boots_charges if model.speed_boots_charges > 0 else -1,
+		"spring_boots": model.spring_boots_charges if model.spring_boots_charges > 0 else -1,
 		"helmet": model.helmet_charges if model.helmet_charges > 0 else -1,
+		"lamp_helmet": model.lamp_helmet_charges if model.lamp_helmet_equipped else -1,
 		"gloves": model.gloves_charges if model.gloves_charges > 0 else -1,
-		"mallet": model.mallet_charges if model.mallet_charges > 0 else -1}
+		"mallet": model.mallet_charges if model.mallet_charges > 0 else -1,
+		"strong_arms": model.strong_arms_charges if model.strong_arms_charges > 0 else -1}
 
 
-static func _replaces_hands(item: String, charges: Dictionary) -> bool:
-	return (item == "mallet" and charges.gloves >= 0) or (item == "gloves" and charges.mallet >= 0)
+static func _equipped_item(slot: String, charges: Dictionary) -> String:
+	for item: String in SLOTS[slot]:
+		if charges[item] >= 0:
+			return item
+	return SLOTS[slot][0]
 
 
-static func _offer_row(parent: VBoxContainer, item: String, charges: int, replaces_hands: bool,
-		narrow: bool, short_rows: bool, button: Callable, text: Callable, resolve: Callable) -> void:
-	var backing := PanelContainer.new()
-	backing.add_theme_stylebox_override("panel", _style(DARK.darkened(.12), EDGE, 2 if short_rows else 5))
-	parent.add_child(backing)
+static func _equipped_alternative(item: String, charges: Dictionary) -> bool:
+	for slot in SLOTS:
+		if item in SLOTS[slot]:
+			var equipped := _equipped_item(slot, charges)
+			return item != equipped and charges[equipped] >= 0
+	return false
+
+
+static func _offer_card(parent: GridContainer, item: String, charges: int, replaces: bool,
+		width: float, compact: bool, narrow: bool, button: Callable, text: Callable, resolve: Callable) -> void:
+	var action: Button = button.call(parent, "", "equip" if item == "boots" else "equip_" + item, resolve.bind(item))
+	action.custom_minimum_size = Vector2(48, 51 if compact else 64)
+	var verb := "Пополнить" if charges >= 0 else ("Заменить" if replaces else "Надеть")
+	action.accessibility_name = "%s · %s" % [verb, NAMES[item]]
+	action.tooltip_text = action.accessibility_name
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	backing.add_child(row)
-	_picture(row, ICONS[item], Vector2.ONE * 36)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_constant_override("separation", 6)
+	action.add_child(row)
+	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	row.offset_left = 8
+	row.offset_right = -8
+	var icon_size := 24 if narrow else 32
+	_picture(row, ICONS[item], Vector2.ONE * icon_size)
 
 	var details := VBoxContainer.new()
-	details.add_theme_constant_override("separation", 1)
+	details.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	details.add_theme_constant_override("separation", 0)
 	details.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	details.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(details)
-	var prefix := _item_prefix(item)
-	var title := _label(text, details, _offer_name(item, narrow), prefix + "_title", 14 if narrow else 15, GOLD)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	var effect := _label(text, details, EFFECTS[item], prefix + "_effect", 12, CREAM)
-	effect.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	var prefix := "equipment" if item == "boots" else item
+	var available := width - icon_size - 22.0
+	var title := "Перчатки" if item == "gloves" and narrow else str(NAMES[item])
+	_offer_label(text, details, title, prefix + "_title", 14 if narrow else 16, available, GOLD)
+	_offer_label(text, details, EFFECTS[item], prefix + "_effect", 11 if narrow else 13, available, CREAM)
 	if charges >= 0:
-		_charge_change(details, charges, CAPACITIES[item], prefix, true, text, true)
+		_charge_change(details, charges, CAPACITIES[item], prefix, text)
 	else:
-		var capacity := _label(text, details, _capacity_label(item, true), prefix + "_capacity", 12, MINT)
-		capacity.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-
-	var action := _offer_action(row, item, charges >= 0 or replaces_hands, button, resolve)
-	action.add_theme_font_size_override("font_size", 14)
-	action.size_flags_horizontal = Control.SIZE_SHRINK_END
-	action.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	action.custom_minimum_size.x = 94
+		var capacity := "%d %s" % [CAPACITIES[item], CHARGE_UNITS[item]]
+		if replaces:
+			capacity = "Замена · %d" % CAPACITIES[item] if narrow else "Замена · " + capacity
+		_offer_label(text, details, capacity, prefix + "_capacity", 11 if narrow else 13, available, MINT)
 
 
-static func _offer_item(parent: VBoxContainer, item: String, charges: int, replaces_hands: bool,
-		compact: bool, paired: bool, button: Callable, text: Callable, resolve: Callable) -> void:
-	var equipped := charges >= 0
-	var capacity: int = CAPACITIES[item]
-	var prefix := _item_prefix(item)
-	var narrow_pair := paired and parent.get_viewport_rect().size.x < 420.0
-	var title_size := 23 if compact else 26
-	var effect_size := 17
-	if paired:
-		title_size = 15 if narrow_pair else 18
-		effect_size = 12 if narrow_pair else 13
-	_label(text, parent, _offer_name(item, paired), prefix + "_title", title_size, GOLD)
-
-	var details := HBoxContainer.new()
-	details.alignment = BoxContainer.ALIGNMENT_CENTER
-	details.add_theme_constant_override("separation", 5 if paired else 16)
-	parent.add_child(details)
-	var badge := PanelContainer.new()
-	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	badge.add_theme_stylebox_override("panel", _style(DARK.darkened(0.10), EDGE, 3))
-	details.add_child(badge)
-	var icon_size := 34 if paired else (54 if compact else 64)
-	_picture(badge, ICONS[item], Vector2.ONE * icon_size)
-	if equipped:
-		_charge_change(details, charges, capacity, prefix, paired, text)
-
-	_label(text, parent, EFFECTS[item], prefix + "_effect", effect_size, CREAM)
-	_label(text, parent, _capacity_label(item, paired), prefix + "_capacity", 13 if paired else 14, MINT)
-	var action := _offer_action(parent, item, equipped or replaces_hands, button, resolve)
-	if paired:
-		action.add_theme_font_size_override("font_size", 16)
-
-
-static func _item_prefix(item: String) -> String:
-	return "equipment" if item == "boots" else item
-
-
-static func _offer_name(item: String, narrow: bool) -> String:
-	return "Перчатки" if item == "gloves" and narrow else NAMES[item]
-
-
-static func _capacity_label(item: String, compact: bool) -> String:
-	var unit: String = "прыжков в воздухе" if item == "boots" and not compact else CHARGE_UNITS[item]
-	return "%d %s" % [CAPACITIES[item], unit]
-
-
-static func _offer_action(parent: Control, item: String, replaces: bool, button: Callable,
-		resolve: Callable) -> Button:
-	return button.call(parent, "Заменить" if replaces else "Надеть",
-		"equip" if item == "boots" else "equip_" + item, resolve.bind(item))
+static func _offer_label(text: Callable, parent: Control, value: String, id: String, font_size: int,
+		width: float, color: Color) -> void:
+	var label := _label(text, parent, value, id, font_size, color)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	label.clip_text = true
+	var font := label.get_theme_font("font")
+	while font_size > 9 and font.get_string_size(value, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > width:
+		font_size -= 1
+	label.add_theme_font_size_override("font_size", font_size)
 
 
 static func build_pause(panel: PanelContainer, content: VBoxContainer, compact: bool,
@@ -169,7 +151,9 @@ static func build_pause(panel: PanelContainer, content: VBoxContainer, compact: 
 	portrait.add_theme_stylebox_override("panel", _style(DARK.darkened(0.10), EDGE, 4))
 	loadout.add_child(portrait)
 	_picture(portrait, StackWorldView.pause_portrait(model.boots_equipped, model.helmet_charges > 0,
-		model.gloves_charges > 0),
+		model.gloves_charges > 0, {"strong_arms": model.strong_arms_charges > 0,
+			"speed_boots": model.speed_boots_charges > 0, "spring_boots": model.spring_boots_charges > 0,
+			"lamp_helmet": model.lamp_helmet_equipped}),
 		Vector2(48, 66) if compact else Vector2(64, 84))
 
 	var center := CenterContainer.new()
@@ -180,10 +164,12 @@ static func build_pause(panel: PanelContainer, content: VBoxContainer, compact: 
 	slots.add_theme_constant_override("v_separation", 2)
 	center.add_child(slots)
 	var charges := _loadout_charges(model)
-	_equipment_slot(text, slots, "Голова", "slot_head", "helmet", charges.helmet)
-	var hands := "mallet" if charges.mallet >= 0 else "gloves"
+	var head := _equipped_item("head", charges)
+	var hands := _equipped_item("hands", charges)
+	var feet := _equipped_item("feet", charges)
+	_equipment_slot(text, slots, "Голова", "slot_head", head, charges[head])
 	_equipment_slot(text, slots, "Руки", "slot_hands", hands, charges[hands])
-	_equipment_slot(text, slots, "Ноги", "slot_feet", "boots", charges.boots)
+	_equipment_slot(text, slots, "Ноги", "slot_feet", feet, charges[feet])
 
 
 static func _equipment_slot(text: Callable, slots: GridContainer, title: String, id: String,
@@ -196,7 +182,8 @@ static func _equipment_slot(text: Callable, slots: GridContainer, title: String,
 	details.add_theme_constant_override("separation", 5)
 	slots.add_child(details)
 	_picture(details, ICONS[item], Vector2.ONE * 24)
-	_label(text, details, "%d / %d" % [charges, CAPACITIES[item]], id, 15, GOLD)
+	var label := _label(text, details, "%d / %d" % [charges, CAPACITIES[item]], id, 15, GOLD)
+	label.accessibility_name = "%s · %s" % [NAMES[item], label.text]
 
 
 static func build_hud(parent: Control, item: String) -> Label:
@@ -215,6 +202,15 @@ static func build_hud(parent: Control, item: String) -> Label:
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	plate.add_child(row)
 	_picture(row, ICONS[item], Vector2.ONE * 27)
+	if item == "spring_boots":
+		row.add_theme_constant_override("separation", 1)
+		var meter := Control.new()
+		meter.name = "spring_charge_meter"
+		meter.custom_minimum_size = Vector2(7, 27)
+		meter.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		meter.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		meter.draw.connect(_draw_spring_charge.bind(meter))
+		row.add_child(meter)
 	var count := Label.new()
 	count.name = item + "_charges"
 	count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -225,19 +221,25 @@ static func build_hud(parent: Control, item: String) -> Label:
 	return count
 
 
-static func update_hud(boots: Label, helmet: Label, gloves: Label, mallet: Label, model: StackSimulation) -> void:
+static func update_hud(badges: Dictionary, model: StackSimulation, spring_peak: int = 0) -> void:
 	var charges := _loadout_charges(model)
-	var visible_count := int(model.boots_equipped) + int(model.helmet_charges > 0) + int(
-		model.gloves_charges > 0 or model.mallet_charges > 0)
+	if spring_peak > 0:
+		charges.spring_boots = model.spring_boots_charges
+	var visible_count := charges.size() - charges.values().count(-1)
 	var width := HUD_TRIPLE_WIDTH if visible_count == 3 else (HUD_PAIR_WIDTH if visible_count == 2 else HUD_SINGLE_WIDTH)
 	var gap := HUD_TRIPLE_GAP if visible_count == 3 else HUD_GAP
 	var x := HUD_START
-	var badges := {"boots": boots, "helmet": helmet, "gloves": gloves, "mallet": mallet}
 	for item in badges:
 		var charge_count: int = charges[item]
 		_update_badge(badges[item], item, charge_count, x, width, visible_count)
 		if charge_count >= 0:
 			x += width + gap
+	var spring: Label = badges.spring_boots
+	var meter := spring.get_parent().get_node("spring_charge_meter") as Control
+	var stages := maxi(model.spring_charge_stages, spring_peak)
+	if meter.get_meta("stages", 0) != stages:
+		meter.set_meta("stages", stages)
+		meter.queue_redraw()
 
 
 static func _update_badge(count: Label, item: String, charges: int, x: float, width: float,
@@ -255,34 +257,38 @@ static func _update_badge(count: Label, item: String, charges: int, x: float, wi
 	var font_size := 16 if tight else (20 if visible_count == 2 else 23)
 	if count.get_theme_font_size("font_size") != font_size:
 		count.add_theme_font_size_override("font_size", font_size)
-		count.custom_minimum_size.x = 22 if tight else 26
+		count.custom_minimum_size.x = (15 if tight else 22) if item == "spring_boots" else (22 if tight else 26)
 		var icon := row.get_child(0) as TextureRect
-		icon.custom_minimum_size = Vector2.ONE * (16 if tight else 27)
+		icon.custom_minimum_size = Vector2.ONE * ((14 if item == "spring_boots" else 16) if tight else 27)
+	elif item == "spring_boots" and not tight:
+		count.custom_minimum_size.x = 22
 	plate.position.x = x
 	plate.size.x = width
 
 
-static func _charge_change(parent: Control, before: int, after: int, prefix: String,
-		paired: bool, text: Callable, inline: bool = false) -> void:
-	var comparison := VBoxContainer.new()
-	comparison.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	comparison.add_theme_constant_override("separation", 1)
-	parent.add_child(comparison)
+static func _draw_spring_charge(meter: Control) -> void:
+	var stages := int(meter.get_meta("stages", 0))
+	meter.draw_rect(Rect2(Vector2.ZERO, meter.size), EDGE)
+	meter.draw_rect(Rect2(1, 1, meter.size.x - 2, meter.size.y - 2), Color("172a33"))
+	for index in range(StackSimulation.SPRING_MAX_STAGES):
+		var y := meter.size.y - 7.0 - 6.0 * index
+		var tint: Color = SPRING_COLORS[index] if index < stages else Color("31454c")
+		meter.draw_rect(Rect2(1.0, y, meter.size.x - 2.0, 4.0), tint)
+
+
+static func _charge_change(parent: Control, before: int, after: int, prefix: String, text: Callable) -> void:
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_BEGIN if inline else BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 3 if paired else 6)
-	comparison.add_child(row)
-	var font_size := 13 if inline else (19 if paired else 27)
-	_label(text, row, str(before), prefix + "_old_charges", font_size, CREAM)
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_constant_override("separation", 3)
+	parent.add_child(row)
+	_label(text, row, str(before), prefix + "_old_charges", 12, CREAM)
 	var arrow := Control.new()
 	arrow.custom_minimum_size = Vector2(20, 14)
 	arrow.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	arrow.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(arrow)
 	arrow.draw.connect(_draw_arrow.bind(arrow))
-	_label(text, row, str(after), prefix + "_new_charges", font_size, GOLD)
-	if not inline:
-		_label(text, comparison, "заряды", prefix + "_charge_label", 12 if paired else 13, MINT)
+	_label(text, row, str(after), prefix + "_new_charges", 12, GOLD)
 
 
 static func _slot_label(text: Callable, slots: GridContainer, title: String, id: String) -> void:
@@ -303,6 +309,7 @@ static func _label(text: Callable, parent: Control, value: String, id: String,
 	label.name = id
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return label
 
 

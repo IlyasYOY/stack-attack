@@ -28,6 +28,7 @@ group.add_argument('--cranes-only', action='store_true', help='Check crane passe
 group.add_argument('--crates-only', action='store_true', help='Check ten rendered wooden crate appearances and their lifetime')
 group.add_argument('--animations-only', action='store_true', help='Check row clear and crush transitions and capture their rendered phases')
 group.add_argument('--keyboard-only', action='store_true', help='Check jump keys and menu keyboard isolation')
+group.add_argument('--bonuses-only', action='store_true', help='Check expanded equipment in combination')
 group.add_argument('--boots-only', action='store_true', help='Check equipment offers, air jumps and responsive boots UI')
 group.add_argument('--helmet-only', action='store_true', help='Check helmet contacts, recovery, rewards and layouts')
 group.add_argument('--mallet-only', action='store_true', help='Check wooden mallet inputs, equipment, physics and statistics')
@@ -41,6 +42,7 @@ WEB_LAYOUT_VIEWPORTS = (
     (390, 844), (844, 390), (320, 568), (568, 320), (344, 882), (882, 344),
     (768, 1004), (1004, 768), (360, 360),
 )
+NEW_GEAR = ('strong_arms', 'speed_boots', 'lamp_helmet', 'spring_boots')
 HERO_FRAMES = ('idle', 'walk', 'jump', 'push')
 HERO_FRAME_SIZE = (32, 48)
 FORMER_MAGNET_COLORS = {(215, 67, 56), (168, 46, 51), (255, 129, 96)}
@@ -118,6 +120,8 @@ def check_touch_control_layout(snapshot):
         expected.add('grab')
     if snapshot['mallet_charges'] > 0:
         expected.add('mallet')
+    if snapshot['lamp_helmet_charges'] > 0:
+        expected.add('lamp')
     assert snapshot['controls'].keys() == expected
     checked = []
     for action, rect in snapshot['controls'].items():
@@ -1683,10 +1687,11 @@ def use_air_jump(page, touch, shots, *, held=False, capture=False):
             shot = boots_shot(page, phase, shots)
             check_boots_exhaust(Image.open(ROOT / shot).convert('RGB'), rotated, True)
             resize_boots_view(page, original)
-    press_boots_jump(page, touch)
+    if charges == 1:
+        press_boots_jump(page, touch)
     again = animation_step(page, 1)
     assert_boots(again, True, charges - 1, rows)
-    assert again['player_velocity'][1] > boosted['player_velocity'][1], 'A third press granted another air jump'
+    assert again['player_velocity'][1] > boosted['player_velocity'][1], 'Unexpected thrust with no new usable press'
     if charges == 1:
         descending = animation_step(page, 48)
         assert not descending['grounded'] and descending['player_velocity'][1] > 0
@@ -1832,7 +1837,7 @@ def boots_checks(browser):
     assert not errors, errors
     return {'offer_after_five_and_combo_surplus':'PASS', 'full_charge_suppression':'PASS',
             'pause_and_offer_resize':'PASS', 'skip_and_replacement':'PASS', 'keyboard_and_touch':'PASS',
-            'separate_press_and_one_air_jump_per_landing':'PASS', 'last_charge_and_restart':'PASS',
+            'separate_press_and_last_charge':'PASS', 'last_charge_and_restart':'PASS',
             'rocket_exhaust_on_second_jump':'PASS',
             'screenshots':shots, 'screenshot_sha256':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in shots}}
 
@@ -1870,9 +1875,11 @@ def check_gloves_hud(snapshot, charges):
             'Glove counter overlaps another HUD control', hud, neighbors, snapshot['viewport'])
 
 
-def check_equipment_choice(snapshot, *options):
+def check_equipment_choice(snapshot, *options, include_new=True):
+    if include_new:
+        options += NEW_GEAR
     assert set(snapshot['equipment_options']) == set(options)
-    ids = {'boots':'equip', 'helmet':'equip_helmet', 'gloves':'equip_gloves', 'mallet':'equip_mallet'}
+    ids = {'boots':'equip', 'helmet':'equip_helmet', 'gloves':'equip_gloves', 'mallet':'equip_mallet', **{item:'equip_' + item for item in NEW_GEAR}}
     labels = check_boots_panel(snapshot, {'skip', *(ids[option] for option in options)})
     assert snapshot['missing_menu_glyphs'] == ''
     if 'helmet' in options:
@@ -2777,6 +2784,186 @@ def mallet_checks(browser):
             'last_hit_and_support': 'PASS', 'pause_focus_and_restart': 'PASS', 'statistics_and_score': 'PASS'}
 
 
+def set_bonus_board(page, loadout, **options):
+    return animation_request(page, 'bonus_board', loadout=loadout, animation_hold=True, **options)
+
+
+def bonus_events(snapshot, kind):
+    return [event for event in snapshot['bonus_events'] if event['type'] == kind]
+
+
+def bonuses_checks(browser):
+    errors, shots = [], []
+    portrait, landscape = (320, 568), (568, 320)
+    context, page = open_boots_game(browser, portrait, errors)
+    try:
+        offer = clear_boots_rows(page, 5, True)
+        check_equipment_choice(offer, 'boots', 'helmet', 'gloves', 'mallet')
+        shots.append(screenshot(page, 'bonuses-choice-320x568.png'))
+        offer = resize_boots_view(page, landscape)
+        check_equipment_choice(offer, 'boots', 'helmet', 'gloves', 'mallet')
+        shots.append(screenshot(page, 'bonuses-choice-568x320.png'))
+        for index, item in enumerate(('strong_arms', 'speed_boots', 'lamp_helmet')):
+            if index:
+                clear_boots_rows(page, 5, True)
+            equipped = select_boots_action(page, 'equip_' + item, True)
+            assert equipped[item + '_charges'] > 0 and equipped[item + '_hud']
+        check_touch_control_layout(equipped)
+        resize_boots_view(page, portrait)
+        width = state(page)['player_size'][0]
+        loadout = {'hands':'strong_arms', 'feet':'speed_boots', 'head':'lamp_helmet'}
+        staged = set_bonus_board(page, loadout, player=[4-width, 10.12], crates=[[4,10,0],[5,10,0]],
+            charges={'strong_arms':1, 'lamp_helmet':1}, cranes_enabled=True,
+            cranes=[{'x':0.0, 'loaded':True, 'release_column':8}, {'x':8.5, 'loaded':False, 'release_column':1}])
+        check_touch_control_layout(staged)
+        primary = {crate['id']:crate for crate in staged['visible_crates']}
+        touch = context.new_cdp_session(page)
+        x, y = point(page, staged['controls']['right'])
+        lx, ly = point(page, staged['controls']['lamp'])
+        right = {'x':x, 'y':y, 'id':1}
+        lamp = {'x':lx, 'y':ly, 'id':2}
+        try:
+            touch.send('Input.dispatchTouchEvent', {'type':'touchStart', 'touchPoints':[right]})
+            animation_step(page, 1)
+            touch.send('Input.dispatchTouchEvent', {'type':'touchStart', 'touchPoints':[right, lamp]})
+            pushed = animation_step(page, 40)
+        finally:
+            touch.send('Input.dispatchTouchEvent', {'type':'touchEnd', 'touchPoints':[]})
+            touch.detach()
+        assert pushed['lamp_helmet_equipped'] and pushed['lamp_helmet_charges'] == 0 and pushed['lamp_columns'] == [8]
+        assert pushed['strong_arms_charges'] == 0 and len(bonus_events(pushed, 'strong_push')) == 1
+        assert {c['id']:c['x'] for c in pushed['visible_crates']} == {i:c['x']+1 for i,c in primary.items()}
+        assert {c['id']:c['variant'] for c in pushed['visible_crates']} == {i:c['variant'] for i,c in primary.items()}
+        assert cleared_metrics(pushed) == cleared_metrics(staged)
+        shots.append(screenshot(page, 'bonuses-lamp-and-pair.png'))
+
+        blocked = set_bonus_board(page, loadout, player=[7-width,10.12], crates=[[7,10,0],[8,10,0],[9,10,0]],
+            cranes_enabled=True, cranes=[{'loaded':False}, {'loaded':False}])
+        page.keyboard.down('ArrowRight')
+        try:
+            page.keyboard.press('KeyF')
+            after = animation_step(page, 60)
+        finally:
+            page.keyboard.up('ArrowRight')
+        assert after['visible_crates'] == blocked['visible_crates'] and after['player'] == blocked['player']
+        for name in ('strong_arms', 'speed_boots', 'lamp_helmet'):
+            assert after[name+'_charges'] == blocked[name+'_charges']
+        assert not bonus_events(after, 'lamp_reveal') and not bonus_events(after, 'strong_push')
+
+        runner = set_bonus_board(page, {'feet':'speed_boots'}, charges={'speed_boots':1})
+        page.keyboard.down('ArrowRight')
+        try:
+            fast = animation_step(page, 12)
+            finished = animation_step(page, 16)
+        finally:
+            page.keyboard.up('ArrowRight')
+        assert fast['player'][0] - runner['player'][0] > .49 and fast['speed_boots_charges'] == 1
+        assert finished['speed_boots_charges'] == 0 and finished['player'][0] > runner['player'][0]+1
+
+        rescue = set_bonus_board(page, {'head':'lamp_helmet', 'hands':'mallet', 'feet':'spring_boots'},
+            player=[4.35,10.12], crates=[[4,9.02,6]], charges={'lamp_helmet':3})
+        check_touch_control_layout(rescue)
+        saved = animation_step(page, 22)
+        assert not saved['lamp_helmet_equipped'] and saved['lamp_helmet_charges'] == 0 and saved['state'] == 'playing'
+        assert saved['broken_crates'] == rescue['broken_crates']+1 and not saved['visible_crates']
+        assert len(bonus_events(saved, 'lamp_break')) == 1
+
+        combination = {'head':'lamp_helmet', 'hands':'mallet', 'feet':'spring_boots'}
+        board = set_bonus_board(page, combination)
+        check_touch_control_layout(board)
+        page.touchscreen.tap(*point(page, board['controls']['jump']))
+        short = animation_step(page, 1)
+        assert not short['grounded'] and short['spring_boots_charges'] == board['spring_boots_charges']
+
+        board = set_bonus_board(page, combination)
+        page.keyboard.down('Space')
+        meter = animation_step(page, 46)
+        assert meter['grounded'] and meter['spring_charge_stages'] == 2
+        assert meter['spring_boots_hud']['meter_stages'] == 2
+        check_boots_rect(meter, meter['spring_boots_hud']['meter_rect'])
+        shots.append(screenshot(page, 'bonuses-spring-meter.png'))
+        page.keyboard.up('Space')
+        launched = animation_step(page, 1)
+        jump, = bonus_events(launched, 'spring_jump')
+        assert jump['stages'] == 2 and not jump['automatic'] and launched['spring_boots_charges'] == board['spring_boots_charges'] - 2
+
+        board = set_bonus_board(page, combination)
+        touch = context.new_cdp_session(page)
+        x, y = point(page, board['controls']['jump'])
+        page.keyboard.down('Space')
+        try:
+            touch.send('Input.dispatchTouchEvent', {'type':'touchStart', 'touchPoints':[{'x':x,'y':y,'id':1}]})
+            assert animation_step(page, 24)['spring_charge_stages'] == 1
+            touch.send('Input.dispatchTouchEvent', {'type':'touchCancel', 'touchPoints':[]})
+            assert animation_step(page, 24)['spring_charge_stages'] == 2
+        finally:
+            page.keyboard.up('Space')
+            touch.detach()
+        after_cancel = animation_step(page, 1)
+        assert bonus_events(after_cancel, 'spring_jump')[0]['stages'] == 2
+
+        for interruption in ('focus', 'resize'):
+            board = set_bonus_board(page, combination)
+            page.keyboard.down('Space')
+            try:
+                assert animation_step(page, 26)['spring_charge_stages'] == 1
+                if interruption == 'focus':
+                    gloves_focus_loss(page)
+                    button(page, 'resume', True)
+                    wait_screen(page, 'playing')
+                else:
+                    resize_boots_view(page, landscape)
+            finally:
+                page.keyboard.up('Space')
+            quiet = animation_step(page, 32)
+            assert quiet['grounded'] and quiet['spring_charge_stages'] == 0 and not bonus_events(quiet, 'spring_jump')
+            assert quiet['spring_boots_charges'] == board['spring_boots_charges']
+
+        auto = set_bonus_board(page, combination, charges={'spring_boots':4})
+        press = context.new_cdp_session(page)
+        px, py = point(page, auto['controls']['jump'])
+        try:
+            press.send('Input.dispatchTouchEvent', {'type':'touchStart', 'touchPoints':[{'x':px,'y':py,'id':1}]})
+            released = animation_step(page, 90)
+            assert released['spring_boots_charges'] == 0 and released['player'][1] < auto['player'][1]
+            assert released['spring_boots_hud']['meter_stages'] == 4
+            auto_jump, = bonus_events(released, 'spring_jump')
+            assert auto_jump['automatic'] and auto_jump['stages'] == 4
+            shots.append(screenshot(page, 'bonuses-spring-auto.png'))
+            held = animation_step(page, 148)
+            assert len(bonus_events(held, 'spring_jump')) == 1
+        finally:
+            press.send('Input.dispatchTouchEvent', {'type':'touchEnd', 'touchPoints':[]})
+            press.detach()
+
+        rockets = set_bonus_board(page, {'feet':'boots', 'head':'helmet', 'hands':'gloves'}, charges={'boots':3})
+        page.keyboard.press('Space')
+        first = animation_step(page, 23)
+        assert first['boots_charges'] == rockets['boots_charges'] and not first['grounded']
+        for remaining in (2,1,0):
+            page.keyboard.down('ArrowUp')
+            try:
+                charged = animation_step(page, 1)
+                assert charged['boots_charges'] == remaining and charged['player_velocity'][1] < -7
+                page.keyboard.down('ArrowUp')
+                assert animation_step(page, 10)['boots_charges'] == remaining
+            finally:
+                page.keyboard.up('ArrowUp')
+        assert not animation_step(page, 180)['boots_equipped']
+        button(page, 'pause', True)
+        wait_screen(page, 'paused')
+        button(page, 'restart', True)
+        wait_screen(page, 'playing')
+        restarted = state(page)
+        assert all(restarted[key+'_charges']==0 for key in NEW_GEAR) and not restarted['lamp_helmet_equipped']
+        assert not restarted['bonus_events'] and restarted['score'] == 0
+    finally:
+        context.close()
+    assert not errors, errors
+    return {'equipment_choice_and_restart':'PASS', 'pair_speed_and_lamp_multitouch':'PASS',
+            'spring_and_rocket_separate_inputs':'PASS', 'focus_resize_and_pause':'PASS', 'screenshots':shots}
+
+
 def workshop_screens(browser):
     checks = []
     for width,height in [(390,844),(844,390),(768,1004)]:
@@ -2891,6 +3078,14 @@ try:
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         full_check = not any(vars(args).values())
+        bonuses = bonuses_checks(browser) if args.bonuses_only or full_check else {}
+        if bonuses:
+            print('BONUSES', json.dumps(bonuses), flush=True)
+        if args.bonuses_only:
+            (BUILD/'bonuses-check.json').write_text(json.dumps({'status':'PASS','browser':browser.version,'renderer':'SwiftShader',
+                'checks':bonuses,'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest()},indent=2)+'\n')
+            browser.close()
+            raise SystemExit(0)
         if args.crates_only:
             crates = wooden_crates(browser)
             lifetime = crate_lifetime_checks(browser)
@@ -3135,7 +3330,7 @@ try:
             results.append(result)
             print(json.dumps(result), flush=True)
             context.close()
-        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'mallet':mallet, 'helmet':helmet, 'boots':boots, 'gloves':gloves, 'keyboard':keyboard, 'animations':animations, 'cranes':cranes, 'statistics':statistics, 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
+        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'bonuses':bonuses, 'mallet':mallet, 'helmet':helmet, 'boots':boots, 'gloves':gloves, 'keyboard':keyboard, 'animations':animations, 'cranes':cranes, 'statistics':statistics, 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
                   'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
                   'page_errors':all_errors,'failed_requests':all_failed_requests,'checks':results}
         (BUILD/'web-check.json').write_text(json.dumps(report,indent=2)+'\n')
