@@ -24,6 +24,8 @@ var jump_pointers := {}
 var pull_pointers := {}
 var mallet_pointers := {}
 var lamp_pointers := {}
+var speed_pointers := {}
+var speed_keys := {}
 var jump_pending := false
 var mallet_pending := false
 var lamp_pending := false
@@ -448,7 +450,8 @@ func _build_hud() -> void:
 
 func _pick_up() -> void:
 	if screen == "playing" and crush_elapsed < 0.0:
-		model.pick_up_nearest()
+		if model.pick_up_nearest() in StackSimulation.SLOTS.feet:
+			_release_speed_input()
 		EQUIPMENT_VIEW.update_hud(gear_counts, world)
 		_update_pickup()
 		world._layout()
@@ -557,6 +560,7 @@ func _release_controls() -> void:
 	pull_pointers.clear()
 	mallet_pointers.clear()
 	lamp_pointers.clear()
+	_release_speed_input()
 	jump_pending = false
 	mallet_pending = false
 	lamp_pending = false
@@ -573,6 +577,11 @@ func _release_controls() -> void:
 		world.pressed_actions.clear()
 		world.axis = 0.0
 		world.cancel_mallet_swing()
+
+
+func _release_speed_input() -> void:
+	speed_keys.clear()
+	speed_pointers.clear()
 
 
 func _stop_crate_slide() -> void:
@@ -613,6 +622,14 @@ func _input(event: InputEvent) -> void:
 				jump_pending = false
 		get_viewport().set_input_as_handled()
 		return
+	if event is InputEventKey and event.physical_keycode == KEY_SHIFT and crush_elapsed < 0.0:
+		if not event.echo:
+			if event.pressed and model.speed_boots_charges > 0:
+				speed_keys[event.location] = true
+			else:
+				speed_keys.erase(event.location)
+		get_viewport().set_input_as_handled()
+		return
 	if event is InputEventKey and event.physical_keycode == KEY_F and crush_elapsed < 0.0:
 		if not event.echo:
 			if event.pressed and not lamp_key_held:
@@ -643,13 +660,13 @@ func _input(event: InputEvent) -> void:
 		var down: bool = event.pressed and not event.canceled
 		_pointer(event.index, event.position, down, down)
 	elif event is InputEventScreenDrag and (pointers.has(event.index) or pull_pointers.has(event.index)
-			or mallet_pointers.has(event.index) or lamp_pointers.has(event.index)):
+			or mallet_pointers.has(event.index) or lamp_pointers.has(event.index) or speed_pointers.has(event.index)):
 		_pointer(event.index, event.position, true)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		var real_press: bool = event.pressed and event.device != InputEvent.DEVICE_ID_EMULATION
 		_pointer(-1, event.position, event.pressed, real_press)
 	elif event is InputEventMouseMotion and (pointers.has(-1) or pull_pointers.has(-1)
-			or mallet_pointers.has(-1) or lamp_pointers.has(-1)):
+			or mallet_pointers.has(-1) or lamp_pointers.has(-1) or speed_pointers.has(-1)):
 		_pointer(-1, event.position, true)
 
 
@@ -659,8 +676,17 @@ func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false
 		var was_pulling := pull_pointers.erase(id)
 		var was_hitting := mallet_pointers.erase(id)
 		var was_lighting := lamp_pointers.erase(id)
-		if pointers.erase(id) or was_pulling or was_hitting or was_lighting:
+		var was_running := speed_pointers.erase(id)
+		if pointers.erase(id) or was_pulling or was_hitting or was_lighting or was_running:
 			get_viewport().set_input_as_handled()
+		return
+	var speed_control: Rect2 = world.controls.get("speed", Rect2())
+	if just_pressed and speed_control.has_point(position):
+		speed_pointers[id] = true
+	if speed_pointers.has(id):
+		if not speed_control.has_point(position):
+			speed_pointers.erase(id)
+		get_viewport().set_input_as_handled()
 		return
 	var lamp_control: Rect2 = world.controls.get("lamp", Rect2())
 	var on_lamp := lamp_control.has_point(position)
@@ -692,7 +718,7 @@ func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false
 		return
 	var action := ""
 	for candidate in world.controls:
-		if candidate not in ["grab", "mallet", "lamp"] and world.controls[candidate].has_point(position):
+		if candidate not in ["grab", "mallet", "lamp", "speed"] and world.controls[candidate].has_point(position):
 			action = candidate
 			break
 	if not action.is_empty():
@@ -731,10 +757,13 @@ func _advance_game(delta: float) -> bool:
 		actions.append("mallet")
 	if model.lamp_helmet_charges > 0 and (lamp_key_held or lamp_pointers.values().has(true)):
 		actions.append("lamp")
+	var speed_held := not speed_keys.is_empty() or not speed_pointers.is_empty()
+	if speed_held:
+		actions.append("speed")
 	world.pressed_actions = actions
 	world.axis = 0.0 if pulling else axis
 	model.advance(delta, axis, jump_pending, pull_held, mallet_pending,
-		{"jump_held": _jump_held() and not pulling, "lamp_pressed": lamp_pending})
+		{"jump_held": _jump_held() and not pulling, "lamp_pressed": lamp_pending, "speed_held": speed_held})
 	jump_pending = false
 	mallet_pending = false
 	lamp_pending = false
@@ -762,7 +791,12 @@ func _advance_game(delta: float) -> bool:
 				world.lamp_break_effect(event)
 				world._layout()
 				_record_bonus_event(event)
-			"strong_push", "speed_step":
+			"speed_step":
+				if model.speed_boots_charges == 0:
+					_release_speed_input()
+					world._layout()
+				_record_bonus_event(event)
+			"strong_push":
 				_record_bonus_event(event)
 			"ground_impact":
 				sound.effect("helmet_hit")

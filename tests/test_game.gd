@@ -506,7 +506,7 @@ func equipment_rewards() -> void:
 
 	var worn := empty()
 	equip(worn, "speed_boots")
-	worn.advance(.09, 1)
+	worn.advance(.09, 1, false, false, false, {"speed_held": true})
 	var progress := worn.speed_boots_progress
 	var feet := worn.add_ground_item("boots", worn.player.x + .3, 11, 2)
 	worn.pick_up_nearest()
@@ -759,23 +759,38 @@ func bonus_equipment() -> void:
 
 	var runner := empty()
 	runner.speed_boots_charges = 1
+	var boost := {"speed_held": true}
 	var start := runner.player.x
-	runner.advance(.4, 0)
-	check(runner.speed_boots_charges == 1 and runner.player.x == start, "Idle speed boots must not drain")
+	runner.advance(.25, 1)
+	check(is_equal_approx(runner.player.x - start, .25 * runner.tuning.player_speed)
+		and runner.speed_boots_progress == 0 and not runner.speed_boost_active,
+		"Equipping speed boots preserves ordinary speed and charge")
+	runner.advance(.4, 0, false, false, false, boost)
+	check(runner.speed_boots_progress == 0, "Holding boost while idle must not drain")
+	start = runner.player.x
+	runner.advance(.1, -1, false, false, false, boost)
+	var spent := start - runner.player.x
+	check(is_equal_approx(spent, .1 * runner.tuning.player_speed * Simulation.SPEED_BOOTS_MULTIPLIER)
+		and is_equal_approx(runner.speed_boots_progress, spent), "Charge tracks actual boosted distance to the left")
+	runner.advance(.25, 1)
+	check(is_equal_approx(runner.speed_boots_progress, spent) and not runner.speed_boost_active,
+		"Walking between boosts retains fractional charge")
+	start = runner.player.x
 	for tick in range(120):
-		runner.advance(Simulation.STEP, 1)
+		runner.advance(Simulation.STEP, 1, false, false, false, boost)
 		if runner.speed_boots_charges == 0:
 			break
-	check(runner.speed_boots_charges == 0 and absf(runner.player.x - start - 1) < .055,
-		"Speed boosts finish the last full cell before removing the equipment")
+	check(runner.speed_boots_charges == 0 and absf(runner.player.x - start + spent - 1) < .0001,
+		"Reversing and resuming spends the remaining fraction of the last cell")
 	var normal_at := runner.player.x
-	runner.advance(.25, 1)
+	runner.advance(.25, 1, false, false, false, boost)
 	check(absf(runner.player.x - normal_at - .25 * runner.tuning.player_speed) < .002,
 		"After the last charge, the same input continues at ordinary speed")
 	runner.player.x = runner.tuning.columns - runner.tuning.player_width
 	runner.speed_boots_charges = 2
-	runner.advance(.5, 1)
-	check(runner.speed_boots_charges == 2, "Walking against the field edge must not drain speed boots")
+	runner.advance(.5, 1, false, false, false, boost)
+	check(runner.speed_boots_charges == 2 and is_zero_approx(runner.speed_boots_progress),
+		"Holding boost against the field edge must not drain speed boots")
 
 	var lamp := empty()
 	lamp.lamp_helmet_equipped = true
