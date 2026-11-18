@@ -129,8 +129,7 @@ static func update_hud(badges: Dictionary, world: StackWorldView, spring_peak: i
 		var charge_count: int = charges[item]
 		plate.visible = charge_count >= 0
 		if plate.visible:
-			plate.position = Vector2(world.equipment_body.position.x - StackWorldView.BADGE_WIDTH - 4,
-				world.slot_height(item) - plate.size.y * 0.5).round()
+			plate.position = world.badge_position(item, plate.size)
 			if count.text != str(charge_count):
 				count.text = str(charge_count)
 				count.accessibility_name = "%s · %d" % [NAMES[item], charge_count]

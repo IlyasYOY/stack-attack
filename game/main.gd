@@ -264,15 +264,9 @@ func _position_panel() -> void:
 
 func _panel_area() -> Rect2:
 	if screen in ["menu", "over"]:
-		var below := ceilf(world.equipment_bottom() + 4)
-		# Reserve the complete menu height even while its controls are being created.
-		var lower_height := 222 if _compact_panel() else 274
-		if size.y > size.x and size.y - below >= lower_height:
-			return Rect2(0, below, size.x, size.y - below)
-		var left_width := world.equipment_body.position.x - StackWorldView.BADGE_WIDTH - 8
-		# Keep the warehouse floor visible behind the menu and results.
-		var above_floor := clampf(world.field.end.y - world.cell, lower_height, size.y)
-		return Rect2(0, 0, left_width, above_floor)
+		var width := minf(size.x - 12, maxf(230, world.field.size.x * 0.90))
+		var center := world.field.get_center()
+		return Rect2(center - Vector2(width * 0.5, world.field.size.y * 0.5), Vector2(width, world.field.size.y))
 	return Rect2(Vector2.ZERO, size)
 
 
@@ -300,6 +294,11 @@ func _result_score(parent: Control) -> void:
 func _center_panel() -> void:
 	if panel != null:
 		var centered := (_panel_area().get_center() - panel.size * 0.5).floor()
+		if screen in ["menu", "over"]:
+			var bottom := world.field.end.y - world.cell
+			if world.equipment_strip.has_area():
+				bottom = minf(bottom, world.equipment_strip.position.y - 4)
+			centered.y = minf(centered.y, bottom - panel.size.y)
 		centered.y = maxf(centered.y, 0.0)
 		var below_hud := StackWorldView.HUD_CLEARANCE_Y
 		if screen == "paused" and size.y - panel.size.y >= below_hud + 6.0:
@@ -453,11 +452,17 @@ func _update_pickup() -> void:
 		return
 	var kind := str(item.kind)
 	var body := world.equipment_body
-	pickup_button.position = Vector2(body.end.x + 3, world.slot_height(kind) - StackWorldView.SWAP_SIZE * 0.5).round()
-	var name_x := body.position.x - StackWorldView.BADGE_WIDTH
-	var label_width := body.end.x + 3 + StackWorldView.SWAP_SIZE - name_x
-	found_label.position = Vector2(name_x, maxf(world.equipment_bottom() + 6, pickup_button.position.y + StackWorldView.SWAP_SIZE + 4))
-	found_label.size = Vector2(label_width, 0)
+	if world.equipment_strip.has_area():
+		var slot := world.strip_slot(kind)
+		pickup_button.position = Vector2(slot.end.x - StackWorldView.SWAP_SIZE, slot.position.y).round()
+		found_label.position = world.equipment_strip.position + Vector2(4, StackWorldView.SWAP_SIZE + 3)
+		found_label.size = Vector2(body.position.x - found_label.position.x - 5, 0)
+	else:
+		pickup_button.position = Vector2(body.end.x + 3, world.slot_height(kind) - StackWorldView.SWAP_SIZE * 0.5).round()
+		var name_x := body.position.x - StackWorldView.BADGE_WIDTH
+		var label_width := body.end.x + 3 + StackWorldView.SWAP_SIZE - name_x
+		found_label.position = Vector2(name_x, maxf(world.equipment_bottom() + 6, pickup_button.position.y + StackWorldView.SWAP_SIZE + 4))
+		found_label.size = Vector2(label_width, 0)
 	if pickup_button.get_meta("kind", "") != kind or pickup_button.get_meta("charges", -1) != item.charges:
 		pickup_button.set_meta("kind", kind)
 		pickup_button.set_meta("charges", item.charges)

@@ -556,7 +556,10 @@ def equipment_screen_shot(page, name):
     snapshot = state(page)
     x, y, w, h = snapshot['equipment_body']
     px, py, pw, ph = snapshot['panel']['rect']
-    assert px + pw <= x or py >= y + h, ('Panel covers the equipment figure', name)
+    fx, fy, fw, fh = snapshot['field']
+    axis = snapshot['viewport'][0] / 2
+    assert abs(fx + fw / 2 - axis) <= 1 and abs(px + pw / 2 - axis) <= 1, ('Off-center stage', name)
+    assert px + pw <= x or py + ph <= y or py >= y + h, ('Panel covers the equipment figure', name)
     path = screenshot(page, name)
     with Image.open(ROOT / path) as frame:
         scale = frame.width / snapshot['viewport'][0]
@@ -1753,14 +1756,21 @@ def body_slot_checks(page, shots):
             _, _, body_w, body_h = snapshot['equipment_body']
             assert 32 <= body_w <= 64 and body_h <= max(48, field_h * .25)
             badges = [snapshot[item + '_hud']['rect'] for item in loadout.values()]
-            assert all(top[1] + top[3] < bottom[1] for top, bottom in zip(badges, badges[1:]))
+            bx, by, bw, bh = snapshot['equipment_body']
+            if by >= field_y + field_h:
+                assert all(a[0] + a[2] < b[0] for a, b in zip(badges, badges[1:]))
+                assert all(by <= y + h and y >= field_y + field_h and x + w < bx for x, y, w, h in badges)
+                assert by + bh < min(r[1] for r in snapshot['controls'].values())
+            else:
+                assert field_x + field_w < badges[0][0]
+                assert all(a[1] + a[3] < b[1] for a, b in zip(badges, badges[1:]))
             assert all(y > field_y + field_h for _, y, _, _ in snapshot['controls'].values())
             pickup = snapshot['buttons']['pickup']
             x, y, w, h = pickup
             check_boots_rect(snapshot, pickup)
             assert w >= 48 and h >= 48
             badge_x, badge_y, badge_w, badge_h = snapshot[loadout[slot] + '_hud']['rect']
-            assert field_x + field_w < badge_x < badge_x + badge_w < x
+            assert badge_x + badge_w <= x
             assert abs(y + h / 2 - badge_y - badge_h / 2) < 2
             assert snapshot['nearest_item']['charges'] == 2
             if dimensions[0] != dimensions[1]:

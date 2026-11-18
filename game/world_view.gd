@@ -13,6 +13,7 @@ var pressed_actions: Array[String] = []
 var line_caption := ""
 var caption_life := 0.0
 var equipment_body := Rect2()
+var equipment_strip := Rect2()
 var crush_progress := -1.0
 var boots_exhaust_life := 0.0
 var helmet_impacts: Array[Dictionary] = []
@@ -60,6 +61,7 @@ const HUD_CLEARANCE_Y := 60.0
 const WAREHOUSE_FRAME := 13.0
 const BADGE_WIDTH := 46.0
 const BADGE_HEIGHT := 26.0
+const STRIP_HEIGHT := 76.0
 const SWAP_SIZE := 48.0
 const GRAB_ICONS: Texture2D = preload("res://art/glove_controls.png")
 const GRAB_ICON_SIZE := Vector2(32, 32)
@@ -115,29 +117,37 @@ func _layout() -> void:
 		controls["lamp"] = Rect2(Vector2(margin + 2 * stride, bottom), button_size)
 
 	var frame := WAREHOUSE_FRAME + 3
-	var rack_width := clampf(size.x * 0.36, 146, 244)
-	var available_w := size.x - 2 * frame - rack_width - 10
+	# Keep one centered stage for the demo, match and result. On short, wide
+	# screens reserve equal margins so the equipment fits beside the stage.
+	var strip_below := not landscape or size.x < 500
+	var side_margin := frame if strip_below else frame + BADGE_WIDTH + 64 + SWAP_SIZE + 10
+	var available_w := size.x - 2 * side_margin
 	var rows_with_crane := model.tuning.rows - CRANE_TOP / PIXELS_PER_CELL
 	var clearance := HUD_CLEARANCE_Y
-	# A wide screen can fit the score beside the crane, above the movement controls.
-	var full_height := bottom - frame - 16
+	var lower_reserve := STRIP_HEIGHT + 10 if strip_below else 0.0
+	var full_height := bottom - frame - 16 - lower_reserve
 	var wide_cell := floorf(minf(available_w / model.tuning.columns, full_height / rows_with_crane))
-	var rail_left := (size.x - model.tuning.columns * wide_cell - rack_width) * 0.5 - wide_cell
+	var rail_left := (size.x - model.tuning.columns * wide_cell) * 0.5 - wide_cell
 	if landscape and rail_left >= 142:
 		clearance = 8
-	var available_h := bottom - frame - clearance - 8
+	var available_h := bottom - frame - clearance - 8 - lower_reserve
 	cell = floorf(minf(available_w / model.tuning.columns, available_h / rows_with_crane))
 	var world_size := Vector2(model.tuning.columns, model.tuning.rows) * cell
-	var left := floorf((size.x - world_size.x - rack_width) * 0.5)
-	var rail_y := clearance + floorf((available_h - rows_with_crane * cell) * 0.46)
+	var left := floorf((size.x - world_size.x) * 0.5)
+	var rail_y := clearance + floorf((available_h - rows_with_crane * cell) * 0.5)
 	var scale_to_view := cell / PIXELS_PER_CELL
 	var top := rail_y - CRANE_TOP * scale_to_view
 	field = Rect2(Vector2(left, top), world_size)
-	# Aim for a quarter of the board height. At phone sizes retain the native 32 × 48 sprite.
-	var body_width := clampf(floorf(world_size.y / 6.0), 32, 64)
-	var body_size := Vector2(body_width, body_width * 1.5)
-	equipment_body = Rect2(Vector2(field.end.x + frame + BADGE_WIDTH + 4,
-		clampf(field.get_center().y - body_size.y * 0.5, HUD_CLEARANCE_Y + 8, bottom - body_size.y - 55)).round(), body_size)
+	if strip_below:
+		var width := minf(size.x - 16, 400)
+		equipment_strip = Rect2(floorf((size.x - width) * 0.5), ceilf(field.end.y + frame + 6), width, STRIP_HEIGHT)
+		equipment_body = Rect2(equipment_strip.end.x - 40, equipment_strip.get_center().y - 24, 32, 48)
+	else:
+		equipment_strip = Rect2()
+		var body_width := clampf(floorf(world_size.y / 6.0), 32, 64)
+		var body_size := Vector2(body_width, body_width * 1.5)
+		equipment_body = Rect2(Vector2(field.end.x + frame + BADGE_WIDTH + 4,
+			clampf(field.get_center().y - body_size.y * 0.5, HUD_CLEARANCE_Y + 8, bottom - body_size.y - 55)).round(), body_size)
 	_layout_rail(left, top, world_size, scale_to_view)
 
 func _layout_rail(left: float, top: float, world_size: Vector2, scale_to_view: float) -> void:
@@ -158,6 +168,23 @@ func slot_height(kind: String) -> float:
 	if kind in StackSimulation.SLOTS.feet:
 		return roundf(center + spacing)
 	return roundf(center)
+
+
+func strip_slot(kind: String) -> Rect2:
+	var index := 1
+	if kind in StackSimulation.SLOTS.head:
+		index = 0
+	elif kind in StackSimulation.SLOTS.feet:
+		index = 2
+	var width := (equipment_body.position.x - equipment_strip.position.x - 12) / 3.0
+	return Rect2(equipment_strip.position + Vector2(4 + index * width, 4), Vector2(width, SWAP_SIZE))
+
+
+func badge_position(kind: String, plate_size: Vector2) -> Vector2:
+	if equipment_strip.has_area():
+		var slot := strip_slot(kind)
+		return Vector2(slot.position.x + 1, slot.get_center().y - plate_size.y * 0.5).round()
+	return Vector2(equipment_body.position.x - BADGE_WIDTH - 4, slot_height(kind) - plate_size.y * 0.5).round()
 
 
 func equipment_bottom() -> float:
@@ -1016,6 +1043,17 @@ func _draw_warehouse() -> void:
 		draw_line(Vector2(x+3,floor_y+5),Vector2(x+cell*.5-3,floor_y+5),Color("dca65f"),1)
 
 func _draw_equipment_body() -> void:
+	if equipment_strip.has_area():
+		draw_rect(equipment_strip, Color("132c35"))
+		draw_rect(equipment_strip, Color("567679"), false, 1)
+		for kind in ["helmet", "gloves", "boots"]:
+			var slot := strip_slot(kind)
+			var well := Rect2(badge_position(kind, Vector2(BADGE_WIDTH, BADGE_HEIGHT)), Vector2(BADGE_WIDTH, BADGE_HEIGHT))
+			draw_rect(well, Color("10232c"))
+			draw_rect(well, Color("39555b"), false, 1)
+			draw_texture_rect_region(GROUND_ATLAS, Rect2(well.get_center() - Vector2(10, 8), Vector2(20, 16)),
+				ground_icon_region(kind), Color(0.55, 0.65, 0.65, 0.7))
+			draw_line(Vector2(slot.end.x, slot.position.y + 8), Vector2(slot.end.x, slot.end.y - 8), Color("334c53"))
 	var body := equipment_body
 	var plate := body.grow(3)
 	draw_rect(plate, Color("17323e"))

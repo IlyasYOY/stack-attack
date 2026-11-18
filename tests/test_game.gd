@@ -1673,9 +1673,23 @@ func app_flow() -> void:
 		await process_frame
 		await process_frame
 		check(app.model.tuning.columns == 10 and app.model.tuning.rows == 11, "Orientation cannot change field dimensions")
+		var stage: Rect2 = app.world.field
+		var strip: Rect2 = app.world.equipment_strip
+		check(absf(stage.get_center().x - app.size.x * 0.5) <= 1, "The board must stay on the center axis")
+		if strip.has_area():
+			check(strip.position.y > stage.end.y and strip.encloses(app.world.equipment_body), "The strip must sit below the board and contain the worker")
+		else:
+			check(app.world.equipment_body.position.x > stage.end.x, "The landscape worker must sit beside the board")
+		for state in ["menu", "over", "playing"]:
+			app._show_screen(state)
+			await process_frame
+			check(app.world.field == stage and app.world.equipment_strip == strip, "Screen transitions must preserve board and gear geometry")
+			if state != "playing":
+				check(absf(app.panel.get_global_rect().get_center().x - stage.get_center().x) <= 1, "The menu and result must share the board axis")
 		for rect in app.world.controls.values():
 			check(Rect2(Vector2.ZERO, app.size).encloses(rect), "Every touch control must stay inside the viewport")
 			check(not app.world.field.intersects(rect), "Touch controls must not cover the field")
+			check(not strip.has_area() or not strip.intersects(rect), "The equipment strip must leave the touch controls clear")
 	app._show_screen("settings")
 	check(app.sliders.has("music") and app.sliders.has("effects"), "Music and effects need separate sliders")
 	app._show_screen("statistics")
