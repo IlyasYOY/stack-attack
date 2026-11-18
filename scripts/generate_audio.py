@@ -52,6 +52,30 @@ write('line', .5, lambda t: sum(math.sin(2 * math.pi * pitch(n) * t) for n in [7
 write('over', .65, lambda t: math.sin(2 * math.pi * (180 * t - 70 * t * t)) * .2 * math.exp(-t * 5))
 
 
+def crush_squelch():
+    rng = random.Random(86521)
+    wet_noise = 0.0
+    # Three overlapping, descending pops after the low impact.
+    pops = [(0.014, 510, .28), (.071, 370, .23), (.139, 275, .16)]
+
+    def sample(t):
+        nonlocal wet_noise
+        wet_noise = .72 * wet_noise + .28 * rng.uniform(-1, 1)
+        thump = .48 * math.sin(math.tau * (62*t + 2.4*(1-math.exp(-40*t)))) * math.exp(-26*t)
+        spray = .44 * wet_noise * math.exp(-22*t)
+        for onset, frequency, gain in pops:
+            age = t - onset
+            if age >= 0:
+                phase = math.tau * (85*age + (frequency-85)*(1-math.exp(-33*age))/33)
+                spray += gain * min(1, age/.003) * math.exp(-37*age) * (math.sin(phase) + .32*math.sin(2*phase))
+        return min(1, t/.002) * min(1, (.31-t)/.025) * (thump + spray)
+
+    return sample
+
+
+write('crush', .31, crush_squelch())
+
+
 def helmet_impact(breaks):
     noise = random.Random(42931)
 

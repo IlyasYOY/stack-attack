@@ -7,8 +7,9 @@ const Profile = preload("res://game/profile.gd")
 
 class HapticProbe extends StackSound:
 	var pulses: Array[int] = []
-	func _play_effect(_name: String) -> void:
-		pass
+	var played: Array[String] = []
+	func _play_effect(effect_name: String) -> void:
+		played.append(effect_name)
 	func _supports_haptics() -> bool:
 		return true
 	func _vibrate(duration: int) -> void:
@@ -1554,9 +1555,14 @@ func vibration_toggle() -> void:
 	check(probe.pulses == [60], "Background game effects must never vibrate the phone")
 	probe.effect("jump")
 	check(probe.pulses == [60, 12], "Personal game haptics must remain enabled by the saved setting")
+	probe.loss("crushed", false)
+	probe.loss("overflow", false)
+	check(probe.played.slice(-2) == ["crush", "over"] and probe.pulses == [60, 12], "Demo losses must select the matching cue without vibration")
+	probe.loss("crushed")
+	check(probe.pulses == [60, 12, 90], "A crushed player must retain the loss vibration")
 	app.profile.vibration = false
 	probe.preview_vibration()
-	check(probe.pulses == [60, 12], "A disabled vibration setting must suppress preview requests")
+	check(probe.pulses == [60, 12, 90], "A disabled vibration setting must suppress preview requests")
 	app.queue_free()
 	await process_frame
 	DirAccess.remove_absolute(path)

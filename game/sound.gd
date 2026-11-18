@@ -29,7 +29,7 @@ func setup(settings: StackProfile) -> void:
 		player.playback_type = AudioServer.PLAYBACK_TYPE_STREAM
 		add_child(player)
 		effects_players.append(player)
-	for name in ["click", "jump", "land", "line", "over", "helmet_hit", "helmet_break",
+	for name in ["click", "jump", "land", "line", "over", "crush", "helmet_hit", "helmet_break",
 		"gloves_tear", "mallet_swing", "mallet_hit", "mallet_break",
 		"spring_jump", "spring_jump_auto", "lamp_reveal", "lamp_break"]:
 		sounds[name] = load("res://audio/" + name + ".wav")
@@ -61,10 +61,14 @@ func effect(name: String, haptics: bool = true) -> void:
 	if haptics and _supports_haptics() and profile.vibration:
 		if name == "line":
 			_vibrate(40)
-		elif name == "over":
+		elif name in ["over", "crush"]:
 			_vibrate(90)
 		elif name in ["jump", "spring_jump", "spring_jump_auto"]:
 			_vibrate(12)
+
+
+func loss(reason: String, haptics: bool = true) -> void:
+	effect("crush" if reason == "crushed" else "over", haptics)
 
 
 func _play_effect(name: String) -> void:
@@ -72,7 +76,11 @@ func _play_effect(name: String) -> void:
 		if not player.playing:
 			player.stream = sounds[name]
 			player.play()
-			break
+			return
+	# A fatal impact must still be audible during a busy chain reaction.
+	if name == "crush":
+		effects_players[0].stream = sounds[name]
+		effects_players[0].play()
 
 
 func set_slide_active(active: bool, delta: float) -> void:

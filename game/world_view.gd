@@ -862,13 +862,25 @@ func _draw_lamp_guides(width: float, floor_y: float) -> void:
 		draw_rect(Rect2(mark - Vector2(4, 1), Vector2(8, 2)), Color(CREAM, fade))
 		draw_rect(Rect2(mark - Vector2(1, 4), Vector2(2, 8)), Color(CREAM, fade))
 
+func _crush_strength() -> float:
+	return smoothstep(0.0, 0.39, crush_progress)
+
+
+func _crushed_height(strength: float) -> float:
+	return roundf(lerpf(HERO_SIZE.y, 7.0, strength))
+
+
+func _crush_star_opacity() -> float:
+	return smoothstep(0.53, 0.74, crush_progress)
+
+
 func crush_geometry(impact: Dictionary) -> Dictionary[String, Rect2]:
-	var strength: float = smoothstep(0.0, 0.39, crush_progress)
+	var strength := _crush_strength()
 	var floor_y := model.tuning.rows * PIXELS_PER_CELL
 	var hero := _hero_bounds()
 	var player_feet := roundf((model.player.y + model.tuning.player_height) * PIXELS_PER_CELL)
 	var feet := roundf(lerpf(hero.end.y, minf(player_feet, floor_y), strength))
-	hero.size.y = roundf(lerpf(hero.size.y, 7.0, strength))
+	hero.size.y = _crushed_height(strength)
 	hero.position.y = feet - hero.size.y
 	var overlap := roundf(4.0 * strength)
 	var crate := _impact_crate_bounds(impact, hero.position.y + overlap, floor_y)
@@ -945,7 +957,7 @@ func _draw_crush_marks(crate: Rect2, feet: float, width: float) -> void:
 			if dust > 0.0:
 				draw_rect(Rect2(edge + side * 7.0 - 1.0, feet - 5.0, 3.0, 2.0), Color(EFFECT_DUST, dust * 0.78))
 				draw_rect(Rect2(edge + side * 4.0 - 1.0, feet - 3.0, 2.0, 2.0), Color(EFFECT_DUST, dust * 0.62))
-	var stars: float = smoothstep(0.53, 0.74, crush_progress)
+	var stars := _crush_star_opacity()
 	if stars > 0.0:
 		for index in range(-1, 2):
 			var lift := 3.0 * absf(float(index)) + roundf((1.0 - stars) * 3.0)
@@ -1062,9 +1074,17 @@ func _draw_equipment_body() -> void:
 		draw_line(plate.position + Vector2(1, y), plate.position + Vector2(4, y), Color("45606a"))
 	var transform := Transform2D(0, body.size / HERO_SIZE, 0, body.position)
 	draw_set_transform_matrix(transform)
-	var compression := float(model.spring_charge_stages)
-	var bounds := Rect2(Vector2(0, compression), HERO_SIZE - Vector2(0, compression))
-	_draw_mallet_hero(bounds, hero_frame(), transform)
+	if crush_progress >= 0.0:
+		var height := _crushed_height(_crush_strength())
+		var pose := Rect2(0, HERO_SIZE.y - height, HERO_SIZE.x, height)
+		_draw_hero(pose, hero_frame() if crush_progress == 0.0 else "idle")
+		var stars := _crush_star_opacity()
+		if stars > 0.0:
+			_draw_crush_star(Vector2(8, pose.position.y - 6), stars)
+	else:
+		var compression := float(model.spring_charge_stages)
+		var bounds := Rect2(Vector2(0, compression), HERO_SIZE - Vector2(0, compression))
+		_draw_mallet_hero(bounds, hero_frame(), transform)
 	draw_set_transform(Vector2.ZERO)
 
 

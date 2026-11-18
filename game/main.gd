@@ -798,7 +798,7 @@ func _advance_game(delta: float) -> bool:
 				world.cancel_mallet_swing()
 				world.line_effect(int(event.chain))
 			"over":
-				sound.effect("over")
+				sound.loss(event.reason)
 				if event.reason == "crushed":
 					_record_result()
 					_release_controls()
@@ -853,7 +853,8 @@ func _advance_demo(delta: float) -> bool:
 	EQUIPMENT_VIEW.update_hud(gear_counts, world)
 	for event in demo.events:
 		match event.type:
-			"jump", "land", "over": sound.effect(str(event.type), false)
+			"jump", "land": sound.effect(str(event.type), false)
+			"over": sound.loss(event.reason, false)
 			"line":
 				sound.effect("line", false)
 				world.line_effect(int(event.chain))

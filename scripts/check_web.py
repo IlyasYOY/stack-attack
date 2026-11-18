@@ -1259,6 +1259,16 @@ def warm_pixels(image):
 def hero_height(image, snapshot):
     x, y = snapshot['player']
     region = field_crop(image, snapshot, x - .48, y - .15, 1.52, 1.05)
+    return sprite_pixel_height(region)
+
+
+def panel_hero_height(image, snapshot):
+    x, y, w, h = snapshot['equipment_body']
+    sx, sy = image.width / snapshot['viewport'][0], image.height / snapshot['viewport'][1]
+    return sprite_pixel_height(image.crop((round(x*sx), round(y*sy), round((x+w)*sx), round((y+h)*sy))))
+
+
+def sprite_pixel_height(region):
     # Include the cap highlight and trousers that survive nearest-neighbour sampling at eight pixels per cell.
     colors = {(240,186,132), (39,123,130), (94,169,163), (119,193,177), (164,156,132),
               (215,67,56), (241,187,131), (121,88,60)}
@@ -1269,7 +1279,7 @@ def hero_height(image, snapshot):
         if any(max(abs(channel - target) for channel, target in zip(pixel, marker)) <= 5
                for pixel in scanline for marker in colors):
             rows.append(line)
-    assert rows, ('No workshop hero pixels found', image.size)
+    assert rows, ('No workshop hero pixels found', region.size)
     return max(rows) - min(rows) + 1
 
 
@@ -1391,7 +1401,9 @@ def clear_animation_check(page, dimensions, shots):
 def loss_animation_check(page, dimensions, shots):
     loaded = animation_request(page, 'crush', animation_hold=True)
     assert loaded['animation_held'] and loaded['state'] == 'playing'
-    standing_height = hero_height(animation_image(page, dimensions, shots), loaded)
+    standing_image = animation_image(page, dimensions, shots)
+    standing_height = hero_height(standing_image, loaded)
+    standing_panel = panel_hero_height(standing_image, loaded)
     for _ in range(24):
         hit = animation_step(page, 6)
         if hit['state'] == 'over':
@@ -1419,6 +1431,7 @@ def loss_animation_check(page, dimensions, shots):
     squash_image = animation_image(page, dimensions, shots, 'crush')
     squash_height = hero_height(squash_image, squash)
     assert squash_height < standing_height * .7, ('The hero sprite did not squash', dimensions, standing_height, squash_height)
+    assert panel_hero_height(squash_image, squash) < standing_panel * .5, ('Equipment portrait stayed upright at impact', dimensions)
     pause_animation_and_rotate(page, squash, dimensions)
 
     settled = animation_step(page, 17)
@@ -1448,7 +1461,7 @@ def loss_animation_check(page, dimensions, shots):
     animation_request(page, 'overflow', animation_hold=True)
     overflow = animation_step(page, 1)
     assert overflow['screen'] == overflow['state'] == 'over' and overflow['loss_reason'] == 'overflow'
-    assert not overflow['crush_animation']['active']
+    assert not overflow['crush_animation']['active'] and overflow['crush_animation']['progress'] < 0
     assert [match['reason'] for match in overflow['profile']['matches']] == ['overflow', 'crushed']
     assert overflow['profile']['matches'][1] == crushed
     lost_to_stack = overflow['profile']['matches'][0]
