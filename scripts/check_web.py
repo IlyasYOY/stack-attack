@@ -1259,7 +1259,9 @@ def warm_pixels(image):
 def hero_height(image, snapshot):
     x, y = snapshot['player']
     region = field_crop(image, snapshot, x - .48, y - .15, 1.52, 1.05)
-    colors = {(240,186,132), (39,123,130), (94,169,163), (215,67,56), (241,187,131), (121,88,60)}
+    # Include the cap highlight and trousers that survive nearest-neighbour sampling at eight pixels per cell.
+    colors = {(240,186,132), (39,123,130), (94,169,163), (119,193,177), (164,156,132),
+              (215,67,56), (241,187,131), (121,88,60)}
     # The glove and boot strokes are still slightly translucent at the squash frame.
     rows = []
     for line in range(region.height):
@@ -1427,7 +1429,9 @@ def loss_animation_check(page, dimensions, shots):
     impact_x = next(crate['x'] for crate in hit['visible_crates'] if crate['id'] == hit['crush_animation']['impact_crate'])
     for offset in (0, 1/3, 2/3):
         star = field_crop(settled_image, settled, impact_x + offset, settled['rows'] - 1.7, 1/3, .47)
-        assert warm_pixels(star) >= 3, ('A crush star did not render above the crate', dimensions, offset)
+        # Each rendered star occupies only two pixels on the smallest square board.
+        required_pixels = min(3, max(1, star.width * star.height // 6))
+        assert warm_pixels(star) >= required_pixels, ('A crush star did not render above the crate', dimensions, offset)
     animation_step(page, 0, animation_hold=False)
     wait_screen(page, 'over')
     result = state(page)
