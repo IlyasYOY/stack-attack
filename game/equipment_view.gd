@@ -20,13 +20,6 @@ const GOLD := Color("e7b46b")
 const MINT := Color("8dc6ac")
 const DARK := Color("102c35")
 const EDGE := Color("567679")
-const HUD_START := 148.0
-const HUD_SINGLE_WIDTH := 76.0
-const HUD_PAIR_WIDTH := 64.0
-const HUD_GAP := 8.0
-const HUD_TRIPLE_WIDTH := 46.0
-const HUD_TRIPLE_GAP := 3.0
-const HUD_RIGHT := HUD_START + HUD_TRIPLE_WIDTH * 3.0 + HUD_TRIPLE_GAP * 2.0
 const SPRING_COLORS := [Color("8bdb64"), Color("f2d858"), Color("f1a047"), Color("e66252")]
 static func _loadout_charges(model: StackSimulation) -> Dictionary:
 	var charges := {}
@@ -94,24 +87,22 @@ static func _equipment_slot(text: Callable, slots: GridContainer, title: String,
 static func build_hud(parent: Control, item: String) -> Label:
 	var plate := PanelContainer.new()
 	plate.name = item + "_hud"
-	plate.position = Vector2(HUD_START, 10)
-	plate.size = Vector2(HUD_SINGLE_WIDTH, 46)
+	plate.size = Vector2(StackWorldView.BADGE_WIDTH, 26)
 	plate.add_theme_stylebox_override("panel", _style(Color(0.055, 0.13, 0.16, 0.9), EDGE, 2))
 	plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(plate)
-	plate.draw.connect(_draw_rivets.bind(plate))
 
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 2)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	plate.add_child(row)
-	_picture(row, ICONS[item], Vector2.ONE * 27)
+	_picture(row, ICONS[item], Vector2.ONE * (15 if item == "spring_boots" else 20))
 	if item == "spring_boots":
 		row.add_theme_constant_override("separation", 1)
 		var meter := Control.new()
 		meter.name = "spring_charge_meter"
-		meter.custom_minimum_size = Vector2(7, 27)
+		meter.custom_minimum_size = Vector2(5, 20)
 		meter.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		meter.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		meter.draw.connect(_draw_spring_charge.bind(meter))
@@ -119,27 +110,30 @@ static func build_hud(parent: Control, item: String) -> Label:
 	var count := Label.new()
 	count.name = item + "_charges"
 	count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	count.add_theme_font_size_override("font_size", 23)
-	count.custom_minimum_size.x = 26
+	count.add_theme_font_size_override("font_size", 16)
+	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(count)
 	plate.hide()
 	return count
 
 
-static func update_hud(badges: Dictionary, model: StackSimulation, spring_peak: int = 0,
+static func update_hud(badges: Dictionary, world: StackWorldView, spring_peak: int = 0,
 		spring_peak_limit: int = 0) -> void:
+	var model := world.model
 	var charges := _loadout_charges(model)
 	if spring_peak > 0:
 		charges.spring_boots = model.spring_boots_charges
-	var visible_count := charges.size() - charges.values().count(-1)
-	var width := HUD_TRIPLE_WIDTH if visible_count == 3 else (HUD_PAIR_WIDTH if visible_count == 2 else HUD_SINGLE_WIDTH)
-	var gap := HUD_TRIPLE_GAP if visible_count == 3 else HUD_GAP
-	var x := HUD_START
-	for item in badges:
+	for item: String in badges:
+		var count: Label = badges[item]
+		var plate := count.get_parent().get_parent() as PanelContainer
 		var charge_count: int = charges[item]
-		_update_badge(badges[item], item, charge_count, x, width, visible_count)
-		if charge_count >= 0:
-			x += width + gap
+		plate.visible = charge_count >= 0
+		if plate.visible:
+			plate.position = Vector2(world.equipment_body.position.x - StackWorldView.BADGE_WIDTH - 4,
+				world.slot_height(item) - plate.size.y * 0.5).round()
+			if count.text != str(charge_count):
+				count.text = str(charge_count)
+				count.accessibility_name = "%s · %d" % [NAMES[item], charge_count]
 	var spring: Label = badges.spring_boots
 	var meter := spring.get_parent().get_node("spring_charge_meter") as Control
 	var stages := maxi(model.spring_charge_stages, spring_peak)
@@ -150,28 +144,40 @@ static func update_hud(badges: Dictionary, model: StackSimulation, spring_peak: 
 		meter.queue_redraw()
 
 
-static func _update_badge(count: Label, item: String, charges: int, x: float, width: float,
-		visible_count: int) -> void:
-	var row := count.get_parent() as HBoxContainer
-	var plate := row.get_parent() as PanelContainer
-	plate.visible = charges >= 0
-	if charges < 0:
+static func build_swap(parent: Control, action: Callable) -> Button:
+	var button := Button.new()
+	button.name = "pickup"
+	button.focus_mode = Control.FOCUS_NONE
+	button.flat = true
+	button.custom_minimum_size = Vector2.ONE * StackWorldView.SWAP_SIZE
+	parent.add_child(button)
+	button.pressed.connect(action)
+	button.draw.connect(_draw_swap.bind(button))
+	return button
+
+
+static func _draw_swap(button: Button) -> void:
+	var kind: String = button.get_meta("kind", "")
+	if kind.is_empty():
 		return
-	var value := str(charges)
-	if count.text != value:
-		count.text = value
-		count.accessibility_name = "%s · %s" % [NAMES[item], value]
-	var tight := visible_count == 3
-	var font_size := 16 if tight else (20 if visible_count == 2 else 23)
-	if count.get_theme_font_size("font_size") != font_size:
-		count.add_theme_font_size_override("font_size", font_size)
-		count.custom_minimum_size.x = (15 if tight else 22) if item == "spring_boots" else (22 if tight else 26)
-		var icon := row.get_child(0) as TextureRect
-		icon.custom_minimum_size = Vector2.ONE * ((14 if item == "spring_boots" else 16) if tight else 27)
-	elif item == "spring_boots" and not tight:
-		count.custom_minimum_size.x = 22
-	plate.position.x = x
-	plate.size.x = width
+	var center := button.size * 0.5
+	var fill := Color("37575c") if button.is_hovered() else DARK
+	button.draw_circle(center, 23, fill, true, -1, true)
+	button.draw_circle(center, 23, GOLD, false, 1, true)
+	# Two opposed arrowheads leave the centre open for the found item's silhouette.
+	for start: float in [-PI / 2, PI / 2]:
+		var end := start + PI * 0.73
+		button.draw_arc(center, 18, start, end, 14, MINT, 2, true)
+		var tip := center + Vector2.from_angle(end) * 18
+		var tangent := Vector2.from_angle(end + PI / 2)
+		button.draw_colored_polygon(PackedVector2Array([tip + tangent * 3.5,
+			tip - tangent * 3 - tangent.orthogonal() * 4, tip - tangent * 3 + tangent.orthogonal() * 4]), MINT)
+	button.draw_texture_rect_region(StackWorldView.GROUND_ATLAS, Rect2(center - Vector2(15, 17), Vector2(30, 24)),
+		StackWorldView.ground_icon_region(kind))
+	var counter := str(button.get_meta("charges", 0))
+	var baseline := center + Vector2(-12, 16)
+	button.draw_string_outline(StackWorldView.FONT, baseline, counter, HORIZONTAL_ALIGNMENT_CENTER, 24, 15, 3, DARK)
+	button.draw_string(StackWorldView.FONT, baseline, counter, HORIZONTAL_ALIGNMENT_CENTER, 24, 15, CREAM)
 
 
 static func _draw_spring_charge(meter: Control) -> void:

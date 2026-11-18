@@ -1550,7 +1550,9 @@ def check_boots_hud(snapshot, charges):
     assert hud['text'] == str(charges), ('Incorrect charge counter', hud, charges)
     check_boots_rect(snapshot, hud['rect'])
     if 'pause' in snapshot['buttons']:
-        assert hud['rect'][0] + hud['rect'][2] <= snapshot['buttons']['pause'][0], (
+        x, y, w, h = hud['rect']
+        px, py, pw, ph = snapshot['buttons']['pause']
+        assert x + w <= px or px + pw <= x or y + h <= py or py + ph <= y, (
             'Boots HUD overlaps pause', hud, snapshot['buttons']['pause'])
 
 
@@ -1701,10 +1703,44 @@ def open_boots_game(browser, dimensions, errors):
     return context, page
 
 
+def body_slot_checks(page, shots):
+    loadout = {'head': 'helmet', 'hands': 'strong_arms', 'feet': 'spring_boots'}
+    candidates = {'head': 'lamp_helmet', 'hands': 'mallet', 'feet': 'boots'}
+    stacks = [[x, 10 - level, 0] for x, height in [(0, 3), (1, 2), (2, 1), (7, 1), (8, 2), (9, 1)]
+              for level in range(height)]
+    set_bonus_board(page, loadout)
+    for dimensions in [(320, 568), (844, 390), (360, 360)]:
+        resize_boots_view(page, dimensions)
+        for slot, kind in candidates.items():
+            snapshot = animation_request(page, 'ground_board', items=[[kind, 4.85, 11, 2]],
+                                         player=[4.2, 10.12], crates=stacks, animation_hold=True)
+            check_touch_control_layout(snapshot)
+            field_x, field_y, field_w, field_h = snapshot['field']
+            assert all(y > field_y + field_h for _, y, _, _ in snapshot['controls'].values())
+            pickup = snapshot['buttons']['pickup']
+            x, y, w, h = pickup
+            check_boots_rect(snapshot, pickup)
+            assert w >= 48 and h >= 48
+            badge_x, badge_y, badge_w, badge_h = snapshot[loadout[slot] + '_hud']['rect']
+            assert field_x + field_w < badge_x < badge_x + badge_w < x
+            assert abs(y + h / 2 - badge_y - badge_h / 2) < 2
+            assert snapshot['nearest_item']['charges'] == 2
+            if dimensions[0] != dimensions[1]:
+                shots.append(screenshot(page, f'body-{slot}-{dimensions[0]}x{dimensions[1]}.png'))
+            button(page, 'pickup', touch=True)
+            exchanged = animation_step(page, 0)
+            assert exchanged[kind + '_hud']['text'] == '2'
+            page.keyboard.press('KeyE')
+            assert animation_step(page, 0)['nearest_item']['kind'] == kind
+    set_bonus_board(page, {})
+
+
 def ground_checks(browser, record=False):
     errors, shots = [], []
     context, page = open_boots_game(browser, (600, 960), errors)
     try:
+        body_slot_checks(page, shots)
+        resize_boots_view(page, (600, 960))
         kinds = ('helmet', 'lamp_helmet', 'gloves', 'mallet', 'strong_arms', 'speed_boots', 'boots', 'spring_boots')
         items = [[kind, index + 1.5, 11, -1] for index, kind in enumerate(kinds)]
         board = animation_request(page, 'ground_board', items=items, player=[0.05, 10.12], animation_hold=True)

@@ -16,6 +16,7 @@ var sliders := {}
 var panel: PanelContainer
 var score_label: Label
 var pickup_button: Button
+var found_label: Label
 var gear_counts := {}
 var pointers := {}
 var jump_keys := {}
@@ -176,7 +177,6 @@ func _show_screen(value: String) -> void:
 	_release_controls()
 	_clear_ui()
 	world.active = screen in ["playing", "paused"]
-	world.hud_right = EQUIPMENT_VIEW.HUD_RIGHT if world.active else StackWorldView.SCORE_PANEL_RIGHT
 	world.model = demo.model if _background_demo() else model
 	world._layout()
 	sound.music_player.volume_db = -5.0 if screen == "paused" else 0.0
@@ -402,12 +402,16 @@ func _build_hud() -> void:
 	ui.add_child(score_label)
 	for item in EQUIPMENT_VIEW.ICONS:
 		gear_counts[item] = EQUIPMENT_VIEW.build_hud(ui, item)
-	EQUIPMENT_VIEW.update_hud(gear_counts, model)
+	EQUIPMENT_VIEW.update_hud(gear_counts, world)
 	if screen == "playing":
-		pickup_button = _button(ui, "", "pickup", _pick_up)
-		pickup_button.icon = preload("res://art/swap.png")
-		pickup_button.add_theme_font_size_override("font_size", 14)
-		pickup_button.focus_mode = Control.FOCUS_NONE
+		pickup_button = EQUIPMENT_VIEW.build_swap(ui, func():
+			sound.unlock()
+			sound.effect("click")
+			_pick_up())
+		buttons.pickup = pickup_button
+		found_label = _text(ui, "", 14, CREAM)
+		found_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		found_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_update_pickup()
 	var pause := _button(ui, "II", "pause", _pause)
 	pause.text = ""
@@ -423,7 +427,7 @@ func _build_hud() -> void:
 func _pick_up() -> void:
 	if screen == "playing" and crush_elapsed < 0.0:
 		model.pick_up_nearest()
-		EQUIPMENT_VIEW.update_hud(gear_counts, model)
+		EQUIPMENT_VIEW.update_hud(gear_counts, world)
 		_update_pickup()
 		world._layout()
 
@@ -431,20 +435,25 @@ func _pick_up() -> void:
 func _update_pickup() -> void:
 	var item := model.nearest_item()
 	pickup_button.visible = not item.is_empty()
+	found_label.visible = pickup_button.visible
 	if item.is_empty():
 		return
-	var equipped := model.equipped_in_slot(item.kind)
-	var x := EQUIPMENT_VIEW.HUD_START
-	if not equipped.is_empty():
-		var badge: Control = gear_counts[equipped].get_parent().get_parent()
-		x = badge.position.x
-	var label := "%s · %d" % [EQUIPMENT_VIEW.NAMES[item.kind], item.charges]
-	if pickup_button.text != label:
-		pickup_button.text = label
-		pickup_button.reset_size()
-	pickup_button.tooltip_text = ("Обменять" if not equipped.is_empty() else "Подобрать") + " (E)"
-	pickup_button.accessibility_name = pickup_button.tooltip_text + " · " + pickup_button.text
-	pickup_button.position = Vector2(clampf(x, 6, size.x - pickup_button.size.x - 6), 58)
+	var kind := str(item.kind)
+	var body := world.equipment_body
+	pickup_button.position = Vector2(body.end.x + 3, world.slot_height(kind) - StackWorldView.SWAP_SIZE * 0.5).round()
+	var name_x := body.position.x - StackWorldView.BADGE_WIDTH
+	var label_width := body.end.x + 3 + StackWorldView.SWAP_SIZE - name_x
+	found_label.position = Vector2(name_x, maxf(body.end.y + 6, pickup_button.position.y + StackWorldView.SWAP_SIZE + 4))
+	found_label.size = Vector2(label_width, 0)
+	if pickup_button.get_meta("kind", "") != kind or pickup_button.get_meta("charges", -1) != item.charges:
+		pickup_button.set_meta("kind", kind)
+		pickup_button.set_meta("charges", item.charges)
+		pickup_button.queue_redraw()
+		found_label.text = EQUIPMENT_VIEW.NAMES[kind]
+	var equipped := model.equipped_in_slot(kind)
+	var action := "Обменять" if not equipped.is_empty() else "Подобрать"
+	pickup_button.tooltip_text = "%s (E) · %s · %d" % [action, found_label.text, item.charges]
+	pickup_button.accessibility_name = pickup_button.tooltip_text
 
 
 func _update_hud_score() -> void:
@@ -506,6 +515,9 @@ func _resize() -> void:
 		_show_screen(screen)
 	else:
 		_position_panel()
+	if screen == "playing" and not gear_counts.is_empty():
+		EQUIPMENT_VIEW.update_hud(gear_counts, world)
+		_update_pickup()
 	if buttons.has("pause"):
 		buttons.pause.position = Vector2(size.x - 66, 10)
 
@@ -767,7 +779,7 @@ func _advance_game(delta: float) -> bool:
 					_end_game()
 	if score_label != null:
 		_update_hud_score()
-		EQUIPMENT_VIEW.update_hud(gear_counts, model,
+		EQUIPMENT_VIEW.update_hud(gear_counts, world,
 			spring_meter_peak if spring_meter_flash > 0.0 else 0, spring_meter_limit)
 	if screen == "playing":
 		_update_pickup()
@@ -1145,7 +1157,7 @@ func _qa_command() -> void:
 		model.boots_equipped = bool(request.get("boots", false))
 		model.boots_charges = StackSimulation.BOOTS_MAX_CHARGES if model.boots_equipped else 0
 		world.boots_exhaust_life = 0.0
-		EQUIPMENT_VIEW.update_hud(gear_counts, model)
+		EQUIPMENT_VIEW.update_hud(gear_counts, world)
 		if pose == "push":
 			model.add_crate(model.player.x + TUNING.player_width if model.facing > 0 else model.player.x - 1, float(TUNING.rows - 1))
 		world.clock = 0.15 if pose == "walk_recover" else 0.0
