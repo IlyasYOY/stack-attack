@@ -15,6 +15,7 @@ var buttons := {}
 var sliders := {}
 var panel: PanelContainer
 var score_label: Label
+var pickup_button: Button
 var gear_counts := {}
 var pointers := {}
 var jump_keys := {}
@@ -174,11 +175,11 @@ func _show_screen(value: String) -> void:
 	theme = _make_theme()
 	_release_controls()
 	_clear_ui()
-	world.active = screen in ["playing", "paused", "equipment"]
+	world.active = screen in ["playing", "paused"]
 	world.hud_right = EQUIPMENT_VIEW.HUD_RIGHT if world.active else StackWorldView.SCORE_PANEL_RIGHT
 	world.model = demo.model if _background_demo() else model
 	world._layout()
-	sound.music_player.volume_db = -5.0 if screen in ["paused", "equipment"] else 0.0
+	sound.music_player.volume_db = -5.0 if screen == "paused" else 0.0
 	if world.active:
 		_build_hud()
 	if screen == "playing":
@@ -196,10 +197,6 @@ func _show_screen(value: String) -> void:
 			_button(content, "Продолжить", "resume", func(): _show_screen("playing"))
 			_button(content, "Начать заново", "restart", _start_game)
 			_button(content, "Главное меню", "home", func(): _show_screen("menu"))
-		"equipment":
-			var offer := panel
-			var resolve := func(item: String): _resolve_equipment(item, offer)
-			EQUIPMENT_VIEW.build_offer(panel, content, _compact_panel(), model, _button, _text, resolve)
 		"over":
 			_heading(content, "Смена окончена")
 			_result_score(content)
@@ -267,8 +264,6 @@ func _position_panel() -> void:
 
 
 func _panel_width() -> float:
-	if screen == "equipment":
-		return minf(EQUIPMENT_VIEW.OFFER_MAX_WIDTH, size.x - 32)
 	if screen == "paused":
 		return minf(360, size.x - 32)
 	return minf(720 if _wide_panel() and screen != "menu" else 440, size.x - 32)
@@ -291,7 +286,7 @@ func _center_panel() -> void:
 	if panel != null:
 		var centered := ((size - panel.size) * 0.5).floor()
 		var below_hud := StackWorldView.HUD_CLEARANCE_Y
-		if screen in ["paused", "equipment"] and size.y - panel.size.y >= below_hud + 6.0:
+		if screen == "paused" and size.y - panel.size.y >= below_hud + 6.0:
 			centered.y = maxf(centered.y, below_hud)
 		panel.position = centered
 
@@ -408,8 +403,12 @@ func _build_hud() -> void:
 	for item in EQUIPMENT_VIEW.ICONS:
 		gear_counts[item] = EQUIPMENT_VIEW.build_hud(ui, item)
 	EQUIPMENT_VIEW.update_hud(gear_counts, model)
-	if screen == "equipment":
-		return
+	if screen == "playing":
+		pickup_button = _button(ui, "", "pickup", _pick_up)
+		pickup_button.icon = preload("res://art/swap.png")
+		pickup_button.add_theme_font_size_override("font_size", 14)
+		pickup_button.focus_mode = Control.FOCUS_NONE
+		_update_pickup()
 	var pause := _button(ui, "II", "pause", _pause)
 	pause.text = ""
 	pause.icon = preload("res://art/pause_icon.png")
@@ -419,6 +418,33 @@ func _build_hud() -> void:
 	pause.size = Vector2(48, 48)
 	pause.custom_minimum_size.y = 48
 	pause.position = Vector2(size.x - 66, 10)
+
+
+func _pick_up() -> void:
+	if screen == "playing" and crush_elapsed < 0.0:
+		model.pick_up_nearest()
+		EQUIPMENT_VIEW.update_hud(gear_counts, model)
+		_update_pickup()
+		world._layout()
+
+
+func _update_pickup() -> void:
+	var item := model.nearest_item()
+	pickup_button.visible = not item.is_empty()
+	if item.is_empty():
+		return
+	var equipped := model.equipped_in_slot(item.kind)
+	var x := EQUIPMENT_VIEW.HUD_START
+	if not equipped.is_empty():
+		var badge: Control = gear_counts[equipped].get_parent().get_parent()
+		x = badge.position.x
+	var label := "%s · %d" % [EQUIPMENT_VIEW.NAMES[item.kind], item.charges]
+	if pickup_button.text != label:
+		pickup_button.text = label
+		pickup_button.reset_size()
+	pickup_button.tooltip_text = ("Обменять" if not equipped.is_empty() else "Подобрать") + " (E)"
+	pickup_button.accessibility_name = pickup_button.tooltip_text + " · " + pickup_button.text
+	pickup_button.position = Vector2(clampf(x, 6, size.x - pickup_button.size.x - 6), 58)
 
 
 func _update_hud_score() -> void:
@@ -444,7 +470,6 @@ func _start_game() -> void:
 	crush_elapsed = -1.0
 	session += 1
 	model = StackSimulation.new(TUNING, Time.get_ticks_usec())
-	model.equipment_enabled = true
 	world.model = model
 	world.caption_life = 0.0
 	world.boots_exhaust_life = 0.0
@@ -460,13 +485,6 @@ func _start_game() -> void:
 func _pause() -> void:
 	if screen == "playing":
 		_show_screen("paused")
-
-
-func _resolve_equipment(item: String, offer: PanelContainer) -> void:
-	if screen != "equipment" or panel != offer:
-		return
-	model.resolve_equipment(item)
-	_show_screen("equipment" if model.equipment_pending else "playing")
 
 
 func _record_result() -> void:
@@ -539,10 +557,12 @@ func _input(event: InputEvent) -> void:
 		_show_screen("playing")
 		get_viewport().set_input_as_handled()
 		return
-	if screen == "equipment" and event is InputEventKey and event.echo:
-		get_viewport().set_input_as_handled()
-		return
 	if screen != "playing":
+		return
+	if event is InputEventKey and event.physical_keycode == KEY_E:
+		if event.pressed and not event.echo:
+			_pick_up()
+		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.physical_keycode == KEY_G and crush_elapsed < 0.0:
 		if not event.echo:
@@ -704,6 +724,10 @@ func _advance_game(delta: float) -> bool:
 				_record_bonus_event(event)
 			"strong_push", "speed_step":
 				_record_bonus_event(event)
+			"ground_impact":
+				sound.effect("helmet_hit")
+				world.helmet_impacts.append({"age": 0.0, "crate": Vector2(event.x + 0.5, event.y + 0.5) * StackWorldView.PIXELS_PER_CELL,
+					"jump": false, "broke": false, "contact": Vector2(event.x + 0.5, event.y + 1.0) * StackWorldView.PIXELS_PER_CELL})
 			"helmet_hit":
 				sound.effect("helmet_break" if event.helmet_broke else "helmet_hit")
 				world.helmet_hit(event)
@@ -741,13 +765,12 @@ func _advance_game(delta: float) -> bool:
 					crush_elapsed = 0.0
 				else:
 					_end_game()
-	if screen == "playing" and model.equipment_pending:
-		_show_screen("equipment")
-		return false
 	if score_label != null:
 		_update_hud_score()
 		EQUIPMENT_VIEW.update_hud(gear_counts, model,
 			spring_meter_peak if spring_meter_flash > 0.0 else 0, spring_meter_limit)
+	if screen == "playing":
+		_update_pickup()
 	return screen == "playing" and crush_elapsed < 0.0 and model.is_crate_sliding(axis, pull_held)
 
 
@@ -812,7 +835,7 @@ func _process(delta: float) -> void:
 	slide_active = slide_focused and slide_moving
 	sound.set_slide_active(slide_active, delta)
 	_update_crush_view()
-	var frozen := screen in ["paused", "equipment"] or (qa_enabled and (qa_hero_pose or qa_freeze_demo or qa_animation_held))
+	var frozen := screen == "paused" or (qa_enabled and (qa_hero_pose or qa_freeze_demo or qa_animation_held))
 	world.animate(0.0 if frozen else delta)
 	if qa_enabled:
 		qa_timer += delta
@@ -843,7 +866,7 @@ func _publish_qa() -> void:
 			vibration_styles[state] = buttons.vibration.get_theme_stylebox(state).bg_color.a
 	var rects := {}
 	for id in buttons:
-		if is_instance_valid(buttons[id]):
+		if is_instance_valid(buttons[id]) and buttons[id].visible:
 			var rect: Rect2 = buttons[id].get_global_rect()
 			rects[id] = [rect.position.x, rect.position.y, rect.size.x, rect.size.y]
 	var slider_rects := {}
@@ -881,8 +904,7 @@ func _publish_qa() -> void:
 		"animation_held": qa_animation_held,
 		"jump_pending": jump_pending, "jump_held": _jump_held(),
 		"pull_held": _pull_held(), "pull_in_progress": model.is_pulling(),
-		"equipment_rows": model.equipment_rows, "equipment_pending": model.equipment_pending,
-		"equipment_options": model.equipment_options() if model.equipment_pending else [],
+		"ground_items": model.ground_items, "nearest_item": model.nearest_item(),
 		"boots_equipped": model.boots_equipped, "boots_charges": model.boots_charges,
 		"boots_hud": _gear_hud_snapshot(gear_counts.get("boots")),
 		"helmet_charges": model.helmet_charges, "helmet_hud": _gear_hud_snapshot(gear_counts.get("helmet")),
@@ -963,7 +985,7 @@ func _gear_hud_snapshot(count: Label) -> Dictionary:
 
 func _missing_menu_glyphs() -> String:
 	var missing := ""
-	if screen in ["menu", "statistics", "equipment", "paused"]:
+	if screen in ["menu", "statistics", "paused"]:
 		for label in ui.find_children("*", "Label", true, false):
 			var font: Font = label.get_theme_font("font")
 			for character in label.text:
@@ -1066,6 +1088,15 @@ func _qa_command() -> void:
 		return
 	if screen != "playing":
 		return
+	if request.get("scenario") == "ground_board":
+		_qa_set_test_board(request)
+		for entry in request.get("items", []):
+			if entry is Array and entry.size() == 4 and entry[0] in StackSimulation.CAPACITIES:
+				model.add_ground_item(entry[0], entry[1], entry[2], entry[3])
+		if request.has("seed"):
+			model._loot_rng.seed = int(request.seed)
+		_show_screen("playing")
+		return
 	if str(request.get("scenario", "")) == "bonus_board":
 		if crush_elapsed < 0.0:
 			_qa_set_bonus_board(request)
@@ -1078,9 +1109,8 @@ func _qa_command() -> void:
 		if crush_elapsed < 0.0:
 			_qa_set_mallet_board(request)
 		return
-	if str(request.get("scenario", "")) in ["boots_rows", "boots_jump"]:
-		var count := clampi(int(request.get("count", 1)), 1, 6) if request.scenario == "boots_rows" else 0
-		_qa_set_equipment_board(count, bool(request.get("animation_hold", false)))
+	if str(request.get("scenario", "")) == "boots_jump":
+		_qa_set_jump_board(bool(request.get("animation_hold", false)))
 		return
 	if str(request.get("scenario", "")) == "cranes":
 		# Reset a real simulation and start the first routes at known positions for capture.
@@ -1130,6 +1160,8 @@ func _qa_command() -> void:
 	world.reset_mallet_effects()
 	model.cancel_grab()
 	model.crates.clear()
+	model.ground_items.clear()
+	model._loot_rng.seed = 14
 	model.cranes_enabled = false
 	model.player_velocity = Vector2.ZERO
 	model.player = Vector2(4.3, TUNING.rows - TUNING.player_height)
@@ -1217,6 +1249,8 @@ func _qa_prepare_equipment_board(hold: bool) -> void:
 	_release_controls()
 	model.cancel_grab()
 	model.crates.clear()
+	model.ground_items.clear()
+	model._loot_rng.seed = 14
 	model.cranes_enabled = false
 	model.cranes[0].x = 2.5
 	model.cranes[1].x = 7.5
@@ -1228,16 +1262,12 @@ func _qa_prepare_equipment_board(hold: bool) -> void:
 	model.accumulator = 0.0
 
 
-func _qa_set_equipment_board(row_count: int, hold: bool) -> void:
+func _qa_set_jump_board(hold: bool) -> void:
 	_qa_prepare_equipment_board(hold)
-	model.player.y -= row_count
-	for row in range(row_count):
-		for column in range(TUNING.columns):
-			model.add_crate(float(column), float(TUNING.rows - 1 - row))
 	var stacks := [[0, 1, 2, 7, 8, 9], [0, 1, 8, 9], [0, 9]]
 	for row in range(stacks.size()):
 		for column in stacks[row]:
-			model.add_crate(float(column), float(TUNING.rows - 1 - row_count - row))
+			model.add_crate(float(column), float(TUNING.rows - 1 - row))
 
 
 func _qa_set_mallet_board(request: Dictionary) -> void:
@@ -1264,9 +1294,7 @@ func _qa_set_mallet_board(request: Dictionary) -> void:
 		model.mallet_charges = clampi(int(request.get("charges", StackSimulation.MALLET_MAX_CHARGES)),
 			1, StackSimulation.MALLET_MAX_CHARGES)
 		_show_screen("playing")
-	else:
-		model.equipment_pending = true
-		_show_screen("equipment")
+
 
 
 func _qa_set_bonus_board(request: Dictionary) -> void:

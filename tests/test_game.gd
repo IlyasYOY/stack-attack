@@ -4,7 +4,6 @@ var assertions := 0
 const Config = preload("res://game/tuning.gd")
 const Simulation = preload("res://game/simulation.gd")
 const Profile = preload("res://game/profile.gd")
-const NEW_EQUIPMENT := ["strong_arms", "speed_boots", "lamp_helmet", "spring_boots"]
 
 class HapticProbe extends StackSound:
 	var pulses: Array[int] = []
@@ -378,142 +377,150 @@ func add_full_rows(game: StackSimulation, count: int) -> void:
 			game.add_crate(column, row)
 
 
+func equip(game: StackSimulation, kind: String) -> void:
+	game.ground_items.clear()
+	game.add_ground_item(kind, game.player.x + game.tuning.player_width / 2, game.player.y + game.tuning.player_height)
+	game.pick_up_nearest()
+
+
 func equipment_rewards() -> void:
-	var disabled := empty(4)
-	add_full_rows(disabled, 5)
-	disabled.advance(10.0, 0)
-	check(disabled.lines == 5 and disabled.ticks == 1200 and not disabled.equipment_pending
-		and disabled.equipment_rows == 0, "Simulations without equipment must ignore reward thresholds")
+	# Check each draw against a separate seeded stream, including failures and the type draw.
+	var game := empty()
+	var expected := RandomNumberGenerator.new()
+	expected.seed = 7481
+	var kinds := {}
+	for index in range(1000):
+		var crate := game.add_crate(1, 8)
+		var count := game.ground_items.size()
+		game._destroy_crate(crate)
+		game._destroy_crate(crate)
+		if expected.randf() < 0.10:
+			var kind: String = Simulation.CAPACITIES.keys()[expected.randi_range(0, 7)]
+			var item := game.ground_items.back() as Dictionary
+			check(item.kind == kind and item.charges == Simulation.CAPACITIES[kind]
+				and game.ground_items.size() == count + 1, "Each winning draw creates one full item")
+			kinds[kind] = true
+		else:
+			check(game.ground_items.size() == count, "A failed draw produces nothing")
+	check(kinds.size() == 8 and game.broken_crates == 1000 and game.lines == 0, "Single destructions never score rows")
 
-	var game := empty(4)
-	game.equipment_enabled = true
-	game.resolve_equipment("boots")
-	check(not game.boots_equipped, "Resolving equipment without an offer must have no effect")
-	add_full_rows(game, 4)
-	game.advance(3.0, 0)
-	check(game.lines == 4 and game.equipment_rows == 4 and not game.equipment_pending,
-		"Four rows must carry toward the first equipment offer")
-	var start := game.ticks
-	add_full_rows(game, 8)
-	game.advance(Simulation.STEP, 0)
-	check(game.lines == 5 and game.state == "clearing" and not game.equipment_pending,
-		"Reaching a threshold must leave the whole clear animation available to play")
-	game.advance(2.0, 0)
-	check(game.lines > 5 and game.chain > 1 and game.state == "clearing" and not game.equipment_pending,
-		"A reward must wait while later rows in the same combo are clearing")
-	game.advance(10.0, 1)
-	var clear_ticks := ceili((game.tuning.clear_flash_time + game.tuning.collapse_time) / Simulation.STEP)
-	check(game.lines == 12 and game.cleared_crates == 48 and game.best_combo == 8 and game.chain == 0
-		and game.state == "playing" and game.ticks == start + 1 + 8 * clear_ticks,
-		"A long frame must stop on the first playable boundary after the final collapse")
-	check(game.equipment_pending and game.equipment_rows == 7 and game.accumulator == 0.0,
-		"Opening the first offer must preserve the second threshold and surplus, and discard leftover frame time")
-	check(game.equipment_options() == ["boots", "helmet", "gloves", "mallet"] + NEW_EQUIPMENT,
-		"The first offer must present both hands items and both independent slots")
-	var frozen := [game.ticks, game.elapsed, game.player, game.player_velocity, game.cranes.duplicate(true), game._rng.state]
-	game.advance(20.0, 1, true)
-	check(frozen == [game.ticks, game.elapsed, game.player, game.player_velocity, game.cranes, game._rng.state],
-		"An open offer must ignore elapsed wall time, movement and jumps")
-	game.resolve_equipment("unknown")
-	check(game.equipment_pending and game.equipment_rows == 7 and game.boots_charges == 0 and game.helmet_charges == 0,
-		"An invalid item must leave the current offer open and the next threshold queued")
-	game.resolve_equipment("")
-	check(game.equipment_pending and not game.boots_equipped and game.equipment_rows == 2 and game.ticks == frozen[0],
-		"Skipping the first offer must immediately present the next one from the same combo")
-	game.resolve_equipment("boots")
-	check(not game.equipment_pending and game.boots_equipped
-		and game.boots_charges == Simulation.BOOTS_MAX_CHARGES and game.helmet_charges == 0,
-		"Choosing boots must equip ten charges and spend the offer on the chosen slot")
-	game.advance(Simulation.STEP, 0)
-	check(game.ticks == frozen[0] + 1 and game.grounded and game.events.is_empty(),
-		"Play must resume on a fresh tick without input or time carried through the reward")
+	var row := empty()
+	for index in range(40):
+		add_full_rows(row, 1)
+		row.advance(1.0, 0)
+	check(row.lines == 40 and row.score == 4000 and row.cleared_crates == 400 and row.broken_crates == 0,
+		"Rows keep advancing without offers")
+	check(row.ground_items.size() > 20 and row.ground_items.size() < 60, "Each row crate rolls independently")
 
-	add_full_rows(game, 9)
-	game.advance(5.0, 0)
-	check(game.equipment_pending and game.equipment_rows == 6 and game.equipment_options() == ["helmet", "gloves", "mallet"] + NEW_EQUIPMENT,
-		"Full boots must leave the helmet and both hands items available and preserve queued thresholds")
-	game.resolve_equipment("boots")
-	check(game.equipment_pending and game.equipment_rows == 6, "Choosing an unavailable full item must leave the offer open")
-	game.resolve_equipment("helmet")
-	check(game.equipment_pending and game.equipment_rows == 1 and game.equipment_options() == ["gloves", "mallet"] + NEW_EQUIPMENT,
-		"Choosing a helmet must leave both hands items available with boots and helmet full")
-	game.resolve_equipment("gloves")
-	check(not game.equipment_pending and game.equipment_rows == 1 and game.equipment_options() == ["mallet"] + NEW_EQUIPMENT
-		and game.helmet_charges == Simulation.HELMET_MAX_CHARGES and game.boots_charges == 10
-		and game.gloves_charges == Simulation.GLOVES_MAX_CHARGES,
-		"All three equipment slots must stay equipped after choosing gloves")
-	add_full_rows(game, 10)
-	game.advance(5.0, 0)
-	check(game.equipment_pending and game.equipment_rows == 6 and game.equipment_options() == ["mallet"] + NEW_EQUIPMENT,
-		"A full hands item must leave the other item available on the next reward")
-	game.resolve_equipment("mallet")
-	check(game.equipment_pending and game.equipment_rows == 1 and game.equipment_options() == ["gloves"] + NEW_EQUIPMENT
-		and game.mallet_charges == Simulation.MALLET_MAX_CHARGES and game.gloves_charges == 0
-		and game.helmet_charges == 3 and game.boots_charges == 10,
-		"The mallet must replace the gloves without affecting the independent slots")
-	game.resolve_equipment("gloves")
-	check(not game.equipment_pending and game.equipment_rows == 1 and game.mallet_charges == 0
-		and game.gloves_charges == Simulation.GLOVES_MAX_CHARGES,
-		"Choosing gloves from the queued offer must replace the mallet")
+	for kind: String in Simulation.CAPACITIES:
+		var hit := empty()
+		var item := hit.add_ground_item(kind, 5.5, 11)
+		var strikes := int(item.charges) if kind in ["helmet", "mallet"] else 1
+		for remaining in range(strikes - 1, -1, -1):
+			var crate := hit.add_crate(5, 9.45, 6)
+			hit.advance(0.12, 0)
+			check(hit.crates.has(crate) == (kind in ["gloves", "strong_arms"]), "Ground impact: " + kind)
+			check(hit.ground_items.has(item) == (remaining > 0), "Last hit breaks " + kind)
+			if remaining > 0:
+				check(item.charges == remaining, "One charge per falling crate")
+		check(hit.lines == 0 and hit.cleared_crates == 0, "Ground impacts never score a row")
 
-	game.helmet_charges -= 1
-	add_full_rows(game, 4)
-	game.advance(3.0, 0)
-	check(game.equipment_pending and game.equipment_options() == ["helmet", "mallet"] + NEW_EQUIPMENT,
-		"A partly spent helmet must be available while the boots are full")
-	game.resolve_equipment("")
-	check(not game.equipment_pending and game.helmet_charges == 2 and game.boots_charges == 10,
-		"Skipping the helmet must keep the two remaining charges and the boots")
-	add_full_rows(game, 5)
-	game.advance(3.0, 0)
-	game.resolve_equipment("helmet")
-	check(not game.equipment_pending and game.helmet_charges == 3 and game.boots_charges == 10,
-		"A later helmet reward must restore three charges without affecting the boots")
+	var swap := empty()
+	var x := swap.player.x + swap.tuning.player_width * 0.5
+	var first := swap.add_ground_item("helmet", x - 0.5, 11, 1)
+	var second := swap.add_ground_item("lamp_helmet", x + 0.5, 11, 0)
+	check(swap.nearest_item() == first, "Tied candidates retain insertion order")
+	swap.advance(.2, 0)
+	check(swap.helmet_charges == 0, "Walking near loot never collects it")
+	swap.pick_up_nearest()
+	check(swap.helmet_charges == 1 and swap.nearest_item() == second, "Collect the damaged helmet")
+	swap.pick_up_nearest()
+	check(swap.lamp_helmet_equipped and swap.lamp_helmet_charges == 0 and second.kind == "helmet"
+		and second.charges == 1 and second.x == x + 0.5, "A discharged lamp remains useful and swappable")
+	swap.pick_up_nearest()
+	check(swap.helmet_charges == 1 and second.kind == "lamp_helmet" and second.charges == 0, "Swap back unchanged")
+	swap.player.x = 8
+	check(swap.nearest_item().is_empty(), "Hide the pickup prompt out of reach")
+	var base := swap.add_crate(8, 10)
+	var falling := swap.add_ground_item("strong_arms", 8.5, 10)
+	swap.advance(.15, 0)
+	check(falling.y == 10, "Gear rests on a crate")
+	swap._destroy_crate(base)
+	swap.advance(1.0, 0)
+	check(falling.bounced and falling.y == 11 and falling.vy == 0, "Loss of support, one bounce and rest")
 
-	game.advance(Simulation.STEP, 0, true)
-	game.advance(Simulation.STEP, 0, true)
-	game.advance(1.0, 0)
-	add_full_rows(game, 5)
-	game.advance(3.0, 0)
-	check(game.equipment_pending and game.equipment_rows == 0 and game.boots_charges == 9
-		and game.equipment_options() == ["boots", "mallet"] + NEW_EQUIPMENT, "Partially spent boots must remain available while the helmet is full")
-	game.resolve_equipment("")
-	check(not game.equipment_pending and game.boots_equipped and game.boots_charges == 9,
-		"Skipping a replacement must keep the equipped pair and its remaining charges")
-	add_full_rows(game, 10)
-	game.advance(5.0, 0)
-	check(game.equipment_pending and game.equipment_rows == 5, "An earlier skip must not prevent future offers")
-	game.resolve_equipment("boots")
-	check(game.equipment_pending and game.equipment_options() == ["mallet"] + NEW_EQUIPMENT,
-		"Refilling boots leaves the hands replacement in the second queued reward")
-	game.resolve_equipment("")
-	check(not game.equipment_pending and game.equipment_rows == 0 and game.boots_charges == 10,
-		"A replacement must restore ten charges after both queued rewards are resolved")
-	game.gloves_charges -= 1
-	add_full_rows(game, 5)
-	game.advance(3.0, 0)
-	check(game.equipment_pending and game.equipment_options() == ["gloves", "mallet"] + NEW_EQUIPMENT,
-		"Partly spent gloves must remain available while the helmet and boots are full")
-	game.resolve_equipment("")
-	check(not game.equipment_pending and game.gloves_charges == 5,
-		"Skipping a gloves offer must keep the remaining charges")
-	add_full_rows(game, 5)
-	game.advance(3.0, 0)
-	game.resolve_equipment("gloves")
-	check(not game.equipment_pending and game.gloves_charges == 6 and game.boots_charges == 10
-		and game.helmet_charges == 3, "Replacing gloves must refill only the hands slot")
-	game.reset(7481)
-	check(game.equipment_enabled and not game.equipment_pending and not game.boots_equipped
-		and game.boots_charges == 0 and game.helmet_charges == 0 and game.gloves_charges == 0
-		and game.mallet_charges == 0 and game.grabbed_crate_id == -1 and game.equipment_rows == 0,
-		"Reset must retain the opt-in and clear all equipment slots and the grip")
+
+	# Seed 13 wins the first roll and selects speed boots. Use actual collision paths.
+	for cause in ["mallet", "helmet_jump", "helmet_fall", "lamp_fall", "ground"]:
+		var path := empty()
+		path._loot_rng.seed = 13
+		match cause:
+			"mallet":
+				path.mallet_charges = 1
+				path.add_crate(path.player.x + path.tuning.player_width, 10)
+				path.advance(.12, 0, false, false, true)
+			"helmet_jump":
+				path.helmet_charges = 1
+				path.add_crate(path.player.x, path.player.y - 1.03)
+				path.advance(Simulation.STEP, 0, true)
+			"helmet_fall", "lamp_fall":
+				path.helmet_charges = 1 if cause == "helmet_fall" else 0
+				path.lamp_helmet_equipped = cause == "lamp_fall"
+				path.add_crate(path.player.x, path.player.y - 1.025, 6)
+				path.advance(Simulation.STEP, 0)
+			"ground":
+				path.add_ground_item("spring_boots", 7.5, 11)
+				path.add_crate(7, 9.49, 6)
+				path.advance(.03, 0)
+		check(path.ground_items.size() == 1 and path.ground_items[0].kind == "speed_boots"
+			and path.broken_crates == 1 and path.lines == 0, "Identical drop rule for " + cause)
+
+	var chain := empty()
+	chain._loot_rng.seed = 149 # First two drops are a helmet and a lamp helmet.
+	chain.add_ground_item("boots", 7.5, 11)
+	chain.add_crate(7, 9.49, 6)
+	chain.add_crate(7, 8.48, 6)
+	chain.advance(.8, 0)
+	check(chain.crates.is_empty() and chain.broken_crates == 2 and chain.lines == 0
+		and chain.ground_items.size() == 2, "A new drop can break the next crate in a cascade")
+	check(chain.ground_items[0].charges == 4, "A chained impact consumes exactly one charge")
+	var multi := empty()
+	multi._loot_rng.seed = 2
+	add_full_rows(multi, 1)
+	multi.advance(1.0, 0)
+	check(multi.ground_items.size() == 3 and multi.cleared_crates == 10 and multi.broken_crates == 0,
+		"Three independent row drops for seed 2")
+	for item in multi.ground_items:
+		check(item.bounced and item.y == 11 and item.vy == 0, "Row loot settles on the floor")
+
+	var flight := empty()
+	flight.boots_equipped = true
+	flight.boots_charges = 0
+	flight.grounded = false
+	flight.player.y -= .7
+	var spent := flight.add_ground_item("speed_boots", flight.player.x + .3, 10.3)
+	flight.pick_up_nearest()
+	check(spent.kind == "boots" and spent.charges == 0, "The final rocket flight still occupies its slot")
+
+	var worn := empty()
+	equip(worn, "speed_boots")
+	worn.advance(.09, 1)
+	var progress := worn.speed_boots_progress
+	var feet := worn.add_ground_item("boots", worn.player.x + .3, 11, 2)
+	worn.pick_up_nearest()
+	worn.pick_up_nearest()
+	check(progress > 0 and worn.speed_boots_progress == progress and feet.charges == 2,
+		"Swapping retains fractional distance and rocket fuel")
+	worn.player.x = 0
+	worn.add_crate(float(feet.x) - .5, 9.46, 6)
+	worn.advance(.2, 0)
+	check(worn.broken_crates == 1 and not worn.ground_items.has(feet), "Discarded boots can be crushed")
 
 
 func mallet_actions() -> void:
 	for direction in [-1, 1]:
 		var game := empty()
-		game.equipment_enabled = true
-		game.equipment_rows = Simulation.ROWS_PER_EQUIPMENT - 1
+
 		game.mallet_charges = 1
 		game.facing = direction
 		var target_x := game.player.x + game.tuning.player_width + .08 if direction > 0 else game.player.x - 1.08
@@ -533,9 +540,8 @@ func mallet_actions() -> void:
 			"The last mallet charge must break exactly the crate in front, then break the tool")
 		check(game.crates.has(behind) and game.crates.has(above) and float(above.y) > 9.0,
 			"A struck lower crate must lose support immediately without breaking or moving another crate laterally")
-		check(game.broken_crates == 1 and game.score == 0 and game.lines == 0 and game.cleared_crates == 0
-			and game.equipment_rows == 4 and not game.equipment_pending,
-			"Breaking a crate must be counted separately and leave the reward threshold and score alone")
+		check(game.broken_crates == 1 and game.score == 0 and game.lines == 0 and game.cleared_crates == 0,
+			"Breaking a crate must be counted separately and leave the row count and score alone")
 		game.advance(.5, 0, false, false, true)
 		check(game.broken_crates == 1 and float(above.y) == 10.0,
 			"An exhausted tool must leave the upper crate to fall and settle normally")
@@ -588,10 +594,8 @@ func mallet_actions() -> void:
 
 func equipment_jumps() -> void:
 	var game := empty(4)
-	game.equipment_enabled = true
-	add_full_rows(game, 5)
-	game.advance(3.0, 0)
-	game.resolve_equipment("boots")
+
+	equip(game, "boots")
 	game.advance(Simulation.STEP, 0)
 	for charges in range(Simulation.BOOTS_MAX_CHARGES, 0, -1):
 		game.advance(Simulation.STEP, 0, true)
@@ -613,10 +617,7 @@ func equipment_jumps() -> void:
 		game.advance(1.0, 0)
 		check(game.grounded and game.boots_equipped == (charges > 1),
 			"Landing must end the flight and remove the boots when the last charge is spent")
-	add_full_rows(game, 5)
-	game.advance(3.0, 0)
-	check(game.equipment_pending, "A new offer must be available after the boots are exhausted")
-	game.resolve_equipment("boots")
+	equip(game, "boots")
 
 	for row in range(7, game.tuning.rows):
 		game.add_crate(2, row)
@@ -649,16 +650,14 @@ func equipment_jumps() -> void:
 
 func bonus_equipment() -> void:
 	var gear := empty()
-	gear.equipment_enabled = true
+
 	for item in ["gloves", "helmet", "boots", "strong_arms", "lamp_helmet", "spring_boots"]:
-		gear.equipment_pending = true
-		gear.resolve_equipment(item)
+		equip(gear, item)
 	check(gear.strong_arms_charges == Simulation.STRONG_ARMS_MAX_CHARGES and gear.gloves_charges == 0
 		and gear.lamp_helmet_equipped and gear.helmet_charges == 0 and gear.boots_charges == 0
 		and not gear.boots_equipped and gear.spring_boots_charges == Simulation.SPRING_BOOTS_MAX_CHARGES,
 		"New gear replaces in its own slot and coexists across slots")
-	gear.equipment_pending = true
-	gear.resolve_equipment("speed_boots")
+	equip(gear, "speed_boots")
 	check(gear.spring_boots_charges == 0 and gear.speed_boots_charges == Simulation.SPEED_BOOTS_MAX_CHARGES
 		and gear.lamp_helmet_equipped and gear.strong_arms_charges > 0,
 		"Exchanging footwear must preserve the independent slots")
@@ -815,7 +814,7 @@ func bonus_equipment() -> void:
 
 func gloved(facing: int = 1, crate_x: float = 4.0, gap: float = 0.14) -> StackSimulation:
 	var game := empty()
-	game.equipment_enabled = true
+
 	game.gloves_charges = Simulation.GLOVES_MAX_CHARGES
 	game.add_crate(crate_x, game.tuning.rows - 1)
 	game.facing = facing
@@ -1096,7 +1095,7 @@ func helmet_underside_hits() -> void:
 	for input_event in ["jump", "air_jump"]:
 		for charges in [0, 1]:
 			var game := empty()
-			game.equipment_enabled = true
+
 			game.helmet_charges = charges
 			game.boots_equipped = true
 			game.boots_charges = Simulation.BOOTS_MAX_CHARGES

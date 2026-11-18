@@ -34,6 +34,8 @@ const HERO_SIZE := Vector2(16, 24)
 const HERO_OFFSET := Vector2(-1, -2)
 const HERO_FRAME_PIXELS := Vector2(32, 48)
 const HERO_FRAME_COLUMNS := {"idle": 0, "walk": 1, "jump": 2, "push": 3, "grab": 4}
+const GROUND_ATLAS := preload("res://art/ground_equipment.png")
+const GROUND_KINDS := ["boots", "helmet", "gloves", "mallet", "strong_arms", "speed_boots", "lamp_helmet", "spring_boots"]
 const HERO_BOOTS_ATLAS: Texture2D = preload("res://art/hero_rocket_boots.png")
 const HERO_HELMET_ATLAS: Texture2D = preload("res://art/hero_helmet.png")
 const HERO_GLOVES_ATLAS: Texture2D = preload("res://art/hero_work_gloves.png")
@@ -277,7 +279,7 @@ func _draw() -> void:
 	if model == null: return
 	_draw_warehouse()
 	if active: _draw_controls()
-	if caption_life > 0.0 and active and model.state != "over" and not model.equipment_pending:
+	if caption_life > 0.0 and active and model.state != "over":
 		var width := FONT.get_string_size(line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
 		var at := Vector2(size.x * 0.5 - width * 0.5, field.position.y + field.size.y * 0.3)
 		draw_string_outline(FONT, at, line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, 3, INK)
@@ -955,6 +957,14 @@ func _draw_field_objects() -> void:
 			continue
 		var position := _crate_origin(float(crate.x), float(crate.y))
 		_draw_crate(Rect2(position, Vector2.ONE * PIXELS_PER_CELL), int(crate.variant))
+	for item in model.ground_items:
+		var at := _crate_origin(float(item.x), float(item.y))
+		var source := Rect2(GROUND_KINDS.find(item.kind) * 20, 0, 20, 16)
+		draw_texture_rect_region(GROUND_ATLAS, Rect2(at - Vector2(10, 16), Vector2(20, 16)), source)
+		if item.get("row_splinters", false):
+			var age := (model.ticks - int(item.born)) * StackSimulation.STEP
+			if item.born >= 0 and age < HELMET_WOOD_TIME:
+				_draw_wood_fragments(_crate_origin(item.x, item.origin_y), age, false, width, floor_y)
 	if impact.is_empty():
 		var bounds := _hero_bounds()
 		var compression := float(model.spring_charge_stages)

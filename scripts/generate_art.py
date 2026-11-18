@@ -700,3 +700,31 @@ for column, frame in enumerate([*frames, 'grab']):
     bonus_overlay.paste(equipment_boots(frame, 'spring_boots'), (at, 96))
     bonus_overlay.paste(lamp, (at, 144))
 bonus_overlay.save(ROOT / 'hero_bonus_gear.png')
+
+# Ground sprites share a baseline so their soles and handles rest on the platform.
+dumbbell = Image.new('RGBA', (30, 16))
+draw = ImageDraw.Draw(dumbbell)
+draw.rectangle((1, 6, 28, 10), fill=INK)
+draw.rectangle((2, 7, 27, 9), fill='#ab8055')
+draw.line((7, 7, 22, 7), fill='#f3ce8f')
+for x, top, width in [(2, 4, 4), (6, 1, 5), (19, 1, 5), (24, 4, 4)]:
+    draw.rounded_rectangle((x, top, x+width-1, 15-top), 1, fill=INK)
+    draw.rectangle((x+1, top+1, x+width-2, 14-top), fill='#487177')
+    draw.line((x+1, top+2, x+1, 10-top//2), fill='#9ac2ae')
+ground_kinds = ('boots', 'helmet', 'gloves', 'mallet', 'strong_arms', 'speed_boots', 'lamp_helmet', 'spring_boots')
+icon_files = {'boots': 'rocket_boots', 'gloves': 'work_gloves', 'mallet': 'wooden_mallet'}
+atlas = Image.new('RGBA', (20 * len(ground_kinds), 16))
+for column, kind in enumerate(ground_kinds):
+    icon = dumbbell if kind == 'strong_arms' else Image.open(ROOT / (icon_files.get(kind, kind) + '.png'))
+    icon = icon.crop(icon.getbbox())
+    icon.thumbnail((19, 15), Image.Resampling.NEAREST)
+    atlas.paste(icon, (column * 20 + (20 - icon.width)//2, 16 - icon.height))
+atlas.save(ROOT / 'ground_equipment.png')
+
+swap = Image.new('RGBA', (18, 18))
+draw = ImageDraw.Draw(swap)
+for points in [[(2, 9), (2, 6), (5, 3), (12, 3)], [(15, 9), (15, 12), (12, 15), (5, 15)]]:
+    draw.line(points, fill='#edcb83', width=2)
+draw.polygon([(10, 0), (15, 4), (10, 7)], fill='#edcb83')
+draw.polygon([(7, 11), (2, 15), (7, 17)], fill='#edcb83')
+swap.save(ROOT / 'swap.png')
