@@ -433,7 +433,9 @@ def score_only_result(page):
               if max(abs(a-b) for a,b in zip(image.getpixel((px,py)),(215,164,90))) <= 5]
     assert points, 'Score text did not render'
     center = (min(p[0] for p in points)+max(p[0] for p in points)+1)/2
-    assert abs(center-image.width/2) <= max(3,scale*2), ('Score pixels are not centered',snapshot['score'],center,image.width/2)
+    panel_x, _, panel_width, _ = snapshot['panel']['rect']
+    expected = (panel_x + panel_width / 2) * scale
+    assert abs(center-expected) <= max(3,scale*2), ('Score pixels are not centered in the result panel',snapshot['score'],center,expected)
     return center
 
 
@@ -550,6 +552,19 @@ def uniform_action_buttons(browser, viewports=((390,844),(844,390),(768,1004))):
     return checks
 
 
+def equipment_screen_shot(page, name):
+    snapshot = state(page)
+    x, y, w, h = snapshot['equipment_body']
+    px, py, pw, ph = snapshot['panel']['rect']
+    assert px + pw <= x or py >= y + h, ('Panel covers the equipment figure', name)
+    path = screenshot(page, name)
+    with Image.open(ROOT / path) as frame:
+        scale = frame.width / snapshot['viewport'][0]
+        figure = frame.convert('RGB').crop(tuple(round(v * scale) for v in (x, y, x + w, y + h)))
+    assert color_pixels(figure, menu_shaded_colors({(240, 186, 132)}), 1) > 0, ('Missing character pixels', name)
+    return path
+
+
 def game_over_screens(browser):
     checks = []
     for dimensions in [(390,844),(844,390),(768,1004)]:
@@ -559,22 +574,34 @@ def game_over_screens(browser):
         page.on('pageerror', lambda value: errors.append(str(value)))
         page.goto(URL)
         wait_screen(page, 'menu')
+        background = state(page)
+        geometry = {key: background[key] for key in ('field', 'crane_rail', 'equipment_body')}
+        shots = [equipment_screen_shot(page, f'body-menu-{dimensions[0]}x{dimensions[1]}.png')]
         button(page, 'play', True)
         wait_screen(page, 'playing')
         scenario(page, 'chain')
         page.wait_for_function('window.stackAttackState.score === 200 && window.stackAttackState.state === "playing"')
-        shots = []
         for reason, fixture in [('crushed','crush'),('overflow','overflow')]:
+            assert all(state(page)[key] == value for key, value in geometry.items())
+            # Collect actual items; surviving gear stays on the result screen.
+            for kind in ('strong_arms', 'spring_boots'):
+                pick_ground(page, kind)
+            if reason == 'overflow':
+                pick_ground(page, 'lamp_helmet')
             scenario(page, fixture)
             wait_screen(page, 'over')
             score_only_result(page)
             snapshot = state(page)
+            assert all(snapshot[key] == value for key, value in geometry.items())
+            assert snapshot['strong_arms_hud']['text'] == str(snapshot['strong_arms_charges'])
+            assert 'pickup' not in snapshot['buttons'] and 'pause' not in snapshot['buttons']
             assert snapshot['loss_reason'] == reason
             assert snapshot['lines'] == (2 if reason == 'crushed' else 0)
             fixed_panel(page)
-            shots.append(screenshot(page, f'game-over-{reason}-{dimensions[0]}x{dimensions[1]}.png'))
+            shots.append(equipment_screen_shot(page, f'game-over-{reason}-{dimensions[0]}x{dimensions[1]}.png'))
             button(page, 'again' if reason == 'crushed' else 'home', True)
             wait_screen(page, 'playing' if reason == 'crushed' else 'menu')
+        assert not state(page)['strong_arms_hud'], 'Menu kept the completed match equipment'
         centers = []
         for score in [0,200,100000000]:
             page.evaluate('value => window.stackAttackQARequest={scenario:"result_preview",score:value}', score)

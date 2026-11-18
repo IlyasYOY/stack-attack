@@ -1562,7 +1562,7 @@ func app_flow() -> void:
 			for frame in range(4):
 				await process_frame
 			var viewport := Rect2(Vector2.ZERO, app.size)
-			check(viewport.encloses(app.panel.get_global_rect()), "%s panel must fit %s without scrolling" % [menu, dimensions])
+			check(viewport.encloses(app.panel.get_global_rect()), "%s panel %s must fit %s without scrolling" % [menu, app.panel.get_global_rect(), viewport])
 			check(app.panel.find_children("*", "ScrollContainer", true, false).is_empty(), "Menus must not contain a ScrollContainer")
 			for control in app.panel.find_children("*", "Control", true, false):
 				if control is Button:
@@ -1596,7 +1596,7 @@ func app_flow() -> void:
 				await process_frame
 			var label: Label = app.panel.find_child("result_score", true, false)
 			check(label.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER, "Result score must be horizontally centered")
-			check(absf(label.get_global_rect().get_center().x - app.size.x * 0.5) <= 1, "Result score layout must share the viewport's center")
+			check(absf(label.get_global_rect().get_center().x - app.panel.get_global_rect().get_center().x) <= 1, "Result score must be centered within its panel")
 			var text_width := label.get_theme_font("font").get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, label.get_theme_font_size("font_size")).x
 			check(label.autowrap_mode == TextServer.AUTOWRAP_OFF and text_width <= label.size.x - 4, "Long result scores must fit on one centered line")
 			for id in ["again", "home"]:

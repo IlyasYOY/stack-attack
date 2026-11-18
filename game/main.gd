@@ -180,6 +180,9 @@ func _show_screen(value: String) -> void:
 	world.model = demo.model if _background_demo() else model
 	world._layout()
 	sound.music_player.volume_db = -5.0 if screen == "paused" else 0.0
+	for item in EQUIPMENT_VIEW.ICONS:
+		gear_counts[item] = EQUIPMENT_VIEW.build_hud(ui, item)
+	EQUIPMENT_VIEW.update_hud(gear_counts, world)
 	if world.active:
 		_build_hud()
 	if screen == "playing":
@@ -200,12 +203,8 @@ func _show_screen(value: String) -> void:
 		"over":
 			_heading(content, "Смена окончена")
 			_result_score(content)
-			var actions: Control = content
-			if _compact_panel() and _wide_panel():
-				actions = HBoxContainer.new()
-				content.add_child(actions)
-			_button(actions, "Играть снова", "again", _start_game)
-			_button(actions, "Главное меню", "home", func(): _show_screen("menu"))
+			_button(content, "Играть снова", "again", _start_game)
+			_button(content, "Главное меню", "home", func(): _show_screen("menu"))
 			if not profile.last_error.is_empty():
 				_text(content, profile.last_error, 12)
 		"statistics":
@@ -263,10 +262,26 @@ func _position_panel() -> void:
 		_center_panel()
 
 
+func _panel_area() -> Rect2:
+	if screen in ["menu", "over"]:
+		var below := ceilf(world.equipment_body.end.y + 12)
+		# Reserve the complete menu height even while its controls are being created.
+		var lower_height := 222 if _compact_panel() else 274
+		if size.y > size.x and size.y - below >= lower_height:
+			return Rect2(0, below, size.x, size.y - below)
+		var left_width := world.equipment_body.position.x - StackWorldView.BADGE_WIDTH - 8
+		# Keep the warehouse floor visible behind the menu and results.
+		var above_floor := clampf(world.field.end.y - world.cell, lower_height, size.y)
+		return Rect2(0, 0, left_width, above_floor)
+	return Rect2(Vector2.ZERO, size)
+
+
 func _panel_width() -> float:
 	if screen == "paused":
 		return minf(360, size.x - 32)
-	return minf(720 if _wide_panel() and screen != "menu" else 440, size.x - 32)
+	var margin := 16 if screen in ["menu", "over"] else 32
+	var max_width := 720 if _wide_panel() and screen != "menu" else 440
+	return minf(max_width, _panel_area().size.x - margin)
 
 
 func _result_score(parent: Control) -> void:
@@ -277,14 +292,15 @@ func _result_score(parent: Control) -> void:
 	var available := _panel_width() - panel.get_theme_stylebox("panel").get_minimum_size().x - 8
 	var font := label.get_theme_font("font")
 	var font_size := label.get_theme_font_size("font_size")
-	while font_size > 20 and font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > available:
+	while font_size > 12 and font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > available:
 		font_size -= 1
 	label.add_theme_font_size_override("font_size", font_size)
 
 
 func _center_panel() -> void:
 	if panel != null:
-		var centered := ((size - panel.size) * 0.5).floor()
+		var centered := (_panel_area().get_center() - panel.size * 0.5).floor()
+		centered.y = maxf(centered.y, 0.0)
 		var below_hud := StackWorldView.HUD_CLEARANCE_Y
 		if screen == "paused" and size.y - panel.size.y >= below_hud + 6.0:
 			centered.y = maxf(centered.y, below_hud)
@@ -400,9 +416,6 @@ func _build_hud() -> void:
 	score_label.autowrap_mode = TextServer.AUTOWRAP_OFF
 	_update_hud_score()
 	ui.add_child(score_label)
-	for item in EQUIPMENT_VIEW.ICONS:
-		gear_counts[item] = EQUIPMENT_VIEW.build_hud(ui, item)
-	EQUIPMENT_VIEW.update_hud(gear_counts, world)
 	if screen == "playing":
 		pickup_button = EQUIPMENT_VIEW.build_swap(ui, func():
 			sound.unlock()
@@ -822,6 +835,7 @@ func _advance_demo(delta: float) -> bool:
 	demo.advance(delta)
 	world.model = demo.model
 	world.axis = demo.axis
+	EQUIPMENT_VIEW.update_hud(gear_counts, world)
 	for event in demo.events:
 		match event.type:
 			"jump", "land", "over": sound.effect(str(event.type), false)

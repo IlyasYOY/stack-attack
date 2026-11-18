@@ -99,9 +99,6 @@ func _ready() -> void:
 func _layout() -> void:
 	if model == null: return
 	var landscape := size.x > size.y
-	if not active:
-		_layout_background(landscape)
-		return
 	var button_width := clampf(floorf((size.x - 52.0) / 5.0), 48, 70)
 	var button_size := Vector2(button_width, 52 if landscape else 60)
 	var margin := 12.0
@@ -140,26 +137,6 @@ func _layout() -> void:
 	equipment_body = Rect2(Vector2(field.end.x + frame + BADGE_WIDTH + 4,
 		clampf(field.get_center().y - body_size.y * 0.5, HUD_CLEARANCE_Y + 8, bottom - body_size.y - 55)).round(), body_size)
 	_layout_rail(left, top, world_size, scale_to_view)
-
-func _layout_background(landscape: bool) -> void:
-	# Menu and result scenes retain their full-width workshop backdrop.
-	controls.clear()
-	var free_width := size.x - (268 if landscape else 36)
-	var free_height := size.y - (84 if landscape else 204)
-	cell = maxf(8, floorf(minf(free_width / model.tuning.columns, free_height / (model.tuning.rows + 2))))
-	var world_size := Vector2(model.tuning.columns, model.tuning.rows) * cell
-	var left := floorf((size.x - world_size.x) * 0.5)
-	var top := 60 + cell * 1.1
-	if landscape:
-		left = clampf(left, 168, maxf(168, size.x - 100 - world_size.x))
-	else:
-		top += maxf(0, (free_height - (model.tuning.rows + 2) * cell) * 0.4)
-	var scale_to_view := cell / PIXELS_PER_CELL
-	if left - 10 * scale_to_view < 138:
-		top = maxf(top, HUD_CLEARANCE_Y - CRANE_TOP * scale_to_view)
-	field = Rect2(Vector2(left, top), world_size)
-	_layout_rail(left, top, world_size, scale_to_view)
-
 
 func _layout_rail(left: float, top: float, world_size: Vector2, scale_to_view: float) -> void:
 	var rail_margin := clampf(10.0 * scale_to_view, 0.0, maxf(0.0, left - 3.0))
@@ -290,8 +267,8 @@ func _draw() -> void:
 	_draw_scenery()
 	if model == null: return
 	_draw_warehouse()
+	_draw_equipment_body()
 	if active:
-		_draw_equipment_body()
 		_draw_controls()
 	if caption_life > 0.0 and active and model.state != "over":
 		var width := FONT.get_string_size(line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
