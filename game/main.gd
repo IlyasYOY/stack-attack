@@ -253,7 +253,16 @@ func _make_panel() -> VBoxContainer:
 	var content := VBoxContainer.new()
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.add_child(content)
+	if _short_strip_panel():
+		var frame := _make_style(Color.TRANSPARENT, Color.TRANSPARENT, 2)
+		frame.set_border_width_all(0)
+		panel.add_theme_stylebox_override("panel", frame)
+		content.add_theme_constant_override("separation", 2)
 	return content
+
+
+func _short_strip_panel() -> bool:
+	return screen in ["menu", "over"] and world.equipment_strip.has_area() and world.equipment_strip.position.y < 248
 
 
 func _position_panel() -> void:
@@ -264,7 +273,8 @@ func _position_panel() -> void:
 
 func _panel_area() -> Rect2:
 	if screen in ["menu", "over"]:
-		var width := minf(size.x - 12, maxf(230, world.field.size.x * 0.90))
+		var minimum_width := 300 if _short_strip_panel() else 230
+		var width := minf(size.x - 12, maxf(minimum_width, world.field.size.x * 0.90))
 		var center := world.field.get_center()
 		return Rect2(center - Vector2(width * 0.5, world.field.size.y * 0.5), Vector2(width, world.field.size.y))
 	return Rect2(Vector2.ZERO, size)

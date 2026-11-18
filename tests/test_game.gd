@@ -1686,6 +1686,7 @@ func app_flow() -> void:
 			check(app.world.field == stage and app.world.equipment_strip == strip, "Screen transitions must preserve board and gear geometry")
 			if state != "playing":
 				check(absf(app.panel.get_global_rect().get_center().x - stage.get_center().x) <= 1, "The menu and result must share the board axis")
+				check(not strip.has_area() or not strip.intersects(app.panel.get_global_rect()), "Menus must leave every equipment slot visible")
 		for rect in app.world.controls.values():
 			check(Rect2(Vector2.ZERO, app.size).encloses(rect), "Every touch control must stay inside the viewport")
 			check(not app.world.field.intersects(rect), "Touch controls must not cover the field")
