@@ -4,13 +4,21 @@ const STATISTICS_VIEW = preload("res://game/statistics_view.gd")
 const EQUIPMENT_VIEW = preload("res://game/equipment_view.gd")
 const CRUSH_ANIMATION_TIME := 0.42
 const SPRING_METER_FLASH_TIME := 0.18
+const MENU_IDLE_MS := 30_000
+const MENU_FADE_MS := 500
 var model: StackSimulation
 var demo: StackDemo
 var profile: StackProfile
 var sound: StackSound
 var world: StackWorldView
 var ui: Control
-var screen := "menu"
+var screen := ""
+var menu_last_input_ms := 0
+var menu_opacity := 1.0
+var wake_key := KEY_NONE
+var wake_mouse_button := MOUSE_BUTTON_NONE
+var wake_touch := -1
+var wake_emulated_mouse := false
 var buttons := {}
 var sliders := {}
 var panel: PanelContainer
@@ -174,6 +182,10 @@ func _show_screen(value: String) -> void:
 		qa_statistics_preview = null
 	var previous_focus := get_viewport().gui_get_focus_owner()
 	var focus_name := str(previous_focus.name) if previous_focus != null else ""
+	if value != screen:
+		menu_last_input_ms = Time.get_ticks_msec()
+		menu_opacity = 1.0
+		_clear_wake_input()
 	screen = value
 	theme = _make_theme()
 	_release_controls()
@@ -196,6 +208,7 @@ func _show_screen(value: String) -> void:
 			_button(content, "Играть", "play", _start_game)
 			_button(content, "Статистика", "statistics", _open_statistics)
 			_button(content, "Настройки", "settings", func(): _show_screen("settings"))
+			_apply_menu_opacity()
 		"paused":
 			_heading(content, "Пауза")
 			EQUIPMENT_VIEW.build_pause(panel, content, _compact_panel(), model, _text)
@@ -598,10 +611,77 @@ func _jump_held() -> bool:
 	return not jump_keys.is_empty() or not jump_pointers.is_empty()
 
 
+func _apply_menu_opacity() -> void:
+	for button in buttons.values():
+		button.modulate.a = menu_opacity
+
+
+func _update_menu_idle() -> void:
+	var elapsed := Time.get_ticks_msec() - menu_last_input_ms
+	var opacity := clampf(1.0 - float(elapsed - MENU_IDLE_MS) / MENU_FADE_MS, 0.0, 1.0)
+	if opacity != menu_opacity:
+		menu_opacity = opacity
+		_apply_menu_opacity()
+
+
+func _clear_wake_input() -> void:
+	wake_key = KEY_NONE
+	wake_mouse_button = MOUSE_BUTTON_NONE
+	wake_touch = -1
+	wake_emulated_mouse = false
+
+
+func _menu_input(event: InputEvent) -> bool:
+	if not (event is InputEventKey or event is InputEventMouse or
+			event is InputEventScreenTouch or event is InputEventScreenDrag):
+		return false
+	var waking := menu_opacity < 1.0
+	menu_last_input_ms = Time.get_ticks_msec()
+	if waking:
+		menu_opacity = 1.0
+		_apply_menu_opacity()
+
+	if event is InputEventKey:
+		if waking and event.pressed:
+			wake_key = event.physical_keycode
+		if wake_key != KEY_NONE and wake_key == event.physical_keycode:
+			if not event.pressed:
+				wake_key = KEY_NONE
+			return true
+	elif event is InputEventScreenTouch:
+		# On Web the emulated left button can arrive before its source touch.
+		if event.pressed and (waking or wake_emulated_mouse) and wake_touch < 0:
+			wake_touch = event.index
+		if event.index == wake_touch:
+			if not event.pressed or event.canceled:
+				wake_touch = -1
+			return true
+	elif event is InputEventScreenDrag:
+		return waking or event.index == wake_touch
+	elif event is InputEventMouseButton and event.device == InputEvent.DEVICE_ID_EMULATION:
+		var consume := waking or wake_emulated_mouse or wake_touch >= 0
+		wake_emulated_mouse = consume and event.pressed and not event.canceled
+		return consume
+	elif event is InputEventMouseButton:
+		if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN,
+				MOUSE_BUTTON_WHEEL_LEFT, MOUSE_BUTTON_WHEEL_RIGHT]:
+			return waking
+		if waking and event.pressed:
+			wake_mouse_button = event.button_index
+		if wake_mouse_button == event.button_index:
+			if not event.pressed or event.canceled:
+				wake_mouse_button = MOUSE_BUTTON_NONE
+			return true
+	return waking
+
+
 func _input(event: InputEvent) -> void:
 	if sound != null and ((event is InputEventMouseButton and event.pressed) or
 		(event is InputEventScreenTouch and event.pressed) or (event is InputEventKey and event.pressed)):
 		sound.unlock()
+	if screen == "menu" and _menu_input(event):
+		get_viewport().set_input_as_handled()
+		return
 	if screen == "paused" and event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
 		_show_screen("playing")
 		get_viewport().set_input_as_handled()
@@ -905,6 +985,8 @@ func _update_crush_view() -> void:
 func _process(delta: float) -> void:
 	if world == null:
 		return
+	if screen == "menu":
+		_update_menu_idle()
 	var slide_moving := _advance_demo(delta)
 	if screen == "playing" and not (qa_enabled and (qa_hero_pose or qa_animation_held)):
 		slide_moving = _advance_game(delta)
@@ -926,6 +1008,7 @@ func _notification(what: int) -> void:
 		slide_focused = true
 	elif what in [NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_WINDOW_FOCUS_OUT] and is_inside_tree():
 		slide_focused = false
+		_clear_wake_input()
 		if screen == "playing":
 			_pause()
 		else:
@@ -1084,7 +1167,7 @@ func _panel_snapshot() -> Dictionary:
 				"text": str(control.text) if control is Label or control is Button else "",
 				"alignment": control.horizontal_alignment if control is Label else -1,
 				"font_size": control.get_theme_font_size("font_size") if control is Label else 0,
-				"styles": _button_style_snapshot(control),
+				"opacity": control.modulate.a, "styles": _button_style_snapshot(control),
 				"focusable": control.focus_mode == Control.FOCUS_ALL})
 	var focused := get_viewport().gui_get_focus_owner()
 	return {"rect": [rect.position.x, rect.position.y, rect.size.x, rect.size.y], "items": items,

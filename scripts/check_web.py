@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import sys
 import threading
+import time
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
 from PIL import Image, ImageChops, ImageStat
 
@@ -21,6 +22,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 group = parser.add_mutually_exclusive_group()
 group.add_argument('--workshop-only', action='store_true', help='Capture and validate the workshop visual slice')
 group.add_argument('--sprites-only', action='store_true', help='Run only frozen-pose rendered sprite regressions')
+group.add_argument('--menu-idle-only', action='store_true', help='Check the real menu idle timeout and wake gestures')
 group.add_argument('--ui-only', action='store_true', help='Run demo isolation and vibration UI regressions only')
 group.add_argument('--game-over-only', action='store_true', help='Run score-only result screen regressions and capture screenshots')
 group.add_argument('--statistics-only', action='store_true', help='Check Statistics and capture its rendered overview and history')
@@ -3175,6 +3177,69 @@ def workshop_screens(browser):
     return checks
 
 
+def wait_for_menu_fade(page):
+    """Sample the real rendered controls across the production idle timeout."""
+    initial = state(page)
+    started = time.monotonic()
+    buttons = [item for item in initial['panel']['items'] if item['kind'] == 'Button']
+    title, = [item for item in initial['panel']['items'] if item['kind'] == 'Label']
+    assert title['text'] == 'Stack Attack' and title['opacity'] == 1
+    assert len(buttons) == 3 and all(item['opacity'] == 1 for item in buttons)
+    fading = page.wait_for_function("""() => {
+        const s = window.stackAttackState;
+        return s.panel.items.some(i => i.kind === 'Button' && i.opacity < 1) && s;
+    }""", timeout=34000).json_value()
+    elapsed = time.monotonic() - started
+    assert 29.5 < elapsed < 32, ('idle timeout', elapsed)
+    assert all(0 < item['opacity'] < 1 for item in fading['panel']['items'] if item['kind'] == 'Button')
+    page.wait_for_function("""() => window.stackAttackState.panel.items.every(
+        item => item.kind !== 'Button' || item.opacity === 0)""", timeout=2000)
+    hidden = state(page)
+    assert hidden['panel']['items'][0] == title and hidden['buttons'] == initial['buttons']
+    page.wait_for_timeout(600)
+    assert initial['demo']['ticks'] < fading['demo']['ticks'] < hidden['demo']['ticks'] < state(page)['demo']['ticks']
+    return round(elapsed, 2)
+
+
+def menu_idle_checks(browser):
+    for layout, width, height in [('portrait', 390, 844), ('landscape', 844, 390)]:
+        context = browser.new_context(viewport={'width': width, 'height': height}, has_touch=True)
+        page = context.new_page()
+        page.goto(URL)
+        wait_screen(page, 'menu')
+        initial = state(page)
+        assert initial['layout'] == layout and initial['panel']['focus'] == 'play'
+        x, y = point(page, initial['buttons']['play'])
+        page.mouse.move(5, 5)
+        elapsed = [wait_for_menu_fade(page)]
+        hidden_ticks = state(page)['demo']['ticks']
+        if layout == 'portrait':
+            page.touchscreen.tap(x, y)
+        else:
+            page.mouse.move(x, y)
+            page.wait_for_timeout(200)
+            moved = state(page)
+            assert moved['panel']['focus'] == 'play' and moved['demo']['ticks'] > hidden_ticks
+            elapsed.append(wait_for_menu_fade(page))
+            hidden_ticks = state(page)['demo']['ticks']
+            page.keyboard.down('Enter')
+            page.keyboard.down('Enter')  # browser auto-repeat
+            page.keyboard.up('Enter')
+        page.wait_for_timeout(350)
+        awake = state(page)
+        assert awake['screen'] == 'menu' and awake['session'] == initial['session']
+        assert all(item['opacity'] == 1 for item in awake['panel']['items'])
+        assert awake['demo']['ticks'] > hidden_ticks
+        if layout == 'portrait':
+            page.touchscreen.tap(x, y)
+        else:
+            page.keyboard.press('Enter')
+        wait_screen(page, 'playing')
+        assert state(page)['session'] == initial['session'] + 1
+        print('MENU_IDLE', layout, elapsed, 'PASS', flush=True)
+        context.close()
+
+
 def menu_layouts(browser):
     context = browser.new_context(viewport={'width':390, 'height':844}, has_touch=True, device_scale_factor=1)
     page = context.new_page()
@@ -3243,6 +3308,11 @@ try:
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         full_check = not any(vars(args).values())
+        if args.menu_idle_only or full_check:
+            menu_idle_checks(browser)
+        if args.menu_idle_only:
+            browser.close()
+            raise SystemExit(0)
         ground = ground_checks(browser, record=args.loot_only) if args.loot_only or full_check else {}
         if ground:
             print('GROUND', json.dumps(ground), flush=True)

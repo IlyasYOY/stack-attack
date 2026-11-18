@@ -1583,6 +1583,26 @@ func vibration_toggle() -> void:
 	DirAccess.remove_absolute(path)
 
 
+func check_idle_menu(app) -> void:
+	var demo_model = app.demo.model
+	app.menu_last_input_ms = Time.get_ticks_msec() - app.MENU_IDLE_MS - app.MENU_FADE_MS
+	app._update_menu_idle()
+	check(app.buttons.play.modulate.a == 0.0, "Idle must fade the menu buttons fully")
+	app._resize()
+	check(app.buttons.play.modulate.a == 0.0 and app.world.model == demo_model,
+		"Relayout must preserve the hidden buttons and the running demo")
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	check(app._menu_input(click) and app.buttons.play.modulate.a == 1.0,
+		"An idle click must wake the menu before GUI dispatch")
+	click.pressed = false
+	check(app._menu_input(click), "The release from the waking click must also be consumed")
+	click.pressed = true
+	check(not app._menu_input(click) and app.world.model == demo_model,
+		"The next click must reach the GUI with the same background model")
+
+
 func app_flow() -> void:
 	check(ProjectSettings.get_setting("application/config/name") == "Stack Attack · Ночная смена", "Visual changes must preserve the existing user data namespace")
 	var path := "user://test-match-flow-%d.json" % Time.get_ticks_usec()
@@ -1594,6 +1614,7 @@ func app_flow() -> void:
 	app.sound.apply_volumes()
 	check(app.sound.music_player.stream.loop_mode == AudioStreamWAV.LOOP_FORWARD and app.sound.music_player.stream.loop_end > 300000, "Music must loop over decoded frames on every platform")
 	check(app.screen == "menu" and app.buttons.has("play") and app.buttons.has("settings") and app.buttons.has("statistics"), "Main menu must offer the agreed screens")
+	check_idle_menu(app)
 	var art_model = app.world.model
 	var art_snapshot := [art_model.player, art_model.score, art_model.crates.duplicate(true), art_model._rng.state, art_model.ticks]
 	for boots in [false, true]:
