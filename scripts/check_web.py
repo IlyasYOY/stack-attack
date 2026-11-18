@@ -324,7 +324,9 @@ def sprite_comparison(browser, check):
 def sprite_poses(browser):
     checks = []
     failures = []
-    marker = Image.open(ROOT / 'art/hero_idle.png').convert('RGB').getpixel((9, 23))
+    # Sample all three scarf colours. At small nearest-neighbour scales the middle stripe can vanish.
+    with Image.open(ROOT / 'art/hero_idle.png') as idle:
+        scarf = {idle.getpixel((x, 22))[:3] for x in (8, 9, 10)}
     frame_width, frame_height = HERO_FRAME_SIZE
     alpha = {}
     with Image.open(ROOT / 'art/hero_rocket_boots.png') as atlas:
@@ -339,7 +341,7 @@ def sprite_poses(browser):
                 alpha[label] = {'canvas':image.size, 'used':image.getbbox()}
                 assert image.size == HERO_FRAME_SIZE and image.getpixel((0,0))[3] == 0, (
                     'Workshop sprite canvas/padding changed; recheck reflection axis', label)
-                band = [x for y in (23,24) for x in range(image.width) if image.getpixel((x,y)) == (*marker,255)]
+                band = [x for y in range(22, 26) for x in range(image.width) if image.getpixel((x,y))[:3] in scarf]
                 assert band and (min(band)+max(band)+1)/2 == image.width/2, 'Torso band is not centered in the sprite canvas'
     for dimensions in [(390,844), (844,390)]:
         context = browser.new_context(viewport={'width':dimensions[0], 'height':dimensions[1]}, device_scale_factor=1)
@@ -368,12 +370,15 @@ def sprite_poses(browser):
                     px, py = snapshot['player']
                     left, top = round((fx+(px-.5)*cell)*scale), round((fy+(py-.1)*cell)*scale)
                     right, bottom = round((fx+(px+1.5)*cell)*scale), round((fy+(py+1)*cell)*scale)
-                    points = [(x,y) for y in range(top,bottom) for x in range(left,right) if image.getpixel((x,y)) == marker]
+                    points = [(x,y) for y in range(top,bottom) for x in range(left,right) if image.getpixel((x,y)) in scarf]
                     assert points, ('Torso marker was not rendered', dimensions, pose, facing)
                     xs, ys = zip(*points)
                     center = (min(xs)+max(xs)+1)/2
                     expected_center = (fx+(px+snapshot['player_size'][0]/2)*cell)*scale
                     crop_hash = hashlib.sha256(image.crop((left,top,right,bottom)).tobytes()).hexdigest()
+                    bx, by, bw, bh = snapshot['equipment_body']
+                    body_crop = image.crop(tuple(round(v * scale) for v in (bx, by, bx + bw, by + bh)))
+                    body_hash = hashlib.sha256(body_crop.tobytes()).hexdigest()
                     red = check_hero_hand(image, snapshot, snapshot['player'], facing)
                     feet = hero_sprite_crop(image, snapshot, snapshot['player'], facing, (0, 32, 32, 48))
                     rocket_pixels = color_pixels(feet, ROCKET_BOOT_COLORS)
@@ -381,7 +386,7 @@ def sprite_poses(browser):
                         'Rocket boots did not render at the feet as expected', dimensions, pose, facing, equipped, rocket_pixels)
                     poses.append({'pose':pose,'boots_equipped':equipped,'magnet_pixels':red,'rocket_boot_pixels':rocket_pixels,
                                   'facing':facing,'frame':frame,'player':snapshot['player'],
-                                  'torso_center_x':center,'marker_bounds':[min(xs),min(ys),max(xs)+1,max(ys)+1],
+                                  'torso_center_x':center,'body_sha256':body_hash,'marker_bounds':[min(xs),min(ys),max(xs)+1,max(ys)+1],
                                   'expected_center_x':expected_center,'crop_sha256':crop_hash,'crop_bounds':[left,top,right,bottom],
                                   'screenshot':str(path.relative_to(ROOT))})
                     assert abs(center-expected_center) <= max(1,cell*scale/24), ('Torso is not centered on the collision body', dimensions, pose, facing, center, expected_center)
@@ -398,6 +403,8 @@ def sprite_poses(browser):
             for equipped in (True, False):
                 samples = {sample['pose']:sample for sample in poses
                            if sample['facing'] == facing and sample['boots_equipped'] == equipped}
+                assert len({samples[pose]['body_sha256'] for pose in ('idle', 'walk_stride', 'jump', 'push')}) == 4
+                assert samples['idle']['body_sha256'] == samples['walk_recover']['body_sha256']
                 assert samples['idle']['crop_sha256'] != samples['walk_stride']['crop_sha256'], 'Walking did not render its second animation frame'
                 assert samples['idle']['crop_sha256'] == samples['walk_recover']['crop_sha256'], 'Walking recovery did not return to the centered idle frame'
         assert not errors, errors

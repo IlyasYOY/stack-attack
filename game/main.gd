@@ -909,6 +909,7 @@ func _publish_qa() -> void:
 		var trolley := world.crane_trolley_center(index)
 		trolleys.append([trolley.x, trolley.y])
 	var rail := world.crane_rail
+	var body := world.equipment_body
 	var status := {"ready": true, "screen": screen, "score": model.score,
 		"lines": model.lines, "cleared_crates": model.cleared_crates, "broken_crates": model.broken_crates,
 		"loss_reason": model.loss_reason,
@@ -951,6 +952,7 @@ func _publish_qa() -> void:
 		"player_velocity": [model.player_velocity.x, model.player_velocity.y],
 		"player_size": [TUNING.player_width, TUNING.player_height],
 		"facing": model.facing, "hero_pose": qa_hero_pose, "hero_frame": world.hero_frame(),
+		"equipment_body": [body.position.x, body.position.y, body.size.x, body.size.y],
 		"columns": model.tuning.columns, "rows": model.tuning.rows, "crates": model.crates.size(), "first_crate_x": model.crates[0].x if not model.crates.is_empty() else -1,
 		"layout": "landscape" if size.x > size.y else "portrait", "viewport": [size.x, size.y],
 		"field": [world.field.position.x, world.field.position.y, world.field.size.x, world.field.size.y], "visible_crates": visible_crates,
