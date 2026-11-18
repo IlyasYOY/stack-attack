@@ -28,8 +28,9 @@ group.add_argument('--cranes-only', action='store_true', help='Check crane passe
 group.add_argument('--crates-only', action='store_true', help='Check ten rendered wooden crate appearances and their lifetime')
 group.add_argument('--animations-only', action='store_true', help='Check row clear and crush transitions and capture their rendered phases')
 group.add_argument('--keyboard-only', action='store_true', help='Check jump keys and menu keyboard isolation')
+group.add_argument('--loot-only', action='store_true', help='Record deterministic ground loot, impacts and swaps')
 group.add_argument('--bonuses-only', action='store_true', help='Check expanded equipment in combination')
-group.add_argument('--boots-only', action='store_true', help='Check equipment offers, air jumps and responsive boots UI')
+group.add_argument('--boots-only', action='store_true', help='Check ground pickups, air jumps and responsive boots UI')
 group.add_argument('--helmet-only', action='store_true', help='Check helmet contacts, recovery, rewards and layouts')
 group.add_argument('--mallet-only', action='store_true', help='Check wooden mallet inputs, equipment, physics and statistics')
 group.add_argument('--gloves-only', action='store_true', help='Check hold-to-pull controls, charges and rewards')
@@ -323,7 +324,9 @@ def sprite_comparison(browser, check):
 def sprite_poses(browser):
     checks = []
     failures = []
-    marker = Image.open(ROOT / 'art/hero_idle.png').convert('RGB').getpixel((9, 23))
+    # Sample all three scarf colours. At small nearest-neighbour scales the middle stripe can vanish.
+    with Image.open(ROOT / 'art/hero_idle.png') as idle:
+        scarf = {idle.getpixel((x, 22))[:3] for x in (8, 9, 10)}
     frame_width, frame_height = HERO_FRAME_SIZE
     alpha = {}
     with Image.open(ROOT / 'art/hero_rocket_boots.png') as atlas:
@@ -338,7 +341,7 @@ def sprite_poses(browser):
                 alpha[label] = {'canvas':image.size, 'used':image.getbbox()}
                 assert image.size == HERO_FRAME_SIZE and image.getpixel((0,0))[3] == 0, (
                     'Workshop sprite canvas/padding changed; recheck reflection axis', label)
-                band = [x for y in (23,24) for x in range(image.width) if image.getpixel((x,y)) == (*marker,255)]
+                band = [x for y in range(22, 26) for x in range(image.width) if image.getpixel((x,y))[:3] in scarf]
                 assert band and (min(band)+max(band)+1)/2 == image.width/2, 'Torso band is not centered in the sprite canvas'
     for dimensions in [(390,844), (844,390)]:
         context = browser.new_context(viewport={'width':dimensions[0], 'height':dimensions[1]}, device_scale_factor=1)
@@ -367,12 +370,15 @@ def sprite_poses(browser):
                     px, py = snapshot['player']
                     left, top = round((fx+(px-.5)*cell)*scale), round((fy+(py-.1)*cell)*scale)
                     right, bottom = round((fx+(px+1.5)*cell)*scale), round((fy+(py+1)*cell)*scale)
-                    points = [(x,y) for y in range(top,bottom) for x in range(left,right) if image.getpixel((x,y)) == marker]
+                    points = [(x,y) for y in range(top,bottom) for x in range(left,right) if image.getpixel((x,y)) in scarf]
                     assert points, ('Torso marker was not rendered', dimensions, pose, facing)
                     xs, ys = zip(*points)
                     center = (min(xs)+max(xs)+1)/2
                     expected_center = (fx+(px+snapshot['player_size'][0]/2)*cell)*scale
                     crop_hash = hashlib.sha256(image.crop((left,top,right,bottom)).tobytes()).hexdigest()
+                    bx, by, bw, bh = snapshot['equipment_body']
+                    body_crop = image.crop(tuple(round(v * scale) for v in (bx, by, bx + bw, by + bh)))
+                    body_hash = hashlib.sha256(body_crop.tobytes()).hexdigest()
                     red = check_hero_hand(image, snapshot, snapshot['player'], facing)
                     feet = hero_sprite_crop(image, snapshot, snapshot['player'], facing, (0, 32, 32, 48))
                     rocket_pixels = color_pixels(feet, ROCKET_BOOT_COLORS)
@@ -380,7 +386,7 @@ def sprite_poses(browser):
                         'Rocket boots did not render at the feet as expected', dimensions, pose, facing, equipped, rocket_pixels)
                     poses.append({'pose':pose,'boots_equipped':equipped,'magnet_pixels':red,'rocket_boot_pixels':rocket_pixels,
                                   'facing':facing,'frame':frame,'player':snapshot['player'],
-                                  'torso_center_x':center,'marker_bounds':[min(xs),min(ys),max(xs)+1,max(ys)+1],
+                                  'torso_center_x':center,'body_sha256':body_hash,'marker_bounds':[min(xs),min(ys),max(xs)+1,max(ys)+1],
                                   'expected_center_x':expected_center,'crop_sha256':crop_hash,'crop_bounds':[left,top,right,bottom],
                                   'screenshot':str(path.relative_to(ROOT))})
                     assert abs(center-expected_center) <= max(1,cell*scale/24), ('Torso is not centered on the collision body', dimensions, pose, facing, center, expected_center)
@@ -397,6 +403,8 @@ def sprite_poses(browser):
             for equipped in (True, False):
                 samples = {sample['pose']:sample for sample in poses
                            if sample['facing'] == facing and sample['boots_equipped'] == equipped}
+                assert len({samples[pose]['body_sha256'] for pose in ('idle', 'walk_stride', 'jump', 'push')}) == 4
+                assert samples['idle']['body_sha256'] == samples['walk_recover']['body_sha256']
                 assert samples['idle']['crop_sha256'] != samples['walk_stride']['crop_sha256'], 'Walking did not render its second animation frame'
                 assert samples['idle']['crop_sha256'] == samples['walk_recover']['crop_sha256'], 'Walking recovery did not return to the centered idle frame'
         assert not errors, errors
@@ -425,7 +433,9 @@ def score_only_result(page):
               if max(abs(a-b) for a,b in zip(image.getpixel((px,py)),(215,164,90))) <= 5]
     assert points, 'Score text did not render'
     center = (min(p[0] for p in points)+max(p[0] for p in points)+1)/2
-    assert abs(center-image.width/2) <= max(3,scale*2), ('Score pixels are not centered',snapshot['score'],center,image.width/2)
+    panel_x, _, panel_width, _ = snapshot['panel']['rect']
+    expected = (panel_x + panel_width / 2) * scale
+    assert abs(center-expected) <= max(3,scale*2), ('Score pixels are not centered in the result panel',snapshot['score'],center,expected)
     return center
 
 
@@ -542,6 +552,22 @@ def uniform_action_buttons(browser, viewports=((390,844),(844,390),(768,1004))):
     return checks
 
 
+def equipment_screen_shot(page, name):
+    snapshot = state(page)
+    x, y, w, h = snapshot['equipment_body']
+    px, py, pw, ph = snapshot['panel']['rect']
+    fx, fy, fw, fh = snapshot['field']
+    axis = snapshot['viewport'][0] / 2
+    assert abs(fx + fw / 2 - axis) <= 1 and abs(px + pw / 2 - axis) <= 1, ('Off-center stage', name)
+    assert px + pw <= x or py + ph <= y or py >= y + h, ('Panel covers the equipment figure', name)
+    path = screenshot(page, name)
+    with Image.open(ROOT / path) as frame:
+        scale = frame.width / snapshot['viewport'][0]
+        figure = frame.convert('RGB').crop(tuple(round(v * scale) for v in (x, y, x + w, y + h)))
+    assert color_pixels(figure, menu_shaded_colors({(240, 186, 132)}), 1) > 0, ('Missing character pixels', name)
+    return path
+
+
 def game_over_screens(browser):
     checks = []
     for dimensions in [(390,844),(844,390),(768,1004)]:
@@ -551,22 +577,34 @@ def game_over_screens(browser):
         page.on('pageerror', lambda value: errors.append(str(value)))
         page.goto(URL)
         wait_screen(page, 'menu')
+        background = state(page)
+        geometry = {key: background[key] for key in ('field', 'crane_rail', 'equipment_body')}
+        shots = [equipment_screen_shot(page, f'body-menu-{dimensions[0]}x{dimensions[1]}.png')]
         button(page, 'play', True)
         wait_screen(page, 'playing')
         scenario(page, 'chain')
         page.wait_for_function('window.stackAttackState.score === 200 && window.stackAttackState.state === "playing"')
-        shots = []
         for reason, fixture in [('crushed','crush'),('overflow','overflow')]:
+            assert all(state(page)[key] == value for key, value in geometry.items())
+            # Collect actual items; surviving gear stays on the result screen.
+            for kind in ('strong_arms', 'spring_boots'):
+                pick_ground(page, kind)
+            if reason == 'overflow':
+                pick_ground(page, 'lamp_helmet')
             scenario(page, fixture)
             wait_screen(page, 'over')
             score_only_result(page)
             snapshot = state(page)
+            assert all(snapshot[key] == value for key, value in geometry.items())
+            assert snapshot['strong_arms_hud']['text'] == str(snapshot['strong_arms_charges'])
+            assert 'pickup' not in snapshot['buttons'] and 'pause' not in snapshot['buttons']
             assert snapshot['loss_reason'] == reason
             assert snapshot['lines'] == (2 if reason == 'crushed' else 0)
             fixed_panel(page)
-            shots.append(screenshot(page, f'game-over-{reason}-{dimensions[0]}x{dimensions[1]}.png'))
+            shots.append(equipment_screen_shot(page, f'game-over-{reason}-{dimensions[0]}x{dimensions[1]}.png'))
             button(page, 'again' if reason == 'crushed' else 'home', True)
             wait_screen(page, 'playing' if reason == 'crushed' else 'menu')
+        assert not state(page)['strong_arms_hud'], 'Menu kept the completed match equipment'
         centers = []
         for score in [0,200,100000000]:
             page.evaluate('value => window.stackAttackQARequest={scenario:"result_preview",score:value}', score)
@@ -1221,7 +1259,19 @@ def warm_pixels(image):
 def hero_height(image, snapshot):
     x, y = snapshot['player']
     region = field_crop(image, snapshot, x - .48, y - .15, 1.52, 1.05)
-    colors = {(240,186,132), (39,123,130), (94,169,163), (215,67,56), (241,187,131), (121,88,60)}
+    return sprite_pixel_height(region)
+
+
+def panel_hero_height(image, snapshot):
+    x, y, w, h = snapshot['equipment_body']
+    sx, sy = image.width / snapshot['viewport'][0], image.height / snapshot['viewport'][1]
+    return sprite_pixel_height(image.crop((round(x*sx), round(y*sy), round((x+w)*sx), round((y+h)*sy))))
+
+
+def sprite_pixel_height(region):
+    # Include the cap highlight and trousers that survive nearest-neighbour sampling at eight pixels per cell.
+    colors = {(240,186,132), (39,123,130), (94,169,163), (119,193,177), (164,156,132),
+              (215,67,56), (241,187,131), (121,88,60)}
     # The glove and boot strokes are still slightly translucent at the squash frame.
     rows = []
     for line in range(region.height):
@@ -1229,7 +1279,7 @@ def hero_height(image, snapshot):
         if any(max(abs(channel - target) for channel, target in zip(pixel, marker)) <= 5
                for pixel in scanline for marker in colors):
             rows.append(line)
-    assert rows, ('No workshop hero pixels found', image.size)
+    assert rows, ('No workshop hero pixels found', region.size)
     return max(rows) - min(rows) + 1
 
 
@@ -1351,7 +1401,9 @@ def clear_animation_check(page, dimensions, shots):
 def loss_animation_check(page, dimensions, shots):
     loaded = animation_request(page, 'crush', animation_hold=True)
     assert loaded['animation_held'] and loaded['state'] == 'playing'
-    standing_height = hero_height(animation_image(page, dimensions, shots), loaded)
+    standing_image = animation_image(page, dimensions, shots)
+    standing_height = hero_height(standing_image, loaded)
+    standing_panel = panel_hero_height(standing_image, loaded)
     for _ in range(24):
         hit = animation_step(page, 6)
         if hit['state'] == 'over':
@@ -1379,6 +1431,7 @@ def loss_animation_check(page, dimensions, shots):
     squash_image = animation_image(page, dimensions, shots, 'crush')
     squash_height = hero_height(squash_image, squash)
     assert squash_height < standing_height * .7, ('The hero sprite did not squash', dimensions, standing_height, squash_height)
+    assert panel_hero_height(squash_image, squash) < standing_panel * .5, ('Equipment portrait stayed upright at impact', dimensions)
     pause_animation_and_rotate(page, squash, dimensions)
 
     settled = animation_step(page, 17)
@@ -1389,7 +1442,9 @@ def loss_animation_check(page, dimensions, shots):
     impact_x = next(crate['x'] for crate in hit['visible_crates'] if crate['id'] == hit['crush_animation']['impact_crate'])
     for offset in (0, 1/3, 2/3):
         star = field_crop(settled_image, settled, impact_x + offset, settled['rows'] - 1.7, 1/3, .47)
-        assert warm_pixels(star) >= 3, ('A crush star did not render above the crate', dimensions, offset)
+        # Each rendered star occupies only two pixels on the smallest square board.
+        required_pixels = min(3, max(1, star.width * star.height // 6))
+        assert warm_pixels(star) >= required_pixels, ('A crush star did not render above the crate', dimensions, offset)
     animation_step(page, 0, animation_hold=False)
     wait_screen(page, 'over')
     result = state(page)
@@ -1406,7 +1461,7 @@ def loss_animation_check(page, dimensions, shots):
     animation_request(page, 'overflow', animation_hold=True)
     overflow = animation_step(page, 1)
     assert overflow['screen'] == overflow['state'] == 'over' and overflow['loss_reason'] == 'overflow'
-    assert not overflow['crush_animation']['active']
+    assert not overflow['crush_animation']['active'] and overflow['crush_animation']['progress'] < 0
     assert [match['reason'] for match in overflow['profile']['matches']] == ['overflow', 'crushed']
     assert overflow['profile']['matches'][1] == crushed
     lost_to_stack = overflow['profile']['matches'][0]
@@ -1499,32 +1554,20 @@ def keyboard_jump_checks(browser):
     return {'menu_isolation':'PASS', 'pause_isolation':'PASS', 'jump_rise_cells':jumps}
 
 
-def assert_boots(snapshot, equipped, charges, rows=0, pending=False):
-    expected = (equipped, charges, rows, pending)
-    actual = tuple(snapshot[key] for key in
-                   ('boots_equipped', 'boots_charges', 'equipment_rows', 'equipment_pending'))
-    assert actual == expected, ('Unexpected equipment state', snapshot['screen'], snapshot['lines'], actual, expected)
+def assert_boots(snapshot, equipped, charges):
+    assert (snapshot['boots_equipped'], snapshot['boots_charges']) == (equipped, charges)
 
 
-def clear_boots_rows(page, count, expect_offer):
-    before = state(page)
-    seeded = animation_request(page, 'boots_rows', count=count, animation_hold=True)
-    assert seeded['animation_held'] and seeded['lines'] == before['lines']
-    current = animation_step(page, 1)
-    assert current['lines'] == before['lines'] + 1 and current['state'] == 'clearing'
-    assert current['screen'] == 'playing', 'Equipment interrupted the clear animation'
-    for _ in range(count):
-        if current['state'] != 'clearing':
-            break
-        current = animation_step(page, 60)
-    assert current['lines'] == before['lines'] + count, 'Equipment interrupted a combo'
-    assert current['score'] == before['score'] + 100 * count and current['state'] == 'playing'
-    assert current['clear_animation']['phase'] == 'none'
-    assert current['screen'] == ('equipment' if expect_offer else 'playing')
-    if expect_offer:
-        wait_screen(page, 'equipment')
-    return state(page)
-
+def pick_ground(page, kind, touch=True, charges=-1):
+    board = animation_request(page, 'ground_board', items=[[kind, 4.7, 11, charges]], animation_hold=True)
+    assert board['nearest_item']['kind'] == kind and 'pickup' in board['buttons']
+    if touch:
+        button(page, 'pickup', True)
+    else:
+        page.keyboard.press('KeyE')
+    result = animation_step(page, 0)
+    assert result[kind + '_charges'] == board['nearest_item']['charges'], (kind, result['nearest_item'])
+    return result
 
 def check_boots_rect(snapshot, rect):
     width, height = snapshot['viewport']
@@ -1550,8 +1593,6 @@ def check_boots_panel(snapshot, actions):
                     'Equipment actions overlap', item)
             button_rects.append(item['rect'])
     labels = {item['name']: item['text'] for item in panel['items']}
-    if 'equip' in actions:
-        assert labels['equipment_title'] == 'Ботинки-ракеты' and snapshot['missing_menu_glyphs'] == '', labels
     return labels
 
 
@@ -1563,7 +1604,9 @@ def check_boots_hud(snapshot, charges):
     assert hud['text'] == str(charges), ('Incorrect charge counter', hud, charges)
     check_boots_rect(snapshot, hud['rect'])
     if 'pause' in snapshot['buttons']:
-        assert hud['rect'][0] + hud['rect'][2] <= snapshot['buttons']['pause'][0], (
+        x, y, w, h = hud['rect']
+        px, py, pw, ph = snapshot['buttons']['pause']
+        assert x + w <= px or px + pw <= x or y + h <= py or py + ph <= y, (
             'Boots HUD overlaps pause', hud, snapshot['buttons']['pause'])
 
 
@@ -1606,15 +1649,6 @@ def check_boots_exhaust(image, snapshot, emitting):
             'Incorrect rocket exhaust at the jump nozzle', snapshot['viewport'], snapshot['facing'], nozzle_x, core, flame)
 
 
-def select_boots_action(page, action, touch):
-    if touch:
-        button(page, action, True)
-    else:
-        focus_button(page, action)
-        page.keyboard.press('Enter')
-    wait_screen(page, 'playing')
-    return state(page)
-
 
 def press_boots_jump(page, touch):
     if touch:
@@ -1653,21 +1687,20 @@ def hold_boots_jump(page, touch):
 def use_air_jump(page, touch, shots, *, held=False, capture=False):
     before = state(page)
     charges = before['boots_charges']
-    rows = before['equipment_rows']
     assert before['grounded'] and charges > 0
     if held:
         first = hold_boots_jump(page, touch)
     else:
         press_boots_jump(page, touch)
         first = animation_step(page, 34)
-    assert_boots(first, True, charges, rows)
+    assert_boots(first, True, charges)
     assert not first['grounded'] and first['player'][1] < before['player'][1] - .5
     if capture:
         shot = boots_shot(page, 'first-jump' if charges > 1 else 'last-first-jump', shots)
         check_boots_exhaust(Image.open(ROOT / shot).convert('RGB'), first, False)
     press_boots_jump(page, touch)
     boosted = animation_step(page, 1)
-    assert_boots(boosted, True, charges - 1, rows)
+    assert_boots(boosted, True, charges - 1)
     assert not boosted['grounded'] and boosted['player_velocity'][1] < first['player_velocity'][1] - 2
     check_boots_hud(boosted, charges - 1)
     if capture:
@@ -1681,7 +1714,7 @@ def use_air_jump(page, touch, shots, *, held=False, capture=False):
             rotated = resize_boots_view(page, original[::-1])
             assert_frozen_animation(airborne, rotated)
             assert rotated['player_velocity'] == airborne['player_velocity']
-            assert_boots(rotated, True, 0, rows)
+            assert_boots(rotated, True, 0)
             check_touch_control_layout(rotated)
             check_boots_hud(rotated, 0)
             shot = boots_shot(page, phase, shots)
@@ -1690,18 +1723,18 @@ def use_air_jump(page, touch, shots, *, held=False, capture=False):
     if charges == 1:
         press_boots_jump(page, touch)
     again = animation_step(page, 1)
-    assert_boots(again, True, charges - 1, rows)
+    assert_boots(again, True, charges - 1)
     assert again['player_velocity'][1] > boosted['player_velocity'][1], 'Unexpected thrust with no new usable press'
     if charges == 1:
         descending = animation_step(page, 48)
         assert not descending['grounded'] and descending['player_velocity'][1] > 0
-        assert_boots(descending, True, 0, rows)
+        assert_boots(descending, True, 0)
         check_boots_hud(descending, 0)
         if capture:
             check_boots_exhaust(Image.open(io.BytesIO(page.screenshot())).convert('RGB'), descending, False)
     landed = animation_step(page, 180)
     assert landed['grounded'] and landed['player'] == [first['player'][0], before['player'][1]]
-    assert_boots(landed, charges > 1, charges - 1, rows)
+    assert_boots(landed, charges > 1, charges - 1)
     check_boots_hud(landed, charges - 1 if charges > 1 else None)
     if capture and charges == 1:
         boots_shot(page, 'last-landing', shots)
@@ -1724,38 +1757,188 @@ def open_boots_game(browser, dimensions, errors):
     return context, page
 
 
+def body_slot_checks(page, shots):
+    loadout = {'head': 'helmet', 'hands': 'strong_arms', 'feet': 'spring_boots'}
+    candidates = {'head': 'lamp_helmet', 'hands': 'mallet', 'feet': 'boots'}
+    stacks = [[x, 10 - level, 0] for x, height in [(0, 3), (1, 2), (2, 1), (7, 1), (8, 2), (9, 1)]
+              for level in range(height)]
+    set_bonus_board(page, loadout)
+    for dimensions in [(320, 568), (844, 390), (360, 360)]:
+        resize_boots_view(page, dimensions)
+        for slot, kind in candidates.items():
+            snapshot = animation_request(page, 'ground_board', items=[[kind, 4.85, 11, 2]],
+                                         player=[4.2, 10.12], crates=stacks, animation_hold=True)
+            check_touch_control_layout(snapshot)
+            field_x, field_y, field_w, field_h = snapshot['field']
+            _, _, body_w, body_h = snapshot['equipment_body']
+            assert 32 <= body_w <= 64 and body_h <= max(48, field_h * .25)
+            badges = [snapshot[item + '_hud']['rect'] for item in loadout.values()]
+            bx, by, bw, bh = snapshot['equipment_body']
+            if by >= field_y + field_h:
+                assert all(a[0] + a[2] < b[0] for a, b in zip(badges, badges[1:]))
+                assert all(by <= y + h and y >= field_y + field_h and x + w < bx for x, y, w, h in badges)
+                assert by + bh < min(r[1] for r in snapshot['controls'].values())
+            else:
+                assert field_x + field_w < badges[0][0]
+                assert all(a[1] + a[3] < b[1] for a, b in zip(badges, badges[1:]))
+            assert all(y > field_y + field_h for _, y, _, _ in snapshot['controls'].values())
+            pickup = snapshot['buttons']['pickup']
+            x, y, w, h = pickup
+            check_boots_rect(snapshot, pickup)
+            assert w >= 48 and h >= 48
+            badge_x, badge_y, badge_w, badge_h = snapshot[loadout[slot] + '_hud']['rect']
+            assert badge_x + badge_w <= x
+            assert abs(y + h / 2 - badge_y - badge_h / 2) < 2
+            assert snapshot['nearest_item']['charges'] == 2
+            if dimensions[0] != dimensions[1]:
+                shots.append(screenshot(page, f'body-{slot}-{dimensions[0]}x{dimensions[1]}.png'))
+            button(page, 'pickup', touch=True)
+            exchanged = animation_step(page, 0)
+            assert exchanged[kind + '_hud']['text'] == '2'
+            page.keyboard.press('KeyE')
+            assert animation_step(page, 0)['nearest_item']['kind'] == kind
+    set_bonus_board(page, {})
+
+
+def ground_checks(browser, record=False):
+    errors, shots = [], []
+    context, page = open_boots_game(browser, (600, 960), errors)
+    try:
+        body_slot_checks(page, shots)
+        resize_boots_view(page, (600, 960))
+        kinds = ('helmet', 'lamp_helmet', 'gloves', 'mallet', 'strong_arms', 'speed_boots', 'boots', 'spring_boots')
+        items = [[kind, index + 1.5, 11, -1] for index, kind in enumerate(kinds)]
+        board = animation_request(page, 'ground_board', items=items, player=[0.05, 10.12], animation_hold=True)
+        assert len(board['ground_items']) == 8 and not board['nearest_item']
+        shots.append(screenshot(page, 'ground-eight-items.png'))
+
+        if record:
+            page.evaluate("""() => {
+                const stream = document.querySelector('canvas').captureStream(30);
+                const recorder = new MediaRecorder(stream, {mimeType:'video/webm;codecs=vp8'});
+                const chunks = [];
+                recorder.ondataavailable = event => chunks.push(event.data);
+                window.finishLootVideo = () => new Promise(resolve => {
+                    recorder.onstop = () => {
+                        stream.getTracks().forEach(track => track.stop());
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result.split(',')[1]);
+                        reader.readAsDataURL(new Blob(chunks, {type:'video/webm'}));
+                    };
+                    recorder.stop();
+                });
+                recorder.start();
+            }""")
+            page.wait_for_timeout(800)
+
+        # Seed 2 makes the real destruction rolls for this row yield three distinct items.
+        row = [[column, 10, 0] for column in range(10)]
+        animation_request(page, 'ground_board', player=[7.0, 9.12], crates=row, seed=2, animation_hold=True)
+        clearing = animation_step(page, 1)
+        assert clearing['state'] == 'clearing'
+        if record:
+            page.wait_for_timeout(350)
+        released = animation_step(page, 18)
+        for _ in range(24):
+            if released['ground_items']:
+                break
+            released = animation_step(page, 1)
+        assert [item['kind'] for item in released['ground_items']] == ['gloves', 'mallet', 'strong_arms']
+        assert all(item['vy'] < 0 for item in released['ground_items'])
+        animation_step(page, 7)
+        shots.append(screenshot(page, 'ground-row-drop.png'))
+        animation_step(page, 0, animation_hold=False)
+        page.wait_for_function("window.stackAttackState.ground_items.every(i => i.bounced && i.y === 11 && i.vy === 0)")
+        settled = animation_step(page, 0, animation_hold=True)
+        assert settled['lines'] == 1 and settled['cleared_crates'] == 10 and settled['mallet_charges'] == 0
+        page.keyboard.press('KeyE')
+        assert animation_step(page, 0)['mallet_charges'] == 3
+
+        # Four real impacts on a five-charge helmet. Seed 14 keeps this shot free of extra loot.
+        crates = [[4, 3 + i * 1.5, 0] for i in range(4)]
+        animation_request(page, 'ground_board', player=[3, 10.12], crates=crates,
+                          items=[['helmet', 4.5, 11, 5]], seed=14, animation_hold=True)
+        animation_step(page, 0, animation_hold=False)
+        page.wait_for_function("window.stackAttackState.broken_crates === 4")
+        damaged = animation_step(page, 0, animation_hold=True)
+        assert damaged['ground_items'][0]['charges'] == 1 and 'pickup' not in damaged['buttons']
+        page.keyboard.down('ArrowRight')
+        try:
+            nearby = animation_step(page, 24)
+        finally:
+            page.keyboard.up('ArrowRight')
+        assert nearby['nearest_item']['charges'] == 1 and nearby['helmet_charges'] == 0
+        shots.append(screenshot(page, 'ground-helmet-one.png'))
+        if record:
+            page.wait_for_timeout(750)
+        page.keyboard.press('KeyE')
+        assert animation_step(page, 0)['helmet_charges'] == 1
+
+        staged = animation_request(page, 'ground_board', player=[4, 10.12],
+                                   items=[['lamp_helmet', 4.7, 11, 2]], animation_hold=True)
+        assert staged['nearest_item']['kind'] == 'lamp_helmet'
+        page.keyboard.down('KeyE')
+        try:
+            swapped = animation_step(page, 1)
+            assert swapped['lamp_helmet_charges'] == 2 and swapped['nearest_item']['charges'] == 1
+            page.keyboard.down('KeyE')
+            held = animation_step(page, 16)
+            assert held['ground_items'] == swapped['ground_items'] and held['lamp_helmet_equipped']
+        finally:
+            page.keyboard.up('KeyE')
+        shots.append(screenshot(page, 'ground-swapped.png'))
+        if record:
+            page.wait_for_timeout(750)
+        button(page, 'pickup', True)
+        returned = animation_step(page, 0)
+        assert returned['helmet_charges'] == 1 and returned['nearest_item']['kind'] == 'lamp_helmet'
+        assert returned['nearest_item']['x'] == staged['nearest_item']['x']
+        page.keyboard.down('ArrowLeft')
+        try:
+            away = animation_step(page, 48)
+        finally:
+            page.keyboard.up('ArrowLeft')
+        assert not away['nearest_item'] and 'pickup' not in away['buttons']
+        # Exchange the last helmet charge, then pull a crate onto that same item.
+        set_bonus_board(page, {'head': 'helmet', 'hands': 'gloves'}, charges={'helmet': 1})
+        px = 4 - state(page)['player_size'][0] - 0.05
+        side = animation_request(page, 'ground_board', player=[px, 10.12], facing=1, crates=[[4, 10, 0]],
+                                 items=[['lamp_helmet', 3.5, 11, 0]], seed=14, animation_hold=True)
+        page.keyboard.press('KeyE')
+        discarded = animation_step(page, 0)
+        assert discarded['nearest_item']['kind'] == 'helmet' and discarded['nearest_item']['charges'] == 1
+        shots.append(screenshot(page, 'ground-side-before.png'))
+        if record:
+            page.wait_for_timeout(650)
+        page.keyboard.down('KeyG')
+        try:
+            impact = animation_step(page, 20)
+        finally:
+            page.keyboard.up('KeyG')
+        assert impact['broken_crates'] == side['broken_crates'] + 1 and impact['lines'] == side['lines']
+        assert not impact['visible_crates'] and not impact['ground_items'] and impact['lamp_helmet_equipped']
+        shots.append(screenshot(page, 'ground-side-after.png'))
+        if record:
+            page.wait_for_timeout(700)
+            video = page.evaluate('window.finishLootVideo()')
+            (SHOTS / 'ground-scenarios.webm').write_bytes(base64.b64decode(video))
+    finally:
+        context.close()
+    assert not errors, errors
+    return {'seeded_row_drops':3, 'helmet_impacts':4, 'keyboard_repeat_and_touch_swap':'PASS', 'screenshots':shots}
+
+
 def boots_checks(browser):
     portrait, landscape = (390, 844), (844, 390)
     shots, errors = [], []
     context, page = open_boots_game(browser, portrait, errors)
     initial_stats = personal_statistics(state(page))
-    assert_boots(clear_boots_rows(page, 4, False), False, 0, 4)
-    choice = clear_boots_rows(page, 2, True)
-    assert_boots(choice, False, 0, 1, True)
-    check_equipment_choice(choice, 'boots', 'helmet', 'gloves', 'mallet')
-    boots_shot(page, 'choice', shots)
-    animation_step(page, 0, animation_hold=False)
-    page.keyboard.press('ArrowRight')
-    page.keyboard.press('ArrowUp')
-    still_open = animation_step(page, 0)
-    assert still_open['screen'] == 'equipment' and not still_open['jump_pending']
-    assert_frozen_animation(choice, still_open)
-    rotated = resize_boots_view(page, landscape)
-    assert_frozen_animation(choice, rotated)
-    assert_boots(rotated, False, 0, 1, True)
-    assert not rotated['jump_pending']
-    check_equipment_choice(rotated, 'boots', 'helmet', 'gloves', 'mallet')
-    boots_shot(page, 'choice', shots)
-    animation_step(page, 0, animation_hold=True)
-    equipped = select_boots_action(page, 'equip', False)
-    assert_boots(equipped, True, 10, 1)
+    equipped = pick_ground(page, 'boots', False)
+    assert_boots(equipped, True, 10)
     check_boots_hud(equipped, 10)
     check_touch_control_layout(equipped)
     boots_shot(page, 'hud', shots)
 
-    assert_boots(clear_boots_rows(page, 4, True), True, 10, pending=True)
-    check_equipment_choice(state(page), 'helmet', 'gloves', 'mallet')
-    assert_boots(select_boots_action(page, 'skip', True), True, 10)
     animation_request(page, 'boots_jump', animation_hold=True)
     animation_step(page, 1)
     use_air_jump(page, False, shots, held=True, capture=True)
@@ -1779,18 +1962,10 @@ def boots_checks(browser):
     assert_frozen_animation(before_pause, state(page))
     boots_shot(page, 'hud', shots)
 
-    offered = clear_boots_rows(page, 5, True)
-    assert_boots(offered, True, 7, pending=True)
-    labels = check_equipment_choice(offered, 'boots', 'helmet', 'gloves', 'mallet')
-    assert labels['equipment_old_charges'] == '7' and labels['equipment_new_charges'] == '10', labels
-    boots_shot(page, 'replacement', shots)
-    assert_boots(select_boots_action(page, 'skip', True), True, 7)
-    offered = clear_boots_rows(page, 5, True)
-    assert_boots(offered, True, 7, pending=True)
-    offered = resize_boots_view(page, landscape)
-    check_equipment_choice(offered, 'boots', 'helmet', 'gloves', 'mallet')
-    boots_shot(page, 'replacement', shots)
-    assert_boots(select_boots_action(page, 'equip', True), True, 10)
+    swapped = pick_ground(page, 'boots')
+    assert swapped['nearest_item']['charges'] == 7
+    assert_boots(swapped, True, 10)
+    resize_boots_view(page, landscape)
 
     animation_request(page, 'boots_jump', animation_hold=True)
     animation_step(page, 1)
@@ -1801,10 +1976,8 @@ def boots_checks(browser):
         page.keyboard.up('ArrowLeft')
     for remaining in range(10, 0, -1):
         use_air_jump(page, False, shots, capture=remaining == 1)
-    choice = clear_boots_rows(page, 6, True)
-    assert_boots(choice, False, 0, 1, True)
-    equipped = select_boots_action(page, 'equip', False)
-    assert_boots(equipped, True, 10, 1)
+    equipped = pick_ground(page, 'boots', False)
+    assert_boots(equipped, True, 10)
     page.keyboard.press('Escape')
     wait_screen(page, 'paused')
     button(page, 'restart', True)
@@ -1818,11 +1991,7 @@ def boots_checks(browser):
 
     for dimensions in ((320, 568), (568, 320), (360, 360)):
         context, page = open_boots_game(browser, dimensions, errors)
-        choice = clear_boots_rows(page, 5, True)
-        assert_boots(choice, False, 0, pending=True)
-        check_equipment_choice(choice, 'boots', 'helmet', 'gloves', 'mallet')
-        boots_shot(page, 'choice', shots)
-        equipped = select_boots_action(page, 'equip', True)
+        equipped = pick_ground(page, 'boots')
         assert_boots(equipped, True, 10)
         check_boots_hud(equipped, 10)
         check_touch_control_layout(equipped)
@@ -1835,8 +2004,7 @@ def boots_checks(browser):
         boots_shot(page, 'pause', shots)
         context.close()
     assert not errors, errors
-    return {'offer_after_five_and_combo_surplus':'PASS', 'full_charge_suppression':'PASS',
-            'pause_and_offer_resize':'PASS', 'skip_and_replacement':'PASS', 'keyboard_and_touch':'PASS',
+    return {'ground_pickup_and_swap':'PASS', 'keyboard_and_touch':'PASS',
             'separate_press_and_last_charge':'PASS', 'last_charge_and_restart':'PASS',
             'rocket_exhaust_on_second_jump':'PASS',
             'screenshots':shots, 'screenshot_sha256':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in shots}}
@@ -1875,25 +2043,10 @@ def check_gloves_hud(snapshot, charges):
             'Glove counter overlaps another HUD control', hud, neighbors, snapshot['viewport'])
 
 
-def check_equipment_choice(snapshot, *options, include_new=True):
-    if include_new:
-        options += NEW_GEAR
-    assert set(snapshot['equipment_options']) == set(options)
-    ids = {'boots':'equip', 'helmet':'equip_helmet', 'gloves':'equip_gloves', 'mallet':'equip_mallet', **{item:'equip_' + item for item in NEW_GEAR}}
-    labels = check_boots_panel(snapshot, {'skip', *(ids[option] for option in options)})
-    assert snapshot['missing_menu_glyphs'] == ''
-    if 'helmet' in options:
-        assert labels['helmet_title'] == 'Каска', labels
-    if 'gloves' in options:
-        assert labels['gloves_title'] in {'Рабочие перчатки', 'Перчатки'}, labels
-    if 'mallet' in options:
-        assert labels['mallet_title'] == 'Киянка', labels
-    return labels
-
 
 def check_helmet_pause(snapshot, helmet, boots, gloves=0):
     slots = check_boots_panel(snapshot, {'resume', 'restart', 'home'})
-    assert slots['slot_head'] == (f'{helmet} / 3' if helmet else '—'), slots
+    assert slots['slot_head'] == (f'{helmet} / 5' if helmet else '—'), slots
     assert slots['slot_feet'] == (f'{boots} / 10' if boots else '—'), slots
     assert slots['slot_hands'] == (f'{gloves} / 6' if gloves else '—'), slots
     check_gloves_hud(snapshot, gloves)
@@ -1908,7 +2061,7 @@ def helmet_shot(page, phase, shots):
 
 
 def cleared_metrics(snapshot):
-    return tuple(snapshot[key] for key in ('score', 'lines', 'cleared_crates', 'equipment_rows'))
+    return tuple(snapshot[key] for key in ('score', 'lines', 'cleared_crates'))
 
 
 def helmet_board(page, crates, **options):
@@ -1943,33 +2096,9 @@ def helmet_checks(browser):
     initial = state(page)
     check_helmet_hud(initial, 0)
     initial_stats = personal_statistics(initial)
-    choice = clear_boots_rows(page, 5, True)
-    check_equipment_choice(choice, 'boots', 'helmet', 'gloves', 'mallet')
-    helmet_shot(page, 'choice', shots)
-    rotated = resize_boots_view(page, landscape)
-    assert_frozen_animation(choice, rotated)
-    check_equipment_choice(rotated, 'boots', 'helmet', 'gloves', 'mallet')
-    helmet_shot(page, 'choice', shots)
-    resize_boots_view(page, portrait)
-    equipped = select_boots_action(page, 'equip_helmet', False)
-    assert_boots(equipped, False, 0)
-    check_helmet_hud(equipped, 3)
-    assert equipped['equipment_options'] == []
-    helmet_shot(page, 'equipped', shots)
-
-    check_equipment_choice(clear_boots_rows(page, 5, True), 'boots', 'gloves', 'mallet')
-    both = select_boots_action(page, 'equip', True)
-    assert_boots(both, True, 10)
-    check_helmet_hud(both, 3)
-    check_equipment_choice(clear_boots_rows(page, 5, True), 'gloves', 'mallet')
-    all_gear = select_boots_action(page, 'equip_gloves', True)
-    check_gloves_hud(all_gear, 6)
-    full = clear_boots_rows(page, 5, True)
-    assert_boots(full, True, 10, pending=True)
-    check_helmet_hud(full, 3)
-    check_equipment_choice(full, 'mallet')
-    select_boots_action(page, 'skip', True)
-
+    pick_ground(page, 'helmet', False, charges=3)
+    pick_ground(page, 'boots')
+    pick_ground(page, 'gloves')
     # Freeze a falling crate above the hero, then resume the same trajectory.
     falling = helmet_board(page, [[4, 8.4, 3]])
     falling_id = falling['visible_crates'][0]['id']
@@ -2016,14 +2145,8 @@ def helmet_checks(browser):
     assert falling_through['helmet_charges'] == 1
     helmet_shot(page, 'cascade', shots)
 
-    pending = clear_boots_rows(page, 5, True)
-    labels = check_equipment_choice(pending, 'helmet', 'mallet')
-    assert labels['helmet_old_charges'] == '1' and labels['helmet_new_charges'] == '3', labels
-    helmet_shot(page, 'replacement', shots)
-    skipped = select_boots_action(page, 'skip', True)
-    check_helmet_hud(skipped, 1)
-    check_equipment_choice(clear_boots_rows(page, 5, True), 'helmet', 'mallet')
-    replaced = select_boots_action(page, 'equip_helmet', True)
+    replaced = pick_ground(page, 'helmet', charges=3)
+    assert replaced['nearest_item']['charges'] == 1
     check_helmet_hud(replaced, 3)
     assert_boots(replaced, True, 10)
 
@@ -2057,10 +2180,10 @@ def helmet_checks(browser):
     wait_screen(page, 'over')
     lost = state(page)
     assert lost['loss_reason'] == 'crushed' and not lost['helmet_hits']
-    score, lines, crates, _ = cleared_metrics(exposed)
+    score, lines, crates = cleared_metrics(exposed)
     assert personal_statistics(exposed) == initial_stats
     match = lost['profile']['matches'][0]
-    assert (match['score'], match['lines'], match['crates']) == (score, lines, crates) == (3000, 30, 300)
+    assert (match['score'], match['lines'], match['crates']) == (score, lines, crates) == (0, 0, 0)
     stats = lost['profile']['statistics']
     assert (stats['best_score'], stats['total_lines'], stats['total_crates']) == (score, lines, crates)
     assert stats['crushed'] == 1 and len(lost['profile']['matches']) == 1
@@ -2069,14 +2192,8 @@ def helmet_checks(browser):
 
     for dimensions in ((320, 568), (568, 320), (360, 360)):
         context, page = open_boots_game(browser, dimensions, errors)
-        choice = clear_boots_rows(page, 5, True)
-        check_equipment_choice(choice, 'boots', 'helmet', 'gloves', 'mallet')
-        helmet_shot(page, 'choice', shots)
-        equipped = select_boots_action(page, 'equip_helmet', True)
-        check_helmet_hud(equipped, 3)
-        assert_boots(equipped, False, 0)
-        check_equipment_choice(clear_boots_rows(page, 5, True), 'boots', 'gloves', 'mallet')
-        equipped = select_boots_action(page, 'equip', True)
+        pick_ground(page, 'helmet', charges=3)
+        equipped = pick_ground(page, 'boots')
         check_helmet_hud(equipped, 3)
         check_boots_hud(equipped, 10)
         check_touch_control_layout(equipped)
@@ -2090,13 +2207,13 @@ def helmet_checks(browser):
         button(page, 'restart', True)
         wait_screen(page, 'playing')
         restarted = state(page)
-        assert restarted['session'] == equipped['session'] + 1 and cleared_metrics(restarted) == (0, 0, 0, 0)
+        assert restarted['session'] == equipped['session'] + 1 and cleared_metrics(restarted) == (0, 0, 0)
         check_helmet_hud(restarted, 0)
         assert_boots(restarted, False, 0)
         assert not restarted['helmet_hits'] and personal_statistics(restarted) == personal_statistics(equipped)
         context.close()
     assert not errors, errors
-    return {'selection_skip_replacement_and_full_charge_suppression':'PASS', 'keyboard_and_touch':'PASS',
+    return {'ground_pickup_and_swap':'PASS', 'keyboard_and_touch':'PASS',
             'pause_resume_resize_and_restart':'PASS', 'boots_compatibility':'PASS', 'cascade':'PASS',
             'bare_jump_and_crush':'PASS', 'statistics':'PASS', 'fall_hit':fall_hits, 'jump_hit':jump_hits,
             'simultaneous_hits':same_tick_hits, 'last_charge':last_hits, 'final_match':match, 'screenshots':shots,
@@ -2351,26 +2468,14 @@ def gloves_checks(browser):
     check_pull_cells(board, bare, 0)
     check_glove_grip(bare)
     check_gloves_hud(bare, 0)
-    choice = clear_boots_rows(page, 5, True)
-    check_equipment_choice(choice, 'boots', 'helmet', 'gloves', 'mallet')
-    gloves_shot(page, 'choice', shots)
-    rotated = resize_boots_view(page, landscape)
-    assert_frozen_animation(choice, rotated)
-    check_equipment_choice(rotated, 'boots', 'helmet', 'gloves', 'mallet')
-    gloves_shot(page, 'choice', shots)
-    equipped = select_boots_action(page, 'equip_gloves', False)
-    check_gloves_hud(equipped, 6)
-    check_touch_control_layout(equipped)
-    check_equipment_choice(clear_boots_rows(page, 5, True), 'boots', 'helmet', 'mallet')
-    select_boots_action(page, 'equip_helmet', True)
-    check_equipment_choice(clear_boots_rows(page, 5, True), 'boots', 'mallet')
-    equipped = select_boots_action(page, 'equip', True)
+    pick_ground(page, 'gloves', False)
+    resize_boots_view(page, landscape)
+    pick_ground(page, 'helmet', charges=3)
+    equipped = pick_ground(page, 'boots')
     check_helmet_hud(equipped, 3)
     check_boots_hud(equipped, 10)
     check_gloves_hud(equipped, 6)
     gloves_shot(page, 'loadout', shots)
-    check_equipment_choice(clear_boots_rows(page, 5, True), 'mallet')
-    select_boots_action(page, 'skip', True)
 
     board = gloves_board(page, player_x=1)
     with hold_grab(page, False):
@@ -2413,21 +2518,15 @@ def gloves_checks(browser):
     assert (fallen['x'], fallen['y']) == (supported['x'], 10)
     gloves_shot(page, 'cascade', shots)
 
-    choice = clear_boots_rows(page, 5, True)
-    labels = check_equipment_choice(choice, 'gloves', 'mallet')
-    assert labels['gloves_old_charges'] == '1' and labels['gloves_new_charges'] == '6', labels
-    gloves_shot(page, 'replacement', shots)
-    check_gloves_hud(select_boots_action(page, 'skip', True), 1)
-    choice = clear_boots_rows(page, 5, True)
-    check_equipment_choice(choice, 'gloves', 'mallet')
     resize_boots_view(page, landscape)
-    gloves_shot(page, 'replacement', shots)
-    check_gloves_hud(select_boots_action(page, 'equip_gloves', True), 6)
+    swapped = pick_ground(page, 'gloves')
+    assert swapped['nearest_item']['charges'] == 1
+    check_gloves_hud(swapped, 6)
 
     gloves_release_checks(page, portrait, landscape, shots)
-    labels = check_equipment_choice(clear_boots_rows(page, 5, True), 'gloves', 'mallet')
-    assert labels['gloves_old_charges'] == '3' and labels['gloves_new_charges'] == '6', labels
-    check_gloves_hud(select_boots_action(page, 'equip_gloves', True), 6)
+    swapped = pick_ground(page, 'gloves')
+    assert swapped['nearest_item']['charges'] == 3
+    check_gloves_hud(swapped, 6)
 
     gloves_board(page)
     press_boots_jump(page, True)
@@ -2459,16 +2558,14 @@ def gloves_checks(browser):
     with hold_grab(page, False):
         check_glove_grip(animation_step(page, 1))
     assert personal_statistics(exhausted) == personal_statistics(initial)
-    choice = clear_boots_rows(page, 5, True)
-    check_equipment_choice(choice, 'boots', 'helmet', 'gloves', 'mallet')
-    equipped = select_boots_action(page, 'equip_gloves', True)
+    equipped = pick_ground(page, 'gloves')
     assert equipped['gloves_charges'] == 6
     button(page, 'pause', True)
     wait_screen(page, 'paused')
     button(page, 'restart', True)
     wait_screen(page, 'playing')
     restarted = state(page)
-    assert restarted['session'] == equipped['session'] + 1 and cleared_metrics(restarted) == (0, 0, 0, 0)
+    assert restarted['session'] == equipped['session'] + 1 and cleared_metrics(restarted) == (0, 0, 0)
     check_gloves_hud(restarted, 0)
     check_glove_grip(restarted)
     assert not restarted['gloves_pulls']
@@ -2477,9 +2574,7 @@ def gloves_checks(browser):
 
     for dimensions in ((320, 568), (568, 320), (360, 360)):
         context, page = open_boots_game(browser, dimensions, errors)
-        check_equipment_choice(clear_boots_rows(page, 5, True), 'boots', 'helmet', 'gloves', 'mallet')
-        gloves_shot(page, 'choice', shots)
-        equipped = select_boots_action(page, 'equip_gloves', True)
+        equipped = pick_ground(page, 'gloves')
         check_gloves_hud(equipped, 6)
         check_touch_control_layout(equipped)
         glove_control = equipped['controls']['grab']
@@ -2497,7 +2592,7 @@ def gloves_checks(browser):
     return {'keyboard_pulls':keyboard_pulls, 'touch_pulls':touch_pulls, 'trusted_tab_focus_loss':'PASS',
             'hold_release_key_repeat_and_multitouch':'PASS', 'movement_and_jump_lock':'PASS',
             'blocked_and_partial_pulls':'PASS', 'support_cascade':'PASS',
-            'last_charge_and_restart':'PASS', 'selection_skip_replacement_and_full_charge_suppression':'PASS',
+            'last_charge_and_restart':'PASS', 'ground_pickup_and_swap':'PASS',
             'pause_and_both_layouts':'PASS', 'helmet_and_boots_compatibility':'PASS', 'screenshots':shots,
             'screenshot_sha256':{name:hashlib.sha256((ROOT/name).read_bytes()).hexdigest() for name in shots}}
 
@@ -2670,16 +2765,10 @@ def mallet_checks(browser):
     errors, shots = [], []
     context, page = open_boots_game(browser, portrait, errors)
     try:
-        offer = clear_boots_rows(page, 5, True)
-        check_equipment_choice(offer, 'boots', 'helmet', 'gloves', 'mallet')
-        shots.append(screenshot(page, 'mallet-choice-portrait.png'))
-        check_equipment_choice(resize_boots_view(page, landscape), 'boots', 'helmet', 'gloves', 'mallet')
-        shots.append(screenshot(page, 'mallet-choice-landscape.png'))
-        check_gloves_hud(select_boots_action(page, 'equip_gloves', True), 6)
-        check_equipment_choice(clear_boots_rows(page, 5, True), 'boots', 'helmet', 'mallet')
-        check_mallet_hud(select_boots_action(page, 'equip_mallet', True), 3)
-        check_equipment_choice(clear_boots_rows(page, 5, True), 'boots', 'helmet', 'gloves')
-        check_gloves_hud(select_boots_action(page, 'equip_gloves', True), 6)
+        pick_ground(page, 'gloves')
+        resize_boots_view(page, landscape)
+        check_mallet_hud(pick_ground(page, 'mallet'), 3)
+        check_gloves_hud(pick_ground(page, 'gloves'), 6)
         assert not state(page)['mallet_hud'] and 'mallet' not in state(page)['controls']
 
         board = mallet_board(page, facing=1, stack=True, helmet=2, boots=5)
@@ -2765,7 +2854,7 @@ def mallet_checks(browser):
         wait_screen(page, 'over')
         completed = state(page)['profile']
         match, = completed['matches']
-        assert match['broken_crates'] == 2 and match['lines'] == 15 and match['score'] == 1500
+        assert match['broken_crates'] == 2 and match['lines'] == 0 and match['score'] == 0
         assert completed['statistics']['total_broken_crates'] == 2
         button(page, 'again', True)
         wait_screen(page, 'playing')
@@ -2797,16 +2886,9 @@ def bonuses_checks(browser):
     portrait, landscape = (320, 568), (568, 320)
     context, page = open_boots_game(browser, portrait, errors)
     try:
-        offer = clear_boots_rows(page, 5, True)
-        check_equipment_choice(offer, 'boots', 'helmet', 'gloves', 'mallet')
-        shots.append(screenshot(page, 'bonuses-choice-320x568.png'))
-        offer = resize_boots_view(page, landscape)
-        check_equipment_choice(offer, 'boots', 'helmet', 'gloves', 'mallet')
-        shots.append(screenshot(page, 'bonuses-choice-568x320.png'))
-        for index, item in enumerate(('strong_arms', 'speed_boots', 'lamp_helmet')):
-            if index:
-                clear_boots_rows(page, 5, True)
-            equipped = select_boots_action(page, 'equip_' + item, True)
+        resize_boots_view(page, landscape)
+        for item in ('strong_arms', 'speed_boots', 'lamp_helmet'):
+            equipped = pick_ground(page, item)
             assert equipped[item + '_charges'] > 0 and equipped[item + '_hud']
         check_touch_control_layout(equipped)
         resize_boots_view(page, portrait)
@@ -2962,7 +3044,7 @@ def bonuses_checks(browser):
     finally:
         context.close()
     assert not errors, errors
-    return {'equipment_choice_and_restart':'PASS', 'pair_speed_and_lamp_multitouch':'PASS',
+    return {'ground_pickup_and_restart':'PASS', 'pair_speed_and_lamp_multitouch':'PASS',
             'spring_and_rocket_separate_inputs':'PASS', 'focus_resize_and_pause':'PASS', 'screenshots':shots}
 
 
@@ -3080,6 +3162,12 @@ try:
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         full_check = not any(vars(args).values())
+        ground = ground_checks(browser, record=args.loot_only) if args.loot_only or full_check else {}
+        if ground:
+            print('GROUND', json.dumps(ground), flush=True)
+        if args.loot_only:
+            browser.close()
+            raise SystemExit(0)
         bonuses = bonuses_checks(browser) if args.bonuses_only or full_check else {}
         if bonuses:
             print('BONUSES', json.dumps(bonuses), flush=True)
@@ -3332,7 +3420,7 @@ try:
             results.append(result)
             print(json.dumps(result), flush=True)
             context.close()
-        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'bonuses':bonuses, 'mallet':mallet, 'helmet':helmet, 'boots':boots, 'gloves':gloves, 'keyboard':keyboard, 'animations':animations, 'cranes':cranes, 'statistics':statistics, 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
+        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'ground':ground, 'bonuses':bonuses, 'mallet':mallet, 'helmet':helmet, 'boots':boots, 'gloves':gloves, 'keyboard':keyboard, 'animations':animations, 'cranes':cranes, 'statistics':statistics, 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
                   'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
                   'page_errors':all_errors,'failed_requests':all_failed_requests,'checks':results}
         (BUILD/'web-check.json').write_text(json.dumps(report,indent=2)+'\n')

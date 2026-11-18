@@ -12,7 +12,8 @@ var controls := {}
 var pressed_actions: Array[String] = []
 var line_caption := ""
 var caption_life := 0.0
-var hud_right := SCORE_PANEL_RIGHT
+var equipment_body := Rect2()
+var equipment_strip := Rect2()
 var crush_progress := -1.0
 var boots_exhaust_life := 0.0
 var helmet_impacts: Array[Dictionary] = []
@@ -26,14 +27,13 @@ var _mallet_follow_age := -1.0
 var _mallet_facing := 1
 var _mallet_broke := false
 var _mallet_impacts: Array[Dictionary] = []
-var _layout_model_id := 0
-var _reserve_grab_space := false
-var _reserve_lamp_space := false
 const FONT: Font = preload("res://art/workshop_font.fnt")
 const HERO_SIZE := Vector2(16, 24)
 const HERO_OFFSET := Vector2(-1, -2)
 const HERO_FRAME_PIXELS := Vector2(32, 48)
 const HERO_FRAME_COLUMNS := {"idle": 0, "walk": 1, "jump": 2, "push": 3, "grab": 4}
+const GROUND_ATLAS := preload("res://art/ground_equipment.png")
+const GROUND_KINDS := ["boots", "helmet", "gloves", "mallet", "strong_arms", "speed_boots", "lamp_helmet", "spring_boots"]
 const HERO_BOOTS_ATLAS: Texture2D = preload("res://art/hero_rocket_boots.png")
 const HERO_HELMET_ATLAS: Texture2D = preload("res://art/hero_helmet.png")
 const HERO_GLOVES_ATLAS: Texture2D = preload("res://art/hero_work_gloves.png")
@@ -57,12 +57,12 @@ const CRANE_BODY := [Color("659a9a"), Color("da944f")]
 const CRANE_LIGHT := [Color("a7c7bc"), Color("f6d18e")]
 const CRANE_METAL := [Color("355762"), Color("785132")]
 const CRANE_TOP := -52.0
-const SCORE_PANEL_RIGHT := 138.0
 const HUD_CLEARANCE_Y := 60.0
-const LANDSCAPE_FRAME_CLEARANCE := 18.0
 const WAREHOUSE_FRAME := 13.0
-const GRAB_BUTTON_HEIGHT := 48.0
-const GRAB_BUTTON_GAP := 8.0
+const BADGE_WIDTH := 46.0
+const BADGE_HEIGHT := 26.0
+const STRIP_HEIGHT := 76.0
+const SWAP_SIZE := 48.0
 const GRAB_ICONS: Texture2D = preload("res://art/glove_controls.png")
 const GRAB_ICON_SIZE := Vector2(32, 32)
 const INK := Color("102733")
@@ -101,70 +101,95 @@ func _ready() -> void:
 
 func _layout() -> void:
 	if model == null: return
-	var model_id := model.get_instance_id()
-	if _layout_model_id != model_id:
-		_layout_model_id = model_id
-		_reserve_grab_space = false
-		_reserve_lamp_space = false
 	var landscape := size.x > size.y
-	var button_size := Vector2(66, 64)
-	var jump_button: Rect2
-	var left_limit := 0.0
-	var right_limit := size.x
-	var free_width := size.x - 36.0
-	if landscape:
-		var right_button := Rect2(Vector2(84, size.y - 90), button_size)
-		jump_button = Rect2(Vector2(size.x - 82, size.y - 90), Vector2(70, 64))
-		controls = {"left": Rect2(Vector2(12, size.y - 90), button_size),
-			"right": right_button, "jump": jump_button}
-		left_limit = right_button.end.x + LANDSCAPE_FRAME_CLEARANCE
-		right_limit = jump_button.position.x - LANDSCAPE_FRAME_CLEARANCE
-		free_width = right_limit - left_limit
-	else:
-		jump_button = Rect2(Vector2(size.x - 88, size.y - 92), Vector2(70, 64))
-		controls = {"left": Rect2(Vector2(18, size.y - 92), button_size),
-			"right": Rect2(Vector2(90, size.y - 92), button_size),
-			"jump": jump_button}
-	var grab_y := jump_button.position.y - GRAB_BUTTON_GAP - GRAB_BUTTON_HEIGHT
-	var grab_button := Rect2(jump_button.position.x, grab_y, jump_button.size.x, GRAB_BUTTON_HEIGHT)
-	if model.gloves_charges > 0:
-		controls["grab"] = grab_button
-		_reserve_grab_space = true
-	elif model.mallet_charges > 0:
-		controls["mallet"] = grab_button
-		_reserve_grab_space = true
-	var lamp_button := Rect2(float(controls["left"].position.x), grab_y, button_size.x, GRAB_BUTTON_HEIGHT)
+	var button_width := clampf(floorf((size.x - 52.0) / 5.0), 48, 70)
+	var button_size := Vector2(button_width, 52 if landscape else 60)
+	var margin := 12.0
+	var bottom := size.y - margin - button_size.y
+	var jump_x := size.x - margin - button_width
+	var stride := button_width + 7.0
+	controls = {"left": Rect2(Vector2(margin, bottom), button_size),
+		"right": Rect2(Vector2(margin + stride, bottom), button_size),
+		"jump": Rect2(Vector2(jump_x, bottom), button_size)}
+	if model.gloves_charges > 0 or model.mallet_charges > 0:
+		controls["grab" if model.gloves_charges > 0 else "mallet"] = Rect2(Vector2(jump_x - stride, bottom), button_size)
 	if model.lamp_helmet_equipped and model.lamp_helmet_charges > 0:
-		controls["lamp"] = lamp_button
-		_reserve_lamp_space = true
-	var free_height := size.y - (84.0 if landscape else 204.0)
-	cell = maxf(8.0, floorf(minf(free_width / model.tuning.columns, free_height / (model.tuning.rows + 2))))
-	var field_bottom := INF
-	var frame_clearance := WAREHOUSE_FRAME + 3.0
-	var centered_right := floorf((size.x + model.tuning.columns * cell) * 0.5)
-	var hand_overlap := _reserve_grab_space and centered_right + frame_clearance > grab_button.position.x
-	var lamp_overlap := _reserve_lamp_space and size.x - centered_right - frame_clearance < lamp_button.end.x
-	if not landscape and (hand_overlap or lamp_overlap):
-		# Keep the field still when an equipment control disappears during the game.
-		field_bottom = grab_button.position.y - frame_clearance
-		var rows_with_crane := model.tuning.rows - CRANE_TOP / PIXELS_PER_CELL
-		cell = maxf(8.0, minf(cell, floorf((field_bottom - HUD_CLEARANCE_Y) / rows_with_crane)))
-	var world_size := Vector2(model.tuning.columns * cell, model.tuning.rows * cell)
-	var top := 60.0 + cell * 1.1
-	if not landscape: top += maxf(0.0, (free_height - (model.tuning.rows + 2) * cell) * 0.4)
-	top = minf(top, field_bottom - world_size.y)
+		controls["lamp"] = Rect2(Vector2(margin + 2 * stride, bottom), button_size)
+
+	var frame := WAREHOUSE_FRAME + 3
+	# Keep one centered stage for the demo, match and result. On short, wide
+	# screens reserve equal margins so the equipment fits beside the stage.
+	var strip_below := not landscape or size.x < 500
+	var side_margin := frame if strip_below else frame + BADGE_WIDTH + 64 + SWAP_SIZE + 10
+	var available_w := size.x - 2 * side_margin
+	var rows_with_crane := model.tuning.rows - CRANE_TOP / PIXELS_PER_CELL
+	var clearance := HUD_CLEARANCE_Y
+	var lower_reserve := STRIP_HEIGHT + 10 if strip_below else 0.0
+	var full_height := bottom - frame - 16 - lower_reserve
+	var wide_cell := floorf(minf(available_w / model.tuning.columns, full_height / rows_with_crane))
+	var rail_left := (size.x - model.tuning.columns * wide_cell) * 0.5 - wide_cell
+	if landscape and rail_left >= 142:
+		clearance = 8
+	var available_h := bottom - frame - clearance - 8 - lower_reserve
+	cell = floorf(minf(available_w / model.tuning.columns, available_h / rows_with_crane))
+	var world_size := Vector2(model.tuning.columns, model.tuning.rows) * cell
 	var left := floorf((size.x - world_size.x) * 0.5)
-	if landscape:
-		left = clampf(left, left_limit, maxf(left_limit, right_limit - world_size.x))
+	var rail_y := clearance + floorf((available_h - rows_with_crane * cell) * 0.5)
 	var scale_to_view := cell / PIXELS_PER_CELL
-	var rail_margin := clampf(10.0 * scale_to_view, 0.0, maxf(0.0, left - 3.0))
-	# Keep the crane rail clear of the HUD on the narrower layouts.
-	if left - rail_margin < hud_right:
-		top = maxf(top, HUD_CLEARANCE_Y - CRANE_TOP * scale_to_view)
+	var top := rail_y - CRANE_TOP * scale_to_view
 	field = Rect2(Vector2(left, top), world_size)
+	if strip_below:
+		var width := minf(size.x - 16, 400)
+		equipment_strip = Rect2(floorf((size.x - width) * 0.5), ceilf(field.end.y + frame + 6), width, STRIP_HEIGHT)
+		equipment_body = Rect2(equipment_strip.end.x - 40, equipment_strip.get_center().y - 24, 32, 48)
+	else:
+		equipment_strip = Rect2()
+		var body_width := clampf(floorf(world_size.y / 6.0), 32, 64)
+		var body_size := Vector2(body_width, body_width * 1.5)
+		equipment_body = Rect2(Vector2(field.end.x + frame + BADGE_WIDTH + 4,
+			clampf(field.get_center().y - body_size.y * 0.5, HUD_CLEARANCE_Y + 8, bottom - body_size.y - 55)).round(), body_size)
+	_layout_rail(left, top, world_size, scale_to_view)
+
+func _layout_rail(left: float, top: float, world_size: Vector2, scale_to_view: float) -> void:
+	var rail_margin := clampf(10.0 * scale_to_view, 0.0, maxf(0.0, left - 3.0))
 	crane_rail = Rect2(Vector2(left - rail_margin, top + CRANE_TOP * scale_to_view),
 		Vector2(world_size.x + rail_margin * 2.0, (CRANE_TRACK_Y[1] + 6.0 - CRANE_TOP) * scale_to_view))
 	queue_redraw()
+
+static func ground_icon_region(kind: String) -> Rect2:
+	return Rect2(GROUND_KINDS.find(kind) * 20, 0, 20, 16)
+
+
+func slot_height(kind: String) -> float:
+	var center := equipment_body.position.y + equipment_body.size.y * 0.54
+	var spacing := maxf(BADGE_HEIGHT + 4, equipment_body.size.y * 0.38)
+	if kind in StackSimulation.SLOTS.head:
+		return roundf(center - spacing)
+	if kind in StackSimulation.SLOTS.feet:
+		return roundf(center + spacing)
+	return roundf(center)
+
+
+func strip_slot(kind: String) -> Rect2:
+	var index := 1
+	if kind in StackSimulation.SLOTS.head:
+		index = 0
+	elif kind in StackSimulation.SLOTS.feet:
+		index = 2
+	var width := (equipment_body.position.x - equipment_strip.position.x - 12) / 3.0
+	return Rect2(equipment_strip.position + Vector2(4 + index * width, 4), Vector2(width, SWAP_SIZE))
+
+
+func badge_position(kind: String, plate_size: Vector2) -> Vector2:
+	if equipment_strip.has_area():
+		var slot := strip_slot(kind)
+		return Vector2(slot.position.x + 1, slot.get_center().y - plate_size.y * 0.5).round()
+	return Vector2(equipment_body.position.x - BADGE_WIDTH - 4, slot_height(kind) - plate_size.y * 0.5).round()
+
+
+func equipment_bottom() -> float:
+	return maxf(equipment_body.end.y, slot_height("boots") + BADGE_HEIGHT * 0.5)
+
 
 func animate(delta: float) -> void:
 	clock += delta
@@ -276,10 +301,12 @@ func _draw() -> void:
 	_draw_scenery()
 	if model == null: return
 	_draw_warehouse()
-	if active: _draw_controls()
-	if caption_life > 0.0 and active and model.state != "over" and not model.equipment_pending:
+	_draw_equipment_body()
+	if active:
+		_draw_controls()
+	if caption_life > 0.0 and active and model.state != "over":
 		var width := FONT.get_string_size(line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
-		var at := Vector2(size.x * 0.5 - width * 0.5, field.position.y + field.size.y * 0.3)
+		var at := Vector2(field.get_center().x - width * 0.5, field.position.y + field.size.y * 0.3)
 		draw_string_outline(FONT, at, line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, 3, INK)
 		draw_string(FONT, at, line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, CREAM)
 
@@ -577,7 +604,7 @@ func _draw_bonus_gear(bounds: Rect2, frame: String) -> void:
 			var source := Rect2(Vector2(column, row) * HERO_FRAME_PIXELS, HERO_FRAME_PIXELS)
 			draw_texture_rect_region(HERO_BONUS_GEAR, bounds, source)
 
-func _draw_mallet_hero(bounds: Rect2, frame: String) -> void:
+func _draw_mallet_hero(bounds: Rect2, frame: String, transform: Transform2D) -> void:
 	var phase := mallet_animation_phase()
 	var carrying := model.mallet_charges > 0
 	if phase == "none" and not carrying:
@@ -602,11 +629,10 @@ func _draw_mallet_hero(bounds: Rect2, frame: String) -> void:
 		if facing < 0:
 			hand.x = HERO_FRAME_PIXELS.x - hand.x
 		var grip := (bounds.position + hand / HERO_FRAME_PIXELS * bounds.size).round()
-		var board := Transform2D(0.0, Vector2.ONE * cell / PIXELS_PER_CELL, 0.0, field.position)
 		var motion := Transform2D(angle * facing, Vector2(0.66 * facing, 0.66), 0.0, grip)
-		draw_set_transform_matrix(board * motion)
+		draw_set_transform_matrix(transform * motion)
 		draw_texture(MALLET_TEXTURE, -MALLET_GRIP)
-		draw_set_transform_matrix(board)
+		draw_set_transform_matrix(transform)
 	if column < 0:
 		_draw_hero(bounds, frame)
 	else:
@@ -836,13 +862,25 @@ func _draw_lamp_guides(width: float, floor_y: float) -> void:
 		draw_rect(Rect2(mark - Vector2(4, 1), Vector2(8, 2)), Color(CREAM, fade))
 		draw_rect(Rect2(mark - Vector2(1, 4), Vector2(2, 8)), Color(CREAM, fade))
 
+func _crush_strength() -> float:
+	return smoothstep(0.0, 0.39, crush_progress)
+
+
+func _crushed_height(strength: float) -> float:
+	return roundf(lerpf(HERO_SIZE.y, 7.0, strength))
+
+
+func _crush_star_opacity() -> float:
+	return smoothstep(0.53, 0.74, crush_progress)
+
+
 func crush_geometry(impact: Dictionary) -> Dictionary[String, Rect2]:
-	var strength: float = smoothstep(0.0, 0.39, crush_progress)
+	var strength := _crush_strength()
 	var floor_y := model.tuning.rows * PIXELS_PER_CELL
 	var hero := _hero_bounds()
 	var player_feet := roundf((model.player.y + model.tuning.player_height) * PIXELS_PER_CELL)
 	var feet := roundf(lerpf(hero.end.y, minf(player_feet, floor_y), strength))
-	hero.size.y = roundf(lerpf(hero.size.y, 7.0, strength))
+	hero.size.y = _crushed_height(strength)
 	hero.position.y = feet - hero.size.y
 	var overlap := roundf(4.0 * strength)
 	var crate := _impact_crate_bounds(impact, hero.position.y + overlap, floor_y)
@@ -919,7 +957,7 @@ func _draw_crush_marks(crate: Rect2, feet: float, width: float) -> void:
 			if dust > 0.0:
 				draw_rect(Rect2(edge + side * 7.0 - 1.0, feet - 5.0, 3.0, 2.0), Color(EFFECT_DUST, dust * 0.78))
 				draw_rect(Rect2(edge + side * 4.0 - 1.0, feet - 3.0, 2.0, 2.0), Color(EFFECT_DUST, dust * 0.62))
-	var stars: float = smoothstep(0.53, 0.74, crush_progress)
+	var stars := _crush_star_opacity()
 	if stars > 0.0:
 		for index in range(-1, 2):
 			var lift := 3.0 * absf(float(index)) + roundf((1.0 - stars) * 3.0)
@@ -955,6 +993,14 @@ func _draw_field_objects() -> void:
 			continue
 		var position := _crate_origin(float(crate.x), float(crate.y))
 		_draw_crate(Rect2(position, Vector2.ONE * PIXELS_PER_CELL), int(crate.variant))
+	for item in model.ground_items:
+		var at := _crate_origin(float(item.x), float(item.y))
+		var source := ground_icon_region(item.kind)
+		draw_texture_rect_region(GROUND_ATLAS, Rect2(at - Vector2(10, 16), Vector2(20, 16)), source)
+		if item.get("row_splinters", false):
+			var age := (model.ticks - int(item.born)) * StackSimulation.STEP
+			if item.born >= 0 and age < HELMET_WOOD_TIME:
+				_draw_wood_fragments(_crate_origin(item.x, item.origin_y), age, false, width, floor_y)
 	if impact.is_empty():
 		var bounds := _hero_bounds()
 		var compression := float(model.spring_charge_stages)
@@ -964,7 +1010,7 @@ func _draw_field_objects() -> void:
 		_draw_speed_trail(bounds, width)
 		_draw_spring_steam(width, floor_y)
 		_draw_boots_exhaust(bounds, floor_y)
-		_draw_mallet_hero(bounds, hero_frame())
+		_draw_mallet_hero(bounds, hero_frame(), Transform2D(0, Vector2.ONE * cell / PIXELS_PER_CELL, 0, field.position))
 	else:
 		_draw_crush(impact, width)
 	if active:
@@ -1007,6 +1053,40 @@ func _draw_warehouse() -> void:
 		var x := field.position.x+tile*cell*0.5
 		draw_line(Vector2(x,floor_y+1),Vector2(x-2,floor_y+7),Color("79502e"),1)
 		draw_line(Vector2(x+3,floor_y+5),Vector2(x+cell*.5-3,floor_y+5),Color("dca65f"),1)
+
+func _draw_equipment_body() -> void:
+	if equipment_strip.has_area():
+		draw_rect(equipment_strip, Color("132c35"))
+		draw_rect(equipment_strip, Color("567679"), false, 1)
+		for kind in ["helmet", "gloves", "boots"]:
+			var slot := strip_slot(kind)
+			var well := Rect2(badge_position(kind, Vector2(BADGE_WIDTH, BADGE_HEIGHT)), Vector2(BADGE_WIDTH, BADGE_HEIGHT))
+			draw_rect(well, Color("10232c"))
+			draw_rect(well, Color("39555b"), false, 1)
+			draw_texture_rect_region(GROUND_ATLAS, Rect2(well.get_center() - Vector2(10, 8), Vector2(20, 16)),
+				ground_icon_region(kind), Color(0.55, 0.65, 0.65, 0.7))
+			draw_line(Vector2(slot.end.x, slot.position.y + 8), Vector2(slot.end.x, slot.end.y - 8), Color("334c53"))
+	var body := equipment_body
+	var plate := body.grow(3)
+	draw_rect(plate, Color("17323e"))
+	draw_rect(plate, Color("45606a"), false, 1)
+	for y in range(6, int(plate.size.y), 8):
+		draw_line(plate.position + Vector2(1, y), plate.position + Vector2(4, y), Color("45606a"))
+	var transform := Transform2D(0, body.size / HERO_SIZE, 0, body.position)
+	draw_set_transform_matrix(transform)
+	if crush_progress >= 0.0:
+		var height := _crushed_height(_crush_strength())
+		var pose := Rect2(0, HERO_SIZE.y - height, HERO_SIZE.x, height)
+		_draw_hero(pose, hero_frame() if crush_progress == 0.0 else "idle")
+		var stars := _crush_star_opacity()
+		if stars > 0.0:
+			_draw_crush_star(Vector2(8, pose.position.y - 6), stars)
+	else:
+		var compression := float(model.spring_charge_stages)
+		var bounds := Rect2(Vector2(0, compression), HERO_SIZE - Vector2(0, compression))
+		_draw_mallet_hero(bounds, hero_frame(), transform)
+	draw_set_transform(Vector2.ZERO)
+
 
 func _draw_controls() -> void:
 	for action in controls:
