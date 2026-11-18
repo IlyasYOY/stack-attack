@@ -1750,6 +1750,10 @@ def body_slot_checks(page, shots):
                                          player=[4.2, 10.12], crates=stacks, animation_hold=True)
             check_touch_control_layout(snapshot)
             field_x, field_y, field_w, field_h = snapshot['field']
+            _, _, body_w, body_h = snapshot['equipment_body']
+            assert 32 <= body_w <= 64 and body_h <= max(48, field_h * .25)
+            badges = [snapshot[item + '_hud']['rect'] for item in loadout.values()]
+            assert all(top[1] + top[3] < bottom[1] for top, bottom in zip(badges, badges[1:]))
             assert all(y > field_y + field_h for _, y, _, _ in snapshot['controls'].values())
             pickup = snapshot['buttons']['pickup']
             x, y, w, h = pickup

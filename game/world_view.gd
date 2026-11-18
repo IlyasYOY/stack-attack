@@ -59,6 +59,7 @@ const CRANE_TOP := -52.0
 const HUD_CLEARANCE_Y := 60.0
 const WAREHOUSE_FRAME := 13.0
 const BADGE_WIDTH := 46.0
+const BADGE_HEIGHT := 26.0
 const SWAP_SIZE := 48.0
 const GRAB_ICONS: Texture2D = preload("res://art/glove_controls.png")
 const GRAB_ICON_SIZE := Vector2(32, 32)
@@ -132,7 +133,8 @@ func _layout() -> void:
 	var scale_to_view := cell / PIXELS_PER_CELL
 	var top := rail_y - CRANE_TOP * scale_to_view
 	field = Rect2(Vector2(left, top), world_size)
-	var body_width := floorf(minf(rack_width - BADGE_WIDTH - SWAP_SIZE - 4, (available_h - 48) / 1.5))
+	# Aim for a quarter of the board height. At phone sizes retain the native 32 × 48 sprite.
+	var body_width := clampf(floorf(world_size.y / 6.0), 32, 64)
 	var body_size := Vector2(body_width, body_width * 1.5)
 	equipment_body = Rect2(Vector2(field.end.x + frame + BADGE_WIDTH + 4,
 		clampf(field.get_center().y - body_size.y * 0.5, HUD_CLEARANCE_Y + 8, bottom - body_size.y - 55)).round(), body_size)
@@ -149,12 +151,17 @@ static func ground_icon_region(kind: String) -> Rect2:
 
 
 func slot_height(kind: String) -> float:
-	var fraction := 0.55
+	var center := equipment_body.position.y + equipment_body.size.y * 0.54
+	var spacing := maxf(BADGE_HEIGHT + 4, equipment_body.size.y * 0.38)
 	if kind in StackSimulation.SLOTS.head:
-		fraction = 0.16
-	elif kind in StackSimulation.SLOTS.feet:
-		fraction = 0.92
-	return roundf(equipment_body.position.y + equipment_body.size.y * fraction)
+		return roundf(center - spacing)
+	if kind in StackSimulation.SLOTS.feet:
+		return roundf(center + spacing)
+	return roundf(center)
+
+
+func equipment_bottom() -> float:
+	return maxf(equipment_body.end.y, slot_height("boots") + BADGE_HEIGHT * 0.5)
 
 
 func animate(delta: float) -> void:

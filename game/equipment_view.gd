@@ -87,7 +87,7 @@ static func _equipment_slot(text: Callable, slots: GridContainer, title: String,
 static func build_hud(parent: Control, item: String) -> Label:
 	var plate := PanelContainer.new()
 	plate.name = item + "_hud"
-	plate.size = Vector2(StackWorldView.BADGE_WIDTH, 26)
+	plate.size = Vector2(StackWorldView.BADGE_WIDTH, StackWorldView.BADGE_HEIGHT)
 	plate.add_theme_stylebox_override("panel", _style(Color(0.055, 0.13, 0.16, 0.9), EDGE, 2))
 	plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(plate)

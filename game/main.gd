@@ -264,7 +264,7 @@ func _position_panel() -> void:
 
 func _panel_area() -> Rect2:
 	if screen in ["menu", "over"]:
-		var below := ceilf(world.equipment_body.end.y + 12)
+		var below := ceilf(world.equipment_bottom() + 4)
 		# Reserve the complete menu height even while its controls are being created.
 		var lower_height := 222 if _compact_panel() else 274
 		if size.y > size.x and size.y - below >= lower_height:
@@ -456,7 +456,7 @@ func _update_pickup() -> void:
 	pickup_button.position = Vector2(body.end.x + 3, world.slot_height(kind) - StackWorldView.SWAP_SIZE * 0.5).round()
 	var name_x := body.position.x - StackWorldView.BADGE_WIDTH
 	var label_width := body.end.x + 3 + StackWorldView.SWAP_SIZE - name_x
-	found_label.position = Vector2(name_x, maxf(body.end.y + 6, pickup_button.position.y + StackWorldView.SWAP_SIZE + 4))
+	found_label.position = Vector2(name_x, maxf(world.equipment_bottom() + 6, pickup_button.position.y + StackWorldView.SWAP_SIZE + 4))
 	found_label.size = Vector2(label_width, 0)
 	if pickup_button.get_meta("kind", "") != kind or pickup_button.get_meta("charges", -1) != item.charges:
 		pickup_button.set_meta("kind", kind)
