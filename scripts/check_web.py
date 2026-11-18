@@ -1868,6 +1868,25 @@ def ground_checks(browser, record=False):
         finally:
             page.keyboard.up('ArrowLeft')
         assert not away['nearest_item'] and 'pickup' not in away['buttons']
+        # Exchange the last helmet charge, then pull a crate onto that same item.
+        set_bonus_board(page, {'head': 'helmet', 'hands': 'gloves'}, charges={'helmet': 1})
+        px = 4 - state(page)['player_size'][0] - 0.05
+        side = animation_request(page, 'ground_board', player=[px, 10.12], facing=1, crates=[[4, 10, 0]],
+                                 items=[['lamp_helmet', 3.5, 11, 0]], seed=14, animation_hold=True)
+        page.keyboard.press('KeyE')
+        discarded = animation_step(page, 0)
+        assert discarded['nearest_item']['kind'] == 'helmet' and discarded['nearest_item']['charges'] == 1
+        shots.append(screenshot(page, 'ground-side-before.png'))
+        if record:
+            page.wait_for_timeout(650)
+        page.keyboard.down('KeyG')
+        try:
+            impact = animation_step(page, 20)
+        finally:
+            page.keyboard.up('KeyG')
+        assert impact['broken_crates'] == side['broken_crates'] + 1 and impact['lines'] == side['lines']
+        assert not impact['visible_crates'] and not impact['ground_items'] and impact['lamp_helmet_equipped']
+        shots.append(screenshot(page, 'ground-side-after.png'))
         if record:
             page.wait_for_timeout(700)
             video = page.evaluate('window.finishLootVideo()')

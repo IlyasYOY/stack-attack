@@ -352,32 +352,45 @@ func pick_up_nearest() -> void:
 		speed_boots_progress = progress
 
 
-# Sweep once per descending crate. New drops enter collision handling next tick.
-func _hit_ground_items(crate: Dictionary, old_bottom: float, new_bottom: float) -> bool:
-	if new_bottom <= old_bottom or ground_items.is_empty():
+# Sweep the leading edge. Each crate resolves its first contact only, and new
+# drops become eligible on the next physics tick.
+func _hit_ground_items(crate: Dictionary, start: float, end: float, sideways: bool = false) -> bool:
+	if start == end or ground_items.is_empty() or (not sideways and end < start):
 		return false
-	var contacts: Array[Dictionary] = []
+	var direction := signf(end - start)
+	var leading_edge := start * direction + (1.0 if direction > 0.0 else 0.0)
+	var travel := absf(end - start)
+	var closest := INF
+	var hit := {}
 	for item in ground_items:
-		if item.born == ticks or old_bottom > float(item.y) + EPS or new_bottom < float(item.y) - ITEM_RADIUS * 2:
+		if item.born == ticks:
 			continue
-		if _overlap(float(item.x) - ITEM_RADIUS, ITEM_RADIUS * 2, float(crate.x), 1.0):
-			contacts.append(item)
-	contacts.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return a.y < b.y if a.y != b.y else a.id < b.id)
-	for item in contacts:
-		var kind := str(item.kind)
-		if kind in ["gloves", "strong_arms"]:
-			ground_items.erase(item)
-			continue
-		if kind in ["helmet", "mallet"] and int(item.charges) > 1:
-			item.charges -= 1
+		var near_edge: float
+		if sideways:
+			if not _overlap(float(crate.y), 1.0, float(item.y) - ITEM_RADIUS * 2, ITEM_RADIUS * 2, 0.0):
+				continue
+			near_edge = float(item.x) * direction - ITEM_RADIUS
 		else:
-			ground_items.erase(item)
-		crate.y = clampf(float(item.y) - ITEM_RADIUS * 2, old_bottom, new_bottom) - 1.0
-		_destroy_crate(crate)
-		events.append({"type": "ground_impact", "x": float(crate.x), "y": float(crate.y)})
-		return true
-	return false
+			if not _overlap(float(crate.x), 1.0, float(item.x) - ITEM_RADIUS, ITEM_RADIUS * 2):
+				continue
+			near_edge = float(item.y) - ITEM_RADIUS * 2
+		var distance := near_edge - leading_edge
+		if distance < -ITEM_RADIUS * 2 - EPS or distance > travel:
+			continue
+		distance = maxf(0.0, distance)
+		if distance < closest:
+			closest = distance
+			hit = item
+	if hit.is_empty():
+		return false
+	if hit.kind in ["helmet", "mallet"] and int(hit.charges) > 1:
+		hit.charges -= 1
+	else:
+		ground_items.erase(hit)
+	crate["x" if sideways else "y"] = start + direction * closest
+	_destroy_crate(crate)
+	events.append({"type": "ground_impact", "x": float(crate.x), "y": float(crate.y)})
+	return true
 
 
 func _release_hands_slot() -> void:
@@ -784,12 +797,17 @@ func _move_with_gloves(pull_held: bool) -> void:
 		if not _pull_path_clear(_pull_crate, _pull_start_player_x, _pull_start_crate_x):
 			cancel_grab()
 			return
-	var previous_offset := float(_pull_crate.x) - _pull_start_crate_x
+	var previous_x := float(_pull_crate.x)
+	var previous_offset := previous_x - _pull_start_crate_x
 	var offset := move_toward(previous_offset, distance, tuning.push_speed * STEP)
 	_sliding_pull = pull_held and not _pull_returning and offset != previous_offset
 	player.x = _pull_start_player_x + offset
 	_pull_crate.x = _pull_start_crate_x + offset
 	_pull_crate.target_x = _pull_crate.x
+	if _hit_ground_items(_pull_crate, previous_x, float(_pull_crate.x), true):
+		player.x = _pull_start_player_x + (float(_pull_crate.x) - _pull_start_crate_x)
+		cancel_grab()
+		return
 	if offset == distance:
 		if not _pull_returning:
 			gloves_charges -= 1
@@ -898,8 +916,16 @@ func _advance_strong_push() -> float:
 	if not _strong_step_clear(first, second, shift):
 		_cancel_strong_push()
 		return 0.0
+	var previous_second_x := float(second.x)
 	first.x = next_x
 	second.x = next_x + _strong_direction
+	var front_hit := _hit_ground_items(second, previous_second_x, float(second.x), true)
+	var rear_hit := _hit_ground_items(first, x, next_x, true)
+	if front_hit or rear_hit:
+		# The surviving crate finishes its slide to the original grid cell.
+		_strong_pair.clear()
+		_strong_direction = 0
+		return shift
 	if next_x == float(first.target_x):
 		strong_arms_charges -= 1
 		events.append({"type": "strong_push", "crate_ids": [int(first.id), int(second.id)],
@@ -973,7 +999,12 @@ func _move_crates() -> void:
 	var index := 0
 	while index < crates.size():
 		var crate := crates[index]
-		var slide := strong_slide if strong_ids.has(int(crate.id)) else _move_crate_horizontally(crate)
+		var slide := strong_slide
+		if not strong_ids.has(int(crate.id)):
+			var old_x := float(crate.x)
+			slide = _move_crate_horizontally(crate)
+			if _hit_ground_items(crate, old_x, float(crate.x), true):
+				continue
 		var old_bottom := float(crate.y) + 1.0
 		crate.vy = minf(float(crate.vy) + tuning.crate_gravity * STEP, tuning.crate_fall_speed)
 		var new_y := float(crate.y) + float(crate.vy) * STEP
@@ -993,7 +1024,7 @@ func _move_crates() -> void:
 			and new_y + 1.0 >= player.y + 0.02 and _overlap(
 				float(crate.x), 1.0, player.x, tuning.player_width, 0.055))
 		var sweep_end := minf(new_y + 1.0, player.y) if hits_head else new_y + 1.0
-		if _hit_ground_items(crate, old_bottom, sweep_end):
+		if _hit_ground_items(crate, float(crate.y), sweep_end - 1.0):
 			continue
 		if hits_head and (helmet_charges > 0 or lamp_helmet_equipped):
 			var contact_y := clampf(player.y - 1.0, float(crate.y), new_y)
@@ -1079,7 +1110,7 @@ func _advance_clear() -> void:
 	_move_items()
 	for crate: Dictionary in crates.duplicate():
 		var new_y := float(crate.clear_y) + smooth_fraction
-		if not _hit_ground_items(crate, float(crate.y) + 1.0, new_y + 1.0):
+		if not _hit_ground_items(crate, float(crate.y), new_y):
 			crate.y = new_y
 	player.y = minf(_player_clear_start.y + smooth_fraction, tuning.rows - tuning.player_height)
 	player_velocity.y = 0.0

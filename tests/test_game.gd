@@ -49,6 +49,7 @@ func run() -> void:
 	diagonal_crate_collisions()
 	clearing()
 	equipment_rewards()
+	sideways_item_impacts()
 	equipment_jumps()
 	bonus_equipment()
 	mallet_actions()
@@ -419,7 +420,7 @@ func equipment_rewards() -> void:
 		for remaining in range(strikes - 1, -1, -1):
 			var crate := hit.add_crate(5, 9.45, 6)
 			hit.advance(0.12, 0)
-			check(hit.crates.has(crate) == (kind in ["gloves", "strong_arms"]), "Ground impact: " + kind)
+			check(not hit.crates.has(crate), "Ground impact: " + kind)
 			check(hit.ground_items.has(item) == (remaining > 0), "Last hit breaks " + kind)
 			if remaining > 0:
 				check(item.charges == remaining, "One charge per falling crate")
@@ -515,6 +516,56 @@ func equipment_rewards() -> void:
 	worn.add_crate(float(feet.x) - .5, 9.46, 6)
 	worn.advance(.2, 0)
 	check(worn.broken_crates == 1 and not worn.ground_items.has(feet), "Discarded boots can be crushed")
+
+
+func sideways_item_impacts() -> void:
+	for direction: int in [-1, 1]:
+		for kind: String in Simulation.CAPACITIES:
+			for charges in [1, int(Simulation.CAPACITIES[kind])]:
+				var game := empty()
+				game._loot_rng.seed = 13 # The first roll produces speed boots.
+				var crate := game.add_crate(4, 10)
+				var item := game.add_ground_item(kind, 4.5 + direction, 11, charges)
+				game.player.x = 4 - game.tuning.player_width if direction > 0 else 5
+				game.advance(0.45, direction)
+				check(not game.crates.has(crate) and game.broken_crates == 1 and game.lines == 0,
+					"Sliding onto %s must break exactly one crate" % kind)
+				var survives := kind in ["helmet", "mallet"] and int(charges) > 1
+				check(game.ground_items.has(item) == survives, "Side impact lifetime for " + kind)
+				if survives:
+					check(int(item.charges) == int(charges) - 1, "Sliding consumes exactly one charge")
+				check(game.ground_items.size() == (2 if survives else 1)
+					and game.ground_items.back().kind == "speed_boots", "Side impacts use the same single loot roll")
+
+	var pull := gloved(1, 4.0)
+	pull.helmet_charges = 1
+	var exchanged := pull.add_ground_item("lamp_helmet", 3.5, 11, 0)
+	pull.pick_up_nearest()
+	check(exchanged.kind == "helmet" and exchanged.charges == 1, "Swap leaves the damaged helmet in the pull path")
+	pull.advance(0.4, 0, false, true)
+	check(pull.broken_crates == 1 and pull.crates.is_empty() and not pull.ground_items.has(exchanged)
+		and not pull.is_pulling() and pull.grabbed_crate_id == -1 and pull.gloves_charges == 6
+		and pull.lamp_helmet_equipped, "Pull breaks the discarded last charge and releases the unfinished grip")
+
+	var pair := empty()
+	pair.strong_arms_charges = 1
+	pair.player.x = 4 - pair.tuning.player_width
+	var rear := pair.add_crate(4, 10)
+	var front := pair.add_crate(5, 10)
+	var further := pair.add_ground_item("mallet", 6.51, 11, 2)
+	var nearer := pair.add_ground_item("helmet", 6.50, 11, 2)
+	pair.advance(0.10, 1)
+	pair.advance(0.35, 0)
+	check(pair.broken_crates == 1 and not pair.crates.has(front) and rear.x == 5 and rear.target_x == 5
+		and not pair.is_strong_pushing() and pair.strong_arms_charges == 1, "Surviving crate finishes its slide")
+	check(nearer.charges == 1 and further.charges == 2, "Front of the pair hits the nearest item only")
+	var top := empty()
+	top.player.x = 4 - top.tuning.player_width
+	top.add_crate(4, 10)
+	var resting := top.add_ground_item("helmet", 4.5, 10)
+	top.advance(0.45, 1)
+	check(top.broken_crates == 0 and resting.charges == 5 and resting.y > 10,
+		"An item above a sliding crate falls after losing support")
 
 
 func mallet_actions() -> void:
