@@ -50,6 +50,8 @@ func run() -> void:
 	diagonal_crate_collisions()
 	clearing()
 	equipment_rewards()
+	preload("res://tests/test_workshop_release.gd").run(check)
+	preload("res://tests/test_crane_repair.gd").run(check)
 	sideways_item_impacts()
 	equipment_jumps()
 	bonus_equipment()
@@ -392,20 +394,29 @@ func equipment_rewards() -> void:
 	var expected := RandomNumberGenerator.new()
 	expected.seed = 7481
 	var kinds := {}
+	var trap_count := 0
 	for index in range(1000):
 		var crate := game.add_crate(1, 8)
 		var count := game.ground_items.size()
+		var traps := game.traps.size()
 		game._destroy_crate(crate)
 		game._destroy_crate(crate)
-		if expected.randf() < 0.10:
-			var kind: String = Simulation.CAPACITIES.keys()[expected.randi_range(0, 7)]
+		var roll := expected.randf()
+		if roll < 0.10:
+			var kind: String = Simulation.CAPACITIES.keys()[expected.randi_range(0, 11)]
 			var item := game.ground_items.back() as Dictionary
 			check(item.kind == kind and item.charges == Simulation.CAPACITIES[kind]
-				and game.ground_items.size() == count + 1, "Each winning draw creates one full item")
+				and game.ground_items.size() == count + 1 and game.traps.size() == traps,
+				"Each winning draw creates one of twelve full items")
 			kinds[kind] = true
+		elif roll < 0.13:
+			trap_count += 1
+			check(game.traps.size() == traps + 1 and game.traps.back().phase == "folded"
+				and game.ground_items.size() == count, "Each trap draw produces one folded trap")
 		else:
-			check(game.ground_items.size() == count, "A failed draw produces nothing")
-	check(kinds.size() == 8 and game.broken_crates == 1000 and game.lines == 0, "Single destructions never score rows")
+			check(game.ground_items.size() == count and game.traps.size() == traps, "The remaining draws produce nothing")
+	check(kinds.size() == 12 and trap_count > 15 and trap_count < 50 and game.broken_crates == 1000
+		and game.lines == 0, "Single destructions never score rows")
 
 	var row := empty()
 	for index in range(40):
@@ -479,7 +490,7 @@ func equipment_rewards() -> void:
 			and path.broken_crates == 1 and path.lines == 0, "Identical drop rule for " + cause)
 
 	var chain := empty()
-	chain._loot_rng.seed = 149 # First two drops are a helmet and a lamp helmet.
+	chain._loot_rng.seed = 13981 # First two drops are a helmet and a lamp helmet.
 	chain.add_ground_item("boots", 7.5, 11)
 	chain.add_crate(7, 9.49, 6)
 	chain.add_crate(7, 8.48, 6)
@@ -1553,8 +1564,19 @@ func demo_games() -> void:
 	check(personal.ticks == 0 and personal.score == 0 and personal._rng.state == rng_state, "AI demo must not consume personal time, score or randomness")
 	check(demo.jumps > 0 and demo.drops > 0, "Demo must jump and receive real crane drops")
 	check(demo.lines > 0, "Reactive AI must be able to clear a real bottom line")
-	check(demo.losses > 0 and demo.rounds > 1, "Demo must restart real lost games without inventing victory rules")
-	print("DEMO_PASS: %d jumps, %d drops, %d lines, %d losses, %d rounds" % [demo.jumps, demo.drops, demo.lines, demo.losses, demo.rounds])
+	var restart := StackDemo.new(Config.new(), 7481)
+	var lost_game := restart.model
+	lost_game.crates.clear()
+	lost_game.cranes_enabled = false
+	var head := lost_game.player
+	lost_game.add_crate(floorf(head.x), head.y - 1.02, 6.0, -1, "metal")
+	restart.advance(0.08)
+	check(restart.losses == 1 and lost_game.loss_reason == "metal_crushed",
+		"Demo records a genuine game-over when a nearby metal crate strikes")
+	restart.advance(1.25)
+	check(restart.rounds == 2 and restart.model != lost_game and restart.model.state == "playing",
+		"After the loss delay, demo restarts with a new game and ordinary game rules")
+	print("DEMO_PASS: %d jumps, %d drops, %d lines, plus a verified loss and restart" % [demo.jumps, demo.drops, demo.lines])
 
 
 func vibration_toggle() -> void:

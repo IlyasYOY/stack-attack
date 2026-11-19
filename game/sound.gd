@@ -31,7 +31,10 @@ func setup(settings: StackProfile) -> void:
 		effects_players.append(player)
 	for name in ["click", "jump", "land", "line", "over", "crush", "helmet_hit", "helmet_break",
 		"gloves_tear", "mallet_swing", "mallet_hit", "mallet_break",
-		"spring_jump", "spring_jump_auto", "lamp_reveal", "lamp_break"]:
+		"spring_jump", "spring_jump_auto", "lamp_reveal", "lamp_break",
+		"watch_start", "watch_end", "watch_break", "trap_warning", "trap_open", "trap_caught",
+		"trap_escape", "trap_disarmed", "trap_crushed", "metal_land", "metal_impact", "mallet_ring",
+		"slingshot_fire", "crane_break", "mechanic_repair", "crane_fixed", "mechanic_hit", "mechanic_land"]:
 		sounds[name] = load("res://audio/" + name + ".wav")
 	slide_player = AudioStreamPlayer.new()
 	slide_player.bus = "Effects"
@@ -61,7 +64,7 @@ func effect(name: String, haptics: bool = true) -> void:
 	if haptics and _supports_haptics() and profile.vibration:
 		if name == "line":
 			_vibrate(40)
-		elif name in ["over", "crush"]:
+		elif name in ["over", "crush", "metal_impact", "trap_caught"]:
 			_vibrate(90)
 		elif name in ["jump", "spring_jump", "spring_jump_auto"]:
 			_vibrate(12)
@@ -78,7 +81,7 @@ func _play_effect(name: String) -> void:
 			player.play()
 			return
 	# A fatal impact must still be audible during a busy chain reaction.
-	if name == "crush":
+	if name in ["crush", "metal_impact", "trap_caught", "trap_warning", "crane_break", "watch_start"]:
 		effects_players[0].stream = sounds[name]
 		effects_players[0].play()
 

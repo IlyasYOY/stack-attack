@@ -9,11 +9,17 @@ const ICONS := {
 	"gloves": preload("res://art/work_gloves.png"),
 	"mallet": preload("res://art/wooden_mallet.png"),
 	"strong_arms": preload("res://art/strong_arms.png"),
+	"watch_cap": preload("res://art/watch_cap.png"),
+	"hunting_boots": preload("res://art/hunting_boots.png"),
+	"engineer_goggles": preload("res://art/engineer_goggles.png"),
+	"slingshot": preload("res://art/slingshot.png"),
 }
 const SLOTS := StackSimulation.SLOTS
 const NAMES := {"boots": "Ботинки-ракеты", "helmet": "Каска", "gloves": "Рабочие перчатки",
 	"mallet": "Киянка", "strong_arms": "Накачанные руки", "speed_boots": "Сапоги-скороходы",
-	"lamp_helmet": "Каска с фонарём", "spring_boots": "Пружинные ботинки"}
+	"lamp_helmet": "Каска с фонарём", "spring_boots": "Пружинные ботинки",
+	"watch_cap": "Колпак часовщика", "hunting_boots": "Охотничьи сапоги",
+	"engineer_goggles": "Очки инженера", "slingshot": "Рогатка"}
 const CAPACITIES := StackSimulation.CAPACITIES
 const CREAM := Color("f4e3ba")
 const GOLD := Color("e7b46b")
@@ -43,6 +49,7 @@ static func build_pause(panel: PanelContainer, content: VBoxContainer, compact: 
 	loadout.add_theme_constant_override("separation", 12 if compact else 8)
 	content.add_child(loadout)
 
+	var charges := _loadout_charges(model)
 	var portrait := PanelContainer.new()
 	portrait.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	portrait.size_flags_vertical = Control.SIZE_SHRINK_CENTER
@@ -51,7 +58,9 @@ static func build_pause(panel: PanelContainer, content: VBoxContainer, compact: 
 	_picture(portrait, StackWorldView.pause_portrait(model.boots_equipped, model.helmet_charges > 0,
 		model.gloves_charges > 0, {"strong_arms": model.strong_arms_charges > 0,
 			"speed_boots": model.speed_boots_charges > 0, "spring_boots": model.spring_boots_charges > 0,
-			"lamp_helmet": model.lamp_helmet_equipped}),
+			"lamp_helmet": model.lamp_helmet_equipped, "watch_cap": charges.watch_cap >= 0,
+			"engineer_goggles": charges.engineer_goggles >= 0, "hunting_boots": charges.hunting_boots >= 0,
+			"slingshot": charges.slingshot >= 0}),
 		Vector2(48, 66) if compact else Vector2(64, 84))
 
 	var center := CenterContainer.new()
@@ -61,17 +70,16 @@ static func build_pause(panel: PanelContainer, content: VBoxContainer, compact: 
 	slots.add_theme_constant_override("h_separation", 12)
 	slots.add_theme_constant_override("v_separation", 2)
 	center.add_child(slots)
-	var charges := _loadout_charges(model)
 	var head := _equipped_item("head", charges)
 	var hands := _equipped_item("hands", charges)
 	var feet := _equipped_item("feet", charges)
-	_equipment_slot(text, slots, "Голова", "slot_head", head, charges[head])
+	_equipment_slot(text, slots, "Голова", "slot_head", head, charges[head], model.watch_cap_time)
 	_equipment_slot(text, slots, "Руки", "slot_hands", hands, charges[hands])
 	_equipment_slot(text, slots, "Ноги", "slot_feet", feet, charges[feet])
 
 
 static func _equipment_slot(text: Callable, slots: GridContainer, title: String, id: String,
-		item: String, charges: int) -> void:
+		item: String, charges: int, watch_time: float = 0.0) -> void:
 	if charges < 0:
 		_slot_label(text, slots, title, id)
 		return
@@ -80,7 +88,8 @@ static func _equipment_slot(text: Callable, slots: GridContainer, title: String,
 	details.add_theme_constant_override("separation", 5)
 	slots.add_child(details)
 	_picture(details, ICONS[item], Vector2.ONE * 24)
-	var label := _label(text, details, "%d / %d" % [charges, CAPACITIES[item]], id, 15, GOLD)
+	var remaining := _watch_time_text(watch_time) if item == "watch_cap" else str(charges)
+	var label := _label(text, details, "%s / %d" % [remaining, CAPACITIES[item]], id, 15, GOLD)
 	label.accessibility_name = "%s · %s" % [NAMES[item], label.text]
 
 
@@ -97,7 +106,9 @@ static func build_hud(parent: Control, item: String) -> Label:
 	row.add_theme_constant_override("separation", 2)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	plate.add_child(row)
-	_picture(row, ICONS[item], Vector2.ONE * (15 if item == "spring_boots" else 20))
+	_picture(row, ICONS[item], Vector2.ONE * (15 if item in ["spring_boots", "watch_cap"] else 20))
+	if item == "watch_cap":
+		plate.draw.connect(_draw_watch_reserve.bind(plate))
 	if item == "spring_boots":
 		row.add_theme_constant_override("separation", 1)
 		var meter := Control.new()
@@ -110,7 +121,7 @@ static func build_hud(parent: Control, item: String) -> Label:
 	var count := Label.new()
 	count.name = item + "_charges"
 	count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	count.add_theme_font_size_override("font_size", 16)
+	count.add_theme_font_size_override("font_size", 14 if item == "watch_cap" else 16)
 	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(count)
 	plate.hide()
@@ -130,9 +141,16 @@ static func update_hud(badges: Dictionary, world: StackWorldView, spring_peak: i
 		plate.visible = charge_count >= 0
 		if plate.visible:
 			plate.position = world.badge_position(item, plate.size)
-			if count.text != str(charge_count):
-				count.text = str(charge_count)
-				count.accessibility_name = "%s · %d" % [NAMES[item], charge_count]
+			var remaining := str(charge_count)
+			if item == "watch_cap":
+				remaining = _watch_time_text(model.watch_cap_time)
+				var fraction := model.watch_cap_time / float(CAPACITIES.watch_cap)
+				if plate.get_meta("fraction", -1.0) != fraction:
+					plate.set_meta("fraction", fraction)
+					plate.queue_redraw()
+			if count.text != remaining:
+				count.text = remaining
+				count.accessibility_name = "%s · %s" % [NAMES[item], remaining]
 	var spring: Label = badges.spring_boots
 	var meter := spring.get_parent().get_node("spring_charge_meter") as Control
 	var stages := maxi(model.spring_charge_stages, spring_peak)
@@ -171,12 +189,27 @@ static func _draw_swap(button: Button) -> void:
 		var tangent := Vector2.from_angle(end + PI / 2)
 		button.draw_colored_polygon(PackedVector2Array([tip + tangent * 3.5,
 			tip - tangent * 3 - tangent.orthogonal() * 4, tip - tangent * 3 + tangent.orthogonal() * 4]), MINT)
-	button.draw_texture_rect_region(StackWorldView.GROUND_ATLAS, Rect2(center - Vector2(15, 17), Vector2(30, 24)),
-		StackWorldView.ground_icon_region(kind))
+	if StackWorldView.WORKSHOP_ICONS.has(kind):
+		button.draw_texture_rect(ICONS[kind], Rect2(center - Vector2(12, 17), Vector2(24, 24)), false)
+	else:
+		button.draw_texture_rect_region(StackWorldView.GROUND_ATLAS, Rect2(center - Vector2(15, 17), Vector2(30, 24)),
+			StackWorldView.ground_icon_region(kind))
 	var counter := str(button.get_meta("charges", 0))
 	var baseline := center + Vector2(-12, 16)
 	button.draw_string_outline(StackWorldView.FONT, baseline, counter, HORIZONTAL_ALIGNMENT_CENTER, 24, 15, 3, DARK)
 	button.draw_string(StackWorldView.FONT, baseline, counter, HORIZONTAL_ALIGNMENT_CENTER, 24, 15, CREAM)
+
+
+static func _watch_time_text(time: float) -> String:
+	return ("%.1f" % (ceilf(time * 10.0) / 10.0)).replace(".", ",")
+
+
+static func _draw_watch_reserve(plate: PanelContainer) -> void:
+	var bar := Rect2(4.0, plate.size.y - 4.0, plate.size.x - 8.0, 2.0)
+	var fraction := clampf(float(plate.get_meta("fraction", 0.0)), 0.0, 1.0)
+	plate.draw_rect(bar, EDGE.darkened(0.35))
+	bar.size.x *= fraction
+	plate.draw_rect(bar, StackWorldView.WATCH_LIGHT)
 
 
 static func _draw_spring_charge(meter: Control) -> void:

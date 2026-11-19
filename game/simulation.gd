@@ -7,6 +7,14 @@ const CRANE_EDGE_MARGIN := 1.5
 const CRATE_RELEASE_Y := -0.95
 const CRATE_VARIANT_COUNT := 10
 const DROP_CHANCE := 0.10
+const TRAP_CHANCE := 0.03
+const METAL_CHANCE := 0.10
+const WATCH_CAP_SECONDS := 5.0
+const TRAP_WARNING_SECONDS := 0.8
+const TRAP_HOLD_SECONDS := 0.5
+const TRAP_RADIUS := 0.35
+const TRAP_HEIGHT := 0.22
+const LOSS_REASONS := ["crushed", "overflow", "metal_crushed", "trap", "mechanic"]
 const ITEM_RADIUS := 0.23
 const PICKUP_DISTANCE := 1.12
 const BOOTS_MAX_CHARGES := 10
@@ -20,9 +28,11 @@ const SPRING_BOOTS_MAX_CHARGES := 8
 const CAPACITIES := {"boots": BOOTS_MAX_CHARGES, "helmet": HELMET_MAX_CHARGES,
 	"gloves": GLOVES_MAX_CHARGES, "mallet": MALLET_MAX_CHARGES, "strong_arms": STRONG_ARMS_MAX_CHARGES,
 	"speed_boots": SPEED_BOOTS_MAX_CHARGES, "lamp_helmet": LAMP_HELMET_MAX_CHARGES,
-	"spring_boots": SPRING_BOOTS_MAX_CHARGES}
-const SLOTS := {"feet": ["boots", "speed_boots", "spring_boots"],
-	"head": ["helmet", "lamp_helmet"], "hands": ["gloves", "mallet", "strong_arms"]}
+	"spring_boots": SPRING_BOOTS_MAX_CHARGES,
+	"watch_cap": 5, "hunting_boots": 2, "engineer_goggles": 3, "slingshot": 5}
+const SLOTS := {"feet": ["boots", "speed_boots", "spring_boots", "hunting_boots"],
+	"head": ["helmet", "lamp_helmet", "watch_cap", "engineer_goggles"],
+	"hands": ["gloves", "mallet", "strong_arms", "slingshot"]}
 const SPEED_BOOTS_MULTIPLIER := 1.55
 const LAMP_REVEAL_TIME := 1.5
 const SPRING_STAGE_TIME := 0.18
@@ -54,8 +64,22 @@ var chain := 0
 var clear_elapsed := 0.0
 var accumulator := 0.0
 var ground_items: Array[Dictionary] = []
+var traps: Array[Dictionary] = []
+var trap_hold_time := 0.0
+var watch_cap_time := 0.0
+var watch_cap_active := false
+var frame_world_delta := 0.0
+var hunting_boots_charges := 0
+var engineer_goggles_charges := 0
+var slingshot_charges := 0
+var repair := StackCraneRepair.new()
+var _caught_trap: Dictionary = {}
+var _goggles_pending := false
+var _shot_pending := false
+var _material_rng := RandomNumberGenerator.new()
 var _loot_rng := RandomNumberGenerator.new()
 var _next_item_id := 0
+var _next_trap_id := 0
 var boots_equipped := false
 var boots_charges := 0
 var helmet_charges := 0
@@ -136,7 +160,19 @@ func reset(seed_value: int) -> void:
 	accumulator = 0.0
 	ground_items.clear()
 	_next_item_id = 0
+	_next_trap_id = 0
 	_loot_rng.seed = seed_value
+	_material_rng.seed = seed_value
+	repair.reset(seed_value)
+	traps.clear()
+	_caught_trap = {}
+	trap_hold_time = 0.0
+	watch_cap_time = 0.0
+	watch_cap_active = false
+	frame_world_delta = 0.0
+	hunting_boots_charges = 0
+	engineer_goggles_charges = 0
+	slingshot_charges = 0
 	boots_equipped = false
 	boots_charges = 0
 	helmet_charges = 0
@@ -173,18 +209,21 @@ func _take_crate_variant() -> int:
 	return variant
 
 
-func add_crate(x: float, y: float, velocity: float = 0.0, variant: int = -1) -> Dictionary:
+func add_crate(x: float, y: float, velocity: float = 0.0, variant: int = -1,
+		material: String = "wood") -> Dictionary:
 	if variant < 0 or variant >= CRATE_VARIANT_COUNT:
 		variant = _take_crate_variant()
 	var crate := {"id": _next_id, "x": x, "y": y, "vy": velocity,
-		"target_x": x, "color": _next_id % 3, "variant": variant}
+		"target_x": x, "color": _next_id % 3, "variant": variant, "material": material}
 	_next_id += 1
 	crates.append(crate)
 	return crate
 
 
 func time_to_crane_release(crane: Dictionary) -> float:
-	if not cranes_enabled or crane.waiting or not crane.loaded or int(crane.release_column) < 0:
+	var index := cranes.find(crane)
+	if not cranes_enabled or crane.waiting or not crane.loaded or int(crane.release_column) < 0 \
+			or (index >= 0 and repair.workers[index].broken):
 		return INF
 	var distance := (float(crane.release_column) + 0.5 - float(crane.x)) * int(crane.direction)
 	return maxf(0.0, distance) / tuning.crane_speed
@@ -195,7 +234,7 @@ func is_clearing_crate(crate_id: int) -> bool:
 
 
 func match_result(ended_at: String) -> Dictionary:
-	if state != "over" or loss_reason not in ["crushed", "overflow"]:
+	if state != "over" or loss_reason not in LOSS_REASONS:
 		return {}
 	return {"ended_at": ended_at, "duration_ms": roundi(ticks * STEP * 1000.0),
 		"score": score, "lines": lines, "crates": cleared_crates, "best_combo": best_combo,
@@ -205,6 +244,7 @@ func match_result(ended_at: String) -> Dictionary:
 func advance(delta: float, axis: float, jump_pressed: bool = false, pull_held: bool = false,
 		mallet_pressed: bool = false, bonus_input: Dictionary = {}) -> void:
 	events.clear()
+	frame_world_delta = 0.0
 	if not pull_held:
 		release_pull_input()
 	if signf(axis) != _sliding_push_direction or _gloves_take_control(pull_held):
@@ -213,23 +253,53 @@ func advance(delta: float, axis: float, jump_pressed: bool = false, pull_held: b
 		return
 	if mallet_pressed and mallet_charges > 0 and state == "playing":
 		_mallet_pending = true
-	if bool(bonus_input.get("lamp_pressed", false)) and state == "playing":
-		_lamp_pending = true
+	if state == "playing":
+		_lamp_pending = _lamp_pending or bool(bonus_input.get("lamp_pressed", false))
+		_goggles_pending = _goggles_pending or bool(bonus_input.get("goggles_pressed", false))
+		_shot_pending = _shot_pending or bool(bonus_input.get("slingshot_pressed", false))
 	if _gloves_take_control(pull_held):
 		_jump_buffer = 0.0
 		_air_jump_requested = false
 		_cancel_spring_charge()
-	elif jump_pressed:
+	elif jump_pressed and trap_hold_time <= 0.0:
 		_request_jump()
 	var jump_held := bool(bonus_input.get("jump_held", false))
 	var speed_held := bool(bonus_input.get("speed_held", false))
-	accumulator += maxf(delta, 0.0)
+	frame_world_delta = _watch_delta(maxf(delta, 0.0), bonus_input)
+	accumulator += frame_world_delta
 	while accumulator + EPS * 0.01 >= STEP:
 		accumulator -= STEP
 		_tick(clampf(axis, -1.0, 1.0), pull_held, jump_held, speed_held)
 		if state == "over":
 			accumulator = 0.0
 			break
+
+
+func _watch_delta(delta: float, input: Dictionary) -> float:
+	var held := bool(input.get("watch_held", false)) and watch_cap_time > 0.0
+	if watch_cap_active != held:
+		watch_cap_active = held
+		_watch_event("watch_start" if held else "watch_end")
+	if not held:
+		return delta
+	var realtime := maxf(0.0, float(input.get("real_delta", delta)))
+	var used := minf(watch_cap_time, realtime)
+	watch_cap_time -= used
+	if watch_cap_time <= EPS * EPS:
+		_break_watch_cap()
+	# A frame which spans the last fraction of a charge contains both speeds.
+	return delta * (1.0 - 0.5 * used / realtime) if realtime > 0.0 else delta * 0.5
+
+
+func _watch_event(kind: String) -> void:
+	events.append({"type": kind, "player_x": player.x, "player_y": player.y})
+
+
+func _break_watch_cap() -> void:
+	if watch_cap_time > 0.0 or watch_cap_active:
+		_watch_event("watch_break")
+	watch_cap_time = 0.0
+	watch_cap_active = false
 
 
 func is_crate_sliding(axis: float, pull_held: bool) -> bool:
@@ -248,35 +318,43 @@ func add_ground_item(kind: String, x: float, bottom: float, charges: int = -1) -
 	return item
 
 
+func add_trap(x: float, bottom: float, velocity: float = 0.0) -> Dictionary:
+	var trap := {"id": _next_trap_id, "x": x, "y": bottom, "vy": velocity, "phase": "folded",
+		"timer": TRAP_WARNING_SECONDS, "born": -1}
+	_next_trap_id += 1
+	traps.append(trap)
+	return trap
+
+
 func _destroy_crate(crate: Dictionary, row: bool = false) -> void:
-	if not crates.has(crate):
+	if not crates.has(crate) or (crate.material == "metal" and not row):
 		return
 	crates.erase(crate)
 	if row:
 		cleared_crates += 1
 	else:
 		broken_crates += 1
-	if _loot_rng.randf() < DROP_CHANCE:
+	if crate.material == "metal":
+		return
+	var roll := _loot_rng.randf()
+	if roll < DROP_CHANCE:
 		var kind: String = CAPACITIES.keys()[_loot_rng.randi_range(0, CAPACITIES.size() - 1)]
 		var item := add_ground_item(kind, float(crate.x) + 0.5, float(crate.y) + 0.78)
 		item.vy = -4.2
 		item.born = ticks
 		item.row_splinters = row
 		item.origin_y = float(crate.y) + 0.5
+	elif roll < DROP_CHANCE + TRAP_CHANCE:
+		var trap := add_trap(float(crate.x) + 0.5, float(crate.y) + 0.78, -4.2)
+		trap.born = ticks
 
 
 func _move_items() -> void:
 	for item in ground_items:
 		var bottom := float(item.y)
-		var support := float(tuning.rows)
-		var ceiling := PLAYER_TOP
-		for crate in crates:
-			if not _overlap(float(item.x) - ITEM_RADIUS, ITEM_RADIUS * 2, float(crate.x), 1.0):
-				continue
-			if bottom <= float(crate.y) + EPS:
-				support = minf(support, float(crate.y))
-			elif float(crate.y) + 1.0 <= bottom - ITEM_RADIUS * 2 + EPS:
-				ceiling = maxf(ceiling, float(crate.y) + 1.0)
+		var surfaces := _item_surfaces(float(item.x), bottom, ITEM_RADIUS, ITEM_RADIUS * 2)
+		var ceiling := surfaces.x
+		var support := surfaces.y
 		item.vy = minf(float(item.vy) + tuning.gravity * STEP, tuning.crate_fall_speed)
 		item.y = bottom + float(item.vy) * STEP
 		if item.vy < 0.0 and item.y < ceiling + ITEM_RADIUS * 2:
@@ -291,8 +369,110 @@ func _move_items() -> void:
 				item.vy = 0.0
 
 
+func _item_surfaces(x: float, bottom: float, radius: float, height: float) -> Vector2:
+	var support := float(tuning.rows)
+	var ceiling := PLAYER_TOP
+	for crate in crates:
+		if not _overlap(x - radius, radius * 2, float(crate.x), 1.0):
+			continue
+		if bottom <= float(crate.y) + EPS:
+			support = minf(support, float(crate.y))
+		elif float(crate.y) + 1.0 <= bottom - height + EPS:
+			ceiling = maxf(ceiling, float(crate.y) + 1.0)
+	return Vector2(ceiling, support)
+
+
+func _trap_event(kind: String, trap: Dictionary) -> void:
+	events.append({"type": kind, "x": float(trap.x), "y": float(trap.y)})
+
+
+func _move_traps() -> void:
+	for trap in traps:
+		var bottom := float(trap.y)
+		var surfaces := _item_surfaces(float(trap.x), bottom, TRAP_RADIUS, TRAP_HEIGHT)
+		trap.vy = minf(float(trap.vy) + tuning.gravity * STEP, tuning.crate_fall_speed)
+		trap.y = bottom + float(trap.vy) * STEP
+		if float(trap.vy) < 0.0 and float(trap.y) < surfaces.x + TRAP_HEIGHT:
+			trap.y = surfaces.x + TRAP_HEIGHT
+			trap.vy = 0.0
+		elif float(trap.y) >= surfaces.y:
+			trap.y = surfaces.y
+			trap.vy = 0.0
+			if trap.phase == "folded" and state == "playing":
+				trap.phase = "warning"
+				trap.timer = TRAP_WARNING_SECONDS
+				_trap_event("trap_warning", trap)
+				continue
+		elif trap.phase == "warning":
+			trap.phase = "folded"
+		if trap.phase == "warning" and state == "playing":
+			trap.timer = maxf(0.0, float(trap.timer) - STEP)
+			if float(trap.timer) <= EPS:
+				trap.phase = "open"
+				_trap_event("trap_open", trap)
+
+
+func nearest_trap() -> Dictionary:
+	var feet := player + Vector2(tuning.player_width * 0.5, tuning.player_height)
+	var best := 1.0 + EPS
+	var nearest: Dictionary = {}
+	for trap in traps:
+		if trap == _caught_trap:
+			continue
+		var distance := feet.distance_squared_to(Vector2(trap.x, trap.y))
+		if distance < best:
+			best = distance
+			nearest = trap
+	return nearest
+
+
+func _disarm_trap() -> void:
+	if engineer_goggles_charges <= 0:
+		return
+	var trap := nearest_trap()
+	if trap.is_empty():
+		return
+	engineer_goggles_charges -= 1
+	traps.erase(trap)
+	_trap_event("trap_disarmed", trap)
+
+
+func _check_trap_contact() -> void:
+	if trap_hold_time > 0.0:
+		return
+	var feet := player.y + tuning.player_height
+	for trap in traps:
+		if trap.phase != "open" or feet < float(trap.y) - TRAP_HEIGHT or feet > float(trap.y) + EPS:
+			continue
+		if not _overlap(player.x, tuning.player_width, float(trap.x) - TRAP_RADIUS, TRAP_RADIUS * 2):
+			continue
+		if hunting_boots_charges <= 0:
+			_lose("trap")
+		else:
+			_caught_trap = trap
+			trap_hold_time = TRAP_HOLD_SECONDS
+			player_velocity = Vector2.ZERO
+			cancel_grab()
+			cancel_jump_input()
+			_trap_event("trap_caught", trap)
+		return
+
+
+func _advance_trap_hold() -> void:
+	if trap_hold_time <= 0.0:
+		return
+	trap_hold_time = maxf(0.0, trap_hold_time - STEP)
+	if trap_hold_time > EPS:
+		return
+	trap_hold_time = 0.0
+	hunting_boots_charges -= 1
+	traps.erase(_caught_trap)
+	_trap_event("trap_escape", _caught_trap)
+	_caught_trap = {}
+
+
 func nearest_item() -> Dictionary:
-	if state != "playing":
+	if state != "playing" or trap_hold_time > 0.0:
 		return {}
 	var center := player + Vector2(tuning.player_width, tuning.player_height) * 0.5
 	var nearest := {}
@@ -308,6 +488,8 @@ func nearest_item() -> Dictionary:
 
 
 func equipped_charges(kind: String) -> int:
+	if kind == "watch_cap":
+		return ceili(watch_cap_time) if watch_cap_time > 0.0 else -1
 	var charges := int(get(kind + "_charges"))
 	if charges > 0 or (kind == "boots" and boots_equipped) or (kind == "lamp_helmet" and lamp_helmet_equipped):
 		return charges
@@ -328,6 +510,9 @@ func pick_up_nearest() -> String:
 	if item.is_empty():
 		return ""
 	var kind := str(item.kind)
+	# The pending steel step owns the equipped hands until it settles.
+	if kind in SLOTS.hands and crates.any(func(crate: Dictionary) -> bool: return crate.has("metal_push")):
+		return ""
 	var charges := int(item.charges)
 	var progress := float(item.progress)
 	var old := equipped_in_slot(kind)
@@ -335,8 +520,10 @@ func pick_up_nearest() -> String:
 		ground_items.erase(item)
 	else:
 		item.kind = old
-		item.charges = int(get(old + "_charges"))
+		item.charges = equipped_charges(old)
 		item.progress = speed_boots_progress if old == "speed_boots" else 0.0
+		if old == "watch_cap":
+			item.progress = watch_cap_time
 		item.born = -1
 	if kind in SLOTS.feet:
 		_release_feet_slot()
@@ -344,6 +531,9 @@ func pick_up_nearest() -> String:
 		_release_head_slot()
 	else:
 		_release_hands_slot()
+	if kind == "watch_cap":
+		watch_cap_time = progress if progress > 0.0 else float(charges)
+		return kind
 	set(kind + "_charges", charges)
 	if kind == "boots":
 		boots_equipped = true
@@ -354,35 +544,36 @@ func pick_up_nearest() -> String:
 	return kind
 
 
-# Sweep the leading edge. Each crate resolves its first contact only, and new
-# drops become eligible on the next physics tick.
+# Sweep the leading edge. Metal continues through gear and any crate
+# can flatten a trap. The first ordinary item struck by wood stops it.
 func _hit_ground_items(crate: Dictionary, start: float, end: float, sideways: bool = false) -> bool:
-	if start == end or ground_items.is_empty() or (not sideways and end < start):
+	if start == end or (ground_items.is_empty() and traps.is_empty()) or (not sideways and end < start):
 		return false
 	var direction := signf(end - start)
 	var leading_edge := start * direction + (1.0 if direction > 0.0 else 0.0)
 	var travel := absf(end - start)
-	var closest := INF
-	var hit := {}
-	for item in ground_items:
-		if item.born == ticks:
+	var closest := travel
+	var hit: Dictionary = {}
+	var metal: bool = crate.material == "metal"
+	for item in ground_items.duplicate():
+		var distance := _ground_contact(crate, item, direction, leading_edge, sideways, ITEM_RADIUS, ITEM_RADIUS * 2)
+		if distance > closest:
 			continue
-		var near_edge: float
-		if sideways:
-			if not _overlap(float(crate.y), 1.0, float(item.y) - ITEM_RADIUS * 2, ITEM_RADIUS * 2, 0.0):
-				continue
-			near_edge = float(item.x) * direction - ITEM_RADIUS
-		else:
-			if not _overlap(float(crate.x), 1.0, float(item.x) - ITEM_RADIUS, ITEM_RADIUS * 2):
-				continue
-			near_edge = float(item.y) - ITEM_RADIUS * 2
-		var distance := near_edge - leading_edge
-		if distance < -ITEM_RADIUS * 2 - EPS or distance > travel:
-			continue
-		distance = maxf(0.0, distance)
-		if distance < closest:
+		if metal:
+			ground_items.erase(item)
+			_trap_event("metal_impact", item)
+		elif hit.is_empty() or distance < closest:
 			closest = distance
 			hit = item
+	for trap in traps.duplicate():
+		var distance := _ground_contact(crate, trap, direction, leading_edge, sideways, TRAP_RADIUS, TRAP_HEIGHT)
+		if distance > closest:
+			continue
+		traps.erase(trap)
+		if trap == _caught_trap:
+			_caught_trap = {}
+			trap_hold_time = 0.0
+		_trap_event("trap_crushed", trap)
 	if hit.is_empty():
 		return false
 	if hit.kind in ["helmet", "mallet"] and int(hit.charges) > 1:
@@ -395,6 +586,24 @@ func _hit_ground_items(crate: Dictionary, start: float, end: float, sideways: bo
 	return true
 
 
+func _ground_contact(crate: Dictionary, item: Dictionary, direction: float, leading_edge: float,
+		sideways: bool, radius: float, height: float) -> float:
+	if item.born == ticks:
+		return INF
+	var near_edge: float
+	var thickness := radius * 2.0 if sideways else height
+	if sideways:
+		if not _overlap(float(crate.y), 1.0, float(item.y) - height, height, 0.0):
+			return INF
+		near_edge = float(item.x) * direction - radius
+	else:
+		if not _overlap(float(crate.x), 1.0, float(item.x) - radius, radius * 2.0):
+			return INF
+		near_edge = float(item.y) - height
+	var distance := near_edge - leading_edge
+	return INF if distance < -thickness - EPS else maxf(0.0, distance)
+
+
 func _release_hands_slot() -> void:
 	cancel_grab()
 	cancel_mallet_swing()
@@ -402,6 +611,8 @@ func _release_hands_slot() -> void:
 	gloves_charges = 0
 	mallet_charges = 0
 	strong_arms_charges = 0
+	slingshot_charges = 0
+	_shot_pending = false
 
 
 func _release_head_slot() -> void:
@@ -410,6 +621,10 @@ func _release_head_slot() -> void:
 	lamp_helmet_charges = 0
 	lamp_active_time = 0.0
 	_lamp_pending = false
+	watch_cap_time = 0.0
+	watch_cap_active = false
+	engineer_goggles_charges = 0
+	_goggles_pending = false
 
 
 func _release_feet_slot() -> void:
@@ -420,6 +635,7 @@ func _release_feet_slot() -> void:
 	speed_boots_progress = 0.0
 	speed_boost_active = false
 	spring_boots_charges = 0
+	hunting_boots_charges = 0
 	_spring_flight = false
 	_cancel_spring_charge()
 
@@ -433,6 +649,9 @@ func cancel_jump_input() -> void:
 func cancel_bonus_input() -> void:
 	cancel_jump_input()
 	_lamp_pending = false
+	_goggles_pending = false
+	_shot_pending = false
+	watch_cap_active = false
 	speed_boost_active = false
 
 
@@ -449,20 +668,36 @@ func _tick(axis: float, pull_held: bool, jump_held: bool, speed_held: bool) -> v
 	_jump_buffer = maxf(0.0, _jump_buffer - STEP)
 	_coyote = 0.085 if grounded else maxf(0.0, _coyote - STEP)
 	_update_lamp()
-	if _gloves_take_control(pull_held):
-		_move_with_gloves(pull_held and gloves_charges > 0)
+	if _goggles_pending:
+		_goggles_pending = false
+		_disarm_trap()
+	if _shot_pending:
+		_shot_pending = false
+		repair.shoot(self)
+	if trap_hold_time > 0.0:
+		_advance_trap_hold()
 	else:
-		_walk_player(axis, speed_held)
-	_advance_mallet()
-	_move_player_vertically(jump_held)
+		if _gloves_take_control(pull_held):
+			_move_with_gloves(pull_held and gloves_charges > 0)
+		else:
+			_walk_player(axis, speed_held)
+		_advance_mallet()
+		_move_player_vertically(jump_held)
 	_move_items()
+	_move_traps()
 	_move_crates()
+	if state == "over":
+		return
+	repair.advance(self)
+	if state == "over":
+		return
+	if _begin_clear_if_full():
+		return
+	_check_trap_contact()
 	if state == "over":
 		return
 	if (grabbed_crate_id >= 0 or is_pulling()) and _held_crate().is_empty():
 		cancel_grab()
-	if _begin_clear_if_full():
-		return
 	for crate in crates:
 		if float(crate.y) <= EPS and absf(float(crate.vy)) < EPS:
 			_lose("overflow")
@@ -520,6 +755,11 @@ func _finish_mallet_swing() -> void:
 			closest_height = height
 	if target.is_empty():
 		events.append(_mallet_event("mallet_miss"))
+		return
+	if target.material == "metal":
+		var ring := _mallet_event("mallet_ring")
+		ring.merge({"x": float(target.x), "y": float(target.y)})
+		events.append(ring)
 		return
 	_destroy_crate(target)
 	mallet_charges -= 1
@@ -696,7 +936,7 @@ func _grab_gap(crate: Dictionary) -> float:
 
 func _can_hold(crate: Dictionary) -> bool:
 	var gap := _grab_gap(crate)
-	return (grounded and gap >= -0.002 and gap <= GRAB_REACH + EPS
+	return (crate.material == "wood" and grounded and gap >= -0.002 and gap <= GRAB_REACH + EPS
 		and absf(player.y + tuning.player_height - (float(crate.y) + 1.0)) <= 0.025
 		and absf(float(crate.vy)) <= EPS and absf(float(crate.target_x) - float(crate.x)) <= EPS)
 
@@ -835,7 +1075,7 @@ func _move_player_up(proposed_y: float) -> float:
 		return int(a.id) < int(b.id) if float(a.y) == float(b.y) else float(a.y) > float(b.y))
 	for crate in contacts:
 		var underside := float(crate.y) + 1.0
-		if helmet_charges <= 0:
+		if crate.material == "metal" or helmet_charges <= 0:
 			player_velocity.y = 0.0
 			return underside
 		_break_crate_with_helmet(crate, float(crate.y), underside, "jump")
@@ -862,12 +1102,12 @@ func is_strong_pushing() -> bool:
 
 
 func _try_strong_push(crate: Dictionary, direction: int) -> bool:
-	if strong_arms_charges <= 0:
+	if strong_arms_charges <= 0 or crate.material == "metal":
 		return false
 	var x := float(crate.x)
 	var y := float(crate.y)
 	for other in crates:
-		if absf(float(other.x) - x - direction) > EPS or absf(float(other.y) - y) > EPS:
+		if other.material == "metal" or absf(float(other.x) - x - direction) > EPS or absf(float(other.y) - y) > EPS:
 			continue
 		var target := ceilf(x - EPS) if direction > 0 else floorf(x + EPS)
 		if absf(target - x) <= EPS:
@@ -951,6 +1191,9 @@ func _try_push(crate: Dictionary, direction: int) -> bool:
 	for other in crates:
 		if absf(float(other.target_x) - float(other.x)) > EPS:
 			return false
+	var metal: bool = crate.material == "metal"
+	if metal and strong_arms_charges <= 0:
+		return false
 	if _try_strong_push(crate, direction):
 		return true
 	var target := roundf(float(crate.x)) + direction
@@ -959,10 +1202,14 @@ func _try_push(crate: Dictionary, direction: int) -> bool:
 	for other in crates:
 		if other.id == crate.id:
 			continue
-		if _overlap(target, 1.0, float(other.x), 1.0) and _overlap(
+		var left := minf(target, float(crate.x)) if metal else target
+		var span := 1.0 + absf(target - float(crate.x)) if metal else 1.0
+		if _overlap(left, span, float(other.x), 1.0) and _overlap(
 			float(crate.y), 1.0, float(other.y), 1.0):
 			return false
 	crate.target_x = target
+	if metal:
+		crate.metal_push = direction
 	_pushed_crate_id = int(crate.id)
 	_push_contact_id = _pushed_crate_id
 	return true
@@ -987,6 +1234,13 @@ func _move_crate_horizontally(crate: Dictionary) -> float:
 	if resolved != desired:
 		# Stop at contact instead of keeping a stale command inside the wall.
 		crate.target_x = resolved
+		crate.erase("metal_push")
+	elif crate.has("metal_push") and resolved == float(crate.target_x):
+		strong_arms_charges -= 1
+		events.append({"type": "strong_push", "crate_ids": [int(crate.id)],
+			"charges": strong_arms_charges, "player_x": player.x, "player_y": player.y,
+			"facing": int(crate.metal_push)})
+		crate.erase("metal_push")
 	if int(crate.id) == _pushed_crate_id and absf(float(crate.target_x) - resolved) <= EPS:
 		_pushed_crate_id = -1
 	return resolved - old_x if resolved == desired else 0.0
@@ -1029,18 +1283,22 @@ func _move_crates() -> void:
 		var sweep_end := minf(new_y + 1.0, player.y) if hits_head else new_y + 1.0
 		if _hit_ground_items(crate, float(crate.y), sweep_end - 1.0):
 			continue
-		if hits_head and (helmet_charges > 0 or lamp_helmet_equipped):
+		var metal: bool = crate.material == "metal"
+		if hits_head and not metal and (helmet_charges > 0 or lamp_helmet_equipped):
 			var contact_y := clampf(player.y - 1.0, float(crate.y), new_y)
 			_break_crate_with_helmet(crate, contact_y, player.y, "fall", lamp_helmet_equipped)
 			continue
 		if landed:
 			if float(crate.vy) > 1.0:
-				events.append({"type": "land", "x": float(crate.x), "y": new_y})
+				events.append({"type": "metal_land" if metal else "land", "x": float(crate.x), "y": new_y})
 			crate.vy = 0.0
 		crate.y = new_y
 		if hits_head:
 			impact_crate_id = int(crate.id)
-			_lose("crushed")
+			_break_watch_cap()
+			if metal:
+				events.append({"type": "metal_impact", "x": float(crate.x), "y": new_y})
+			_lose("metal_crushed" if metal else "crushed")
 			return
 		if int(crate.id) == _push_contact_id and _overlap(player.y, tuning.player_height, new_y, 1.0):
 			_sliding_push_direction = signf(slide)
@@ -1098,6 +1356,7 @@ func _advance_clear() -> void:
 	clear_elapsed += STEP
 	if clear_elapsed < tuning.clear_flash_time:
 		_move_items()
+		_move_traps()
 		return
 	if not _collapse_started:
 		for crate: Dictionary in crates.duplicate():
@@ -1111,6 +1370,7 @@ func _advance_clear() -> void:
 	var fraction := clampf((clear_elapsed - tuning.clear_flash_time) / tuning.collapse_time, 0.0, 1.0)
 	var smooth_fraction := fraction * fraction * (3.0 - 2.0 * fraction)
 	_move_items()
+	_move_traps()
 	for crate: Dictionary in crates.duplicate():
 		var new_y := float(crate.clear_y) + smooth_fraction
 		if not _hit_ground_items(crate, float(crate.y), new_y):
@@ -1124,6 +1384,10 @@ func _advance_clear() -> void:
 			_land_player()
 		if not _begin_clear_if_full():
 			chain = 0
+			for trap in traps:
+				if trap.phase == "warning":
+					trap.timer = TRAP_WARNING_SECONDS
+					_trap_event("trap_warning", trap)
 
 
 func _crane_entrance(direction: int) -> float:
@@ -1134,6 +1398,7 @@ func _enter_crane(crane: Dictionary) -> void:
 	crane.x = _crane_entrance(int(crane.direction))
 	crane.loaded = true
 	crane.variant = _take_crate_variant()
+	crane.material = "metal" if _material_rng.randf() < METAL_CHANCE else "wood"
 	crane.waiting = false
 	crane.wait_remaining = 0.0
 	crane.release_column = _rng.randi_range(0, tuning.columns - 1)
@@ -1147,6 +1412,8 @@ func _advance_crane(index: int) -> void:
 		if float(crane.wait_remaining) <= EPS:
 			_enter_crane(crane)
 		return
+	if repair.blocks_crane(self, index):
+		return
 	var direction := int(crane.direction)
 	var exit := _crane_entrance(-direction)
 	crane.x = move_toward(float(crane.x), exit, tuning.crane_speed * STEP)
@@ -1155,6 +1422,7 @@ func _advance_crane(index: int) -> void:
 		_try_crane_release(index)
 	if absf(exit - float(crane.x)) <= EPS:
 		crane.x = exit
+		repair.crane_exited(index)
 		crane.waiting = true
 		crane.loaded = false
 		crane.wait_remaining = _rng.randf_range(tuning.crane_wait_min, tuning.crane_wait_max)
@@ -1168,11 +1436,12 @@ func _try_crane_release(index: int) -> void:
 		if (float(crane.x) - (column + 0.5)) * direction < -EPS:
 			return
 		if _crane_column_is_free(column):
-			var crate := add_crate(float(column), CRATE_RELEASE_Y, 0.0, int(crane.variant))
+			var crate := add_crate(float(column), CRATE_RELEASE_Y, 0.0, int(crane.variant), str(crane.material))
 			crane.loaded = false
 			crane.open_time = tuning.crane_open_time
 			events.append({"type": "drop", "count": 1, "crane": index,
-				"column": column, "crate_id": int(crate.id), "tick": ticks, "variant": int(crate.variant)})
+				"column": column, "crate_id": int(crate.id), "tick": ticks, "variant": int(crate.variant),
+				"material": crate.material})
 			return
 		# A blocked target moves forward with the route; a crane never turns back.
 		column += direction
@@ -1184,6 +1453,20 @@ func _crane_column_is_free(column: int) -> bool:
 		if _overlap(float(column), 1.0, float(crate.x), 1.0) and float(crate.y) < 1.0:
 			return false
 	return true
+
+
+func hit_by_mechanic() -> void:
+	if not lamp_helmet_equipped and helmet_charges <= 0:
+		_break_watch_cap()
+		_lose("mechanic")
+		return
+	var lamp := lamp_helmet_equipped
+	if lamp:
+		_release_head_slot()
+	else:
+		helmet_charges -= 1
+	events.append({"type": "mechanic_guard", "lamp": lamp, "helmet_broke": helmet_charges == 0,
+		"x": player.x + tuning.player_width * 0.5, "y": player.y})
 
 
 func _lose(reason: String) -> void:

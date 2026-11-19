@@ -11,6 +11,21 @@ const CRUSHED := "Придавило ящиком"
 const OVERFLOW := "Склад переполнен"
 
 
+static func loss_description(reason: String) -> String:
+	match reason:
+		"crushed":
+			return CRUSHED
+		"overflow":
+			return OVERFLOW
+		"metal_crushed":
+			return "Придавило железом"
+		"trap":
+			return "Попался в капкан"
+		"mechanic":
+			return "Сбит падением мастера"
+	return ""
+
+
 static func build(content: VBoxContainer, available: Vector2, stats: Dictionary, matches: Array,
 		legacy: Array, first_match: int, expanded_match: int, button: Callable, text: Callable,
 		change: Callable, back: Callable) -> void:
@@ -127,7 +142,7 @@ static func _history_row(parent: Control, width: float, entry: Dictionary, index
 	if date.is_empty():
 		date = "Дата не сохранена"
 	var score := str(entry.score)
-	var reason := CRUSHED if entry.get("reason") == "crushed" else OVERFLOW
+	var reason := loss_description(str(entry.get("reason", "")))
 	var duration := _duration(entry.get("duration_ms", 0))
 	row.accessibility_name = "%s, счёт %s, %s" % [date, score, "Старый рекорд" if old else reason]
 	row.accessibility_description = "Свернуть" if is_open else "Показать подробности"

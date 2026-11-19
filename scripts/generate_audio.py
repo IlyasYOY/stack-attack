@@ -232,3 +232,42 @@ write('spring_jump', .25, spring_release(False))
 write('spring_jump_auto', .25, spring_release(True))
 write('lamp_reveal', .16, lamp_reveal)
 write('lamp_break', .22, lamp_break())
+
+
+def workshop_cue(notes, noise_level=0.0, seed=3649):
+    """Short struck metal and spring cues, each with individually damped partials."""
+    rng = random.Random(seed)
+
+    def sample(t):
+        signal = noise_level * rng.uniform(-1, 1) * math.exp(-t * 70)
+        for onset, hz, gain, damping in notes:
+            age = t - onset
+            if age < 0:
+                continue
+            phase = math.tau * hz * age
+            partials = math.sin(phase) + .31 * math.sin(phase * 2.13) + .14 * math.sin(phase * 3.37)
+            signal += min(1, age / .005) * gain * math.exp(-age * damping) * partials
+        return min(1, t / .003) * signal
+
+    return sample
+
+
+# The clock is a pair of small chimes. Traps give a dry ratchet and a separate snap.
+write('watch_start', .28, workshop_cue([(0, 960, .15, 16), (.059, 610, .15, 20)]))
+write('watch_end', .21, workshop_cue([(0, 610, .09, 19), (.040, 960, .11, 25)]))
+write('watch_break', .22, workshop_cue([(0, 650, .14, 32), (.055, 236, .13, 29)], .13))
+write('trap_warning', .72, workshop_cue([(0, 980, .17, 43), (.22, 1030, .19, 45), (.49, 1320, .20, 47)], .035))
+write('trap_open', .18, workshop_cue([(0, 212, .24, 38), (.016, 880, .16, 52)], .23))
+write('trap_caught', .18, workshop_cue([(0, 150, .19, 34), (.018, 1200, .15, 43)], .22))
+write('trap_escape', .26, workshop_cue([(0, 326, .19, 34), (.071, 820, .17, 24)], .13))
+write('trap_disarmed', .21, workshop_cue([(0, 1120, .15, 35), (.052, 1510, .12, 34)]))
+write('trap_crushed', .19, workshop_cue([(0, 210, .22, 45), (.026, 712, .10, 36)], .22))
+write('metal_land', .22, workshop_cue([(0, 232, .21, 28), (0, 627, .14, 20)], .13))
+write('metal_impact', .27, workshop_cue([(0, 134, .32, 24), (.025, 502, .13, 30)], .16))
+write('mallet_ring', .34, workshop_cue([(0, 784, .22, 16), (.022, 1230, .11, 23)], .048))
+write('slingshot_fire', .16, workshop_cue([(0, 280, .19, 34), (.014, 530, .11, 54)], .06))
+write('crane_break', .43, workshop_cue([(0, 446, .23, 25), (.052, 720, .18, 32), (.122, 207, .16, 19)], .19))
+write('mechanic_repair', .40, workshop_cue([(0, 830, .18, 43), (.18, 934, .14, 39)], .10))
+write('crane_fixed', .36, workshop_cue([(0, 460, .15, 18), (.10, 688, .16, 17), (.18, 911, .1, 21)]))
+write('mechanic_hit', .19, workshop_cue([(0, 310, .22, 42), (.035, 150, .12, 27)], .14))
+write('mechanic_land', .20, workshop_cue([(0, 138, .22, 34), (.013, 307, .13, 43)], .19))

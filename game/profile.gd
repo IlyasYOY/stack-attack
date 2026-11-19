@@ -45,7 +45,7 @@ func _validated_match(entry: Variant) -> Dictionary:
 		return {}
 	var ended_at: Variant = entry.get("ended_at")
 	var reason: Variant = entry.get("reason")
-	if not _valid_timestamp(ended_at) or reason not in ["crushed", "overflow"]:
+	if not _valid_timestamp(ended_at) or reason not in StackSimulation.LOSS_REASONS:
 		return {}
 	var result := {"ended_at": ended_at, "reason": reason}
 	for key in MATCH_METRICS:
@@ -146,7 +146,7 @@ func statistics() -> Dictionary:
 			result.total_broken_crates = result.get("total_broken_crates", 0) + int(entry.broken_crates)
 		result.max_lines = maxi(result.max_lines, entry.lines)
 		result.best_combo = maxi(result.best_combo, entry.best_combo)
-		result[entry.reason] += 1
+		result[entry.reason] = int(result.get(entry.reason, 0)) + 1
 		result.max_duration_ms = maxi(result.max_duration_ms, entry.duration_ms)
 		total_duration_ms += entry.duration_ms
 	if not matches.is_empty():

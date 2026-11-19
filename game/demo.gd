@@ -1,6 +1,6 @@
 class_name StackDemo
 extends RefCounted
-## A separate real game, driven only through the same movement, jump and pickup actions as a player.
+## A separate real game driven through the same actions as the player.
 var model: StackSimulation
 var tuning: StackTuning
 var axis := 1.0
@@ -20,6 +20,11 @@ var _retreat_axis := 0.0
 var _jump_wait := 0.0
 var _last_x := 0.0
 var _stuck := 0.0
+var _watch_hold := 0.0
+var _watch_wait := 0.0
+var _shot_wait := 0.0
+var _goggles_pressed := false
+var _shot_pressed := false
 
 
 func _init(settings: StackTuning, seed_value: int = 7481) -> void:
@@ -36,6 +41,9 @@ func _restart() -> void:
 	_retreat = 0.0
 	_jump_wait = 0.6
 	_stuck = 0.0
+	_watch_hold = 0.0
+	_watch_wait = 0.0
+	_shot_wait = 0.0
 	axis = 1.0 if rounds % 2 == 1 else -1.0
 	_last_x = model.player.x
 
@@ -51,8 +59,12 @@ func advance(delta: float) -> void:
 			if over_elapsed >= 1.2:
 				_restart()
 			continue
+		_goggles_pressed = false
+		_shot_pressed = false
 		var jump := _input_step()
-		model.advance(StackSimulation.STEP, axis, jump)
+		model.advance(StackSimulation.STEP, axis, jump, false, false, {
+			"watch_held": _watch_hold > 0.0, "goggles_pressed": _goggles_pressed,
+			"slingshot_pressed": _shot_pressed})
 		for event in model.events:
 			events.append(event.duplicate())
 			match event.type:
@@ -67,6 +79,9 @@ func advance(delta: float) -> void:
 # Sample what is on screen between short, interruptible movement decisions.
 func _input_step() -> bool:
 	var step := StackSimulation.STEP
+	_watch_hold = maxf(0.0, _watch_hold - step)
+	_watch_wait = maxf(0.0, _watch_wait - step)
+	_shot_wait = maxf(0.0, _shot_wait - step)
 	_jump_wait = maxf(0.0, _jump_wait - step)
 	_retreat = maxf(0.0, _retreat - step)
 	_think -= step
@@ -80,6 +95,11 @@ func _input_step() -> bool:
 		var gap := model.player.y - (float(crate.y) + 1.0)
 		if float(crate.vy) > 0.1 and gap >= -0.08 and gap < 3.6:
 			falls.append(float(crate.x))
+	for mechanic in model.repair.fallen:
+		var at: Vector2 = mechanic.position
+		var gap := model.player.y - at.y - StackCraneRepair.FALL_HALF_HEIGHT
+		if gap >= -0.08 and gap < 3.6:
+			falls.append(at.x - 0.5)
 	var center := model.player.x + tuning.player_width * 0.5
 	for left in falls:
 		if absf(center - left - 0.5) < 0.5 + tuning.player_width * 0.5 + 0.12:
@@ -88,6 +108,9 @@ func _input_step() -> bool:
 			axis = -1.0 if left_cost < right_cost else 1.0
 			_retreat_axis = axis
 			_retreat = 0.23
+			if model.watch_cap_time > 0.0 and _watch_wait <= 0.0:
+				_watch_hold = 0.66
+				_watch_wait = 1.4
 			return false
 	if _retreat > 0.0:
 		axis = _retreat_axis
@@ -96,6 +119,10 @@ func _input_step() -> bool:
 	var nearest := model.nearest_item()
 	if not nearest.is_empty() and _useful(nearest):
 		model.pick_up_nearest()
+	_goggles_pressed = model.engineer_goggles_charges > 0 and not model.nearest_trap().is_empty()
+	if model.slingshot_charges > 0 and _shot_wait <= 0.0:
+		_shot_pressed = true
+		_shot_wait = 1.8
 	var item_goal := INF
 	var distance := 3.0
 	for item in model.ground_items:
@@ -136,9 +163,21 @@ func _input_step() -> bool:
 		if absf(center + axis * 0.45 - left - 0.5) < 0.5 + tuning.player_width * 0.5:
 			axis = 0.0
 			return false
-	if model.grounded and _jump_wait <= 0.0 and (jump_needed or _stuck > 0.22):
+	var trap_ahead := _trap_ahead(center) and not _goggles_pressed
+	if model.grounded and ((trap_ahead and model.hunting_boots_charges == 0)
+			or (_jump_wait <= 0.0 and (jump_needed or _stuck > 0.22))):
 		_jump_wait = 1.15
 		return true
+	return false
+
+
+func _trap_ahead(center: float) -> bool:
+	var feet := model.player.y + tuning.player_height
+	for trap in model.traps:
+		var x := float(trap.x)
+		if absf(feet - float(trap.y)) <= 0.1 and trap.phase != "folded" \
+				and absf(center + axis * 0.48 - x) < 0.64:
+			return true
 	return false
 
 
@@ -170,10 +209,13 @@ func _useful(item: Dictionary) -> bool:
 func _row_push() -> Dictionary:
 	var heights := PackedInt32Array()
 	heights.resize(tuning.columns)
+	var metal_cells := {}
 	for crate in model.crates:
 		var column := roundi(float(crate.x))
 		if column >= 0 and column < tuning.columns and absf(float(crate.vy)) < 0.01 and absf(float(crate.x) - column) < 0.02:
 			heights[column] += 1
+			if crate.material == "metal":
+				metal_cells[Vector2i(column, roundi(float(crate.y)))] = true
 	var best := {}
 	var distance := INF
 	for col in range(1, tuning.columns - 1):
@@ -186,7 +228,9 @@ func _row_push() -> Dictionary:
 			if level >= heights[col]:
 				continue
 			var at := col - tuning.player_width if side > 0 else float(col + 1)
-			var bottom := float(tuning.rows - level)
+			var bottom := tuning.rows - level
+			if model.strong_arms_charges <= 0 and metal_cells.has(Vector2i(col, bottom - 1)):
+				continue
 			var cost := absf(at - model.player.x) + absf(bottom - model.player.y - tuning.player_height)
 			if cost < distance:
 				distance = cost

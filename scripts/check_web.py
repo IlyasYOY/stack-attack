@@ -37,6 +37,8 @@ group.add_argument('--boots-only', action='store_true', help='Check ground picku
 group.add_argument('--helmet-only', action='store_true', help='Check helmet contacts, recovery, rewards and layouts')
 group.add_argument('--mallet-only', action='store_true', help='Check wooden mallet inputs, equipment, physics and statistics')
 group.add_argument('--gloves-only', action='store_true', help='Check hold-to-pull controls, charges and rewards')
+group.add_argument('--release-only', action='store_true', help='Check the new equipment controls in Chromium')
+group.add_argument('--release-video', action='store_true', help='Record workshop release scenarios from the game canvas')
 args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -128,6 +130,11 @@ def check_touch_control_layout(snapshot):
         expected.add('lamp')
     if snapshot['speed_boots_charges'] > 0:
         expected.add('speed')
+    release = snapshot.get('release', {})
+    for key in ('watch_cap', 'engineer_goggles', 'slingshot'):
+        remaining = 'watch_cap_time' if key == 'watch_cap' else key + '_charges'
+        if release.get(remaining, 0) > 0:
+            expected.add(key)
     assert snapshot['controls'].keys() == expected
     checked = []
     for action, rect in snapshot['controls'].items():
@@ -1857,7 +1864,7 @@ def ground_checks(browser, record=False):
             if released['ground_items']:
                 break
             released = animation_step(page, 1)
-        assert [item['kind'] for item in released['ground_items']] == ['gloves', 'mallet', 'strong_arms']
+        assert [item['kind'] for item in released['ground_items']] == ['engineer_goggles', 'mallet', 'watch_cap']
         assert all(item['vy'] < 0 for item in released['ground_items'])
         animation_step(page, 7)
         shots.append(screenshot(page, 'ground-row-drop.png'))
@@ -2262,18 +2269,22 @@ def gloves_board(page, *, facing=1, x=None, gap=0, extra=(), player_x=None):
 def control_touches(page):
     controls = state(page)['controls']
     points = {}
-    for identifier, action in enumerate(('grab', 'jump', 'left', 'right', 'speed'), 1):
+    for identifier, action in enumerate(('grab', 'jump', 'left', 'right', 'speed', 'watch_cap', 'engineer_goggles', 'slingshot'), 1):
         if action in controls:
             x, y = point(page, controls[action])
             points[action] = {'x':x, 'y':y, 'id':identifier}
     cdp = page.context.new_cdp_session(page)
 
-    active = False
+    active = set()
 
     def dispatch(event, *actions):
-        nonlocal active
         cdp.send('Input.dispatchTouchEvent', {'type':event, 'touchPoints':[points[action] for action in actions]})
-        active = bool(actions) and event != 'touchCancel'
+        if event == 'touchStart':
+            active.update(actions)
+        elif event == 'touchEnd' and actions:
+            active.difference_update(actions)
+        elif event in ('touchEnd', 'touchCancel'):
+            active.clear()
 
     try:
         yield dispatch
@@ -3345,6 +3356,263 @@ def menu_layouts(browser):
     return results
 
 
+def release_board(page, case, hold=True):
+    snapshot = animation_request(page, 'release_board', case=case, animation_hold=hold)
+    assert snapshot['state'] == 'playing' and snapshot['animation_held'] == hold
+    return snapshot
+
+
+def check_watch_motion(before, during, after, frames):
+    slow = during['player'][0] - before['player'][0]
+    normal = after['player'][0] - during['player'][0]
+    assert slow > .2 and abs(normal - 2 * slow) < .025, (slow, normal)
+    assert during['release']['watch_cap_active'] and not after['release']['watch_cap_active']
+    spent = before['release']['watch_cap_time'] - during['release']['watch_cap_time']
+    assert abs(spent - frames / 120) < .02, spent
+    assert after['release']['watch_cap_time'] == during['release']['watch_cap_time']
+    return {'slowed_cells': round(slow, 4), 'normal_cells': round(normal, 4), 'seconds_spent': round(spent, 4)}
+
+
+def release_keyboard(page):
+    frames = 36
+    before = release_board(page, 'input')
+    check_touch_control_layout(before)
+    page.keyboard.down('ArrowRight')
+    page.keyboard.down('KeyF')
+    page.keyboard.down('KeyG')
+    during = animation_step(page, frames)
+    assert during['release']['slingshot_charges'] == before['release']['slingshot_charges'] - 1
+    page.keyboard.down('KeyG')  # A repeat of the already held key.
+    page.keyboard.up('KeyF')
+    after = animation_step(page, frames)
+    assert after['release']['slingshot_charges'] == during['release']['slingshot_charges']
+    page.keyboard.up('KeyG')
+    page.keyboard.up('ArrowRight')
+    stopped = animation_step(page, frames)
+    assert stopped['player'] == after['player']
+    return check_watch_motion(before, during, after, frames)
+
+
+def release_multitouch(page):
+    frames = 36
+    before = release_board(page, 'input')
+    check_touch_control_layout(before)
+    with control_touches(page) as dispatch:
+        dispatch('touchStart', 'right')
+        dispatch('touchStart', 'right', 'watch_cap')
+        dispatch('touchStart', 'right', 'watch_cap', 'slingshot')
+        during = animation_step(page, frames)
+        assert during['release']['slingshot_charges'] == before['release']['slingshot_charges'] - 1
+        dispatch('touchEnd', 'slingshot')
+        shot_released = animation_step(page, 0)
+        assert shot_released['release']['watch_cap_active']
+        dispatch('touchEnd', 'watch_cap')
+        after = animation_step(page, frames)
+        assert after['release']['slingshot_charges'] == during['release']['slingshot_charges']
+        dispatch('touchCancel')
+    stopped = animation_step(page, frames)
+    assert stopped['player'] == after['player']
+    return check_watch_motion(before, during, after, frames)
+
+
+def release_watch_interruptions(page):
+    for interruption in ('pause', 'focus'):
+        release_board(page, 'input')
+        page.keyboard.down('KeyF')
+        active = animation_step(page, 24)
+        assert active['release']['watch_cap_active']
+        if interruption == 'focus':
+            paused = gloves_focus_loss(page)
+        else:
+            page.keyboard.press('Escape')
+            wait_screen(page, 'paused')
+            paused = state(page)
+        assert not paused['release']['watch_cap_active']
+        assert paused['release']['watch_cap_time'] == active['release']['watch_cap_time']
+        button(page, 'resume')
+        wait_screen(page, 'playing')
+        page.keyboard.down('KeyF')
+        resumed = animation_step(page, 24)
+        assert not resumed['release']['watch_cap_active']
+        assert resumed['release']['watch_cap_time'] == active['release']['watch_cap_time']
+        page.keyboard.up('KeyF')
+        page.keyboard.down('KeyF')
+        restarted = animation_step(page, 24)
+        assert restarted['release']['watch_cap_active']
+        assert restarted['release']['watch_cap_time'] < resumed['release']['watch_cap_time']
+        page.keyboard.up('KeyF')
+    return ['pause', 'trusted_window_blur']
+
+
+def release_watch_clock(page):
+    release_board(page, 'input', hold=False)
+    started = time.monotonic()
+    page.keyboard.down('KeyF')
+    try:
+        wait_release_state(page, 'release.watch_cap_active', timeout=3000)
+        exhausted = wait_release_state(page, 'release.watch_cap_time === 0', timeout=7000)
+        elapsed = time.monotonic() - started
+    finally:
+        page.keyboard.up('KeyF')
+    assert not exhausted['release']['watch_cap_active']
+    assert 4.85 <= elapsed < 5.5, elapsed
+    return round(elapsed, 3)
+
+
+def release_checks(browser):
+    layouts = []
+    for dimensions in ((390, 844), (844, 390), (320, 568), (568, 320)):
+        errors = []
+        context, page = open_boots_game(browser, dimensions, errors)
+        try:
+            layout = {'viewport': list(dimensions), 'keyboard': release_keyboard(page),
+                      'multitouch': release_multitouch(page)}
+            if dimensions in ((390, 844), (844, 390)):
+                layout['watch_cap_interrupted_by'] = release_watch_interruptions(page)
+            release_board(page, 'goggles')
+            check_touch_control_layout(state(page))
+            with control_touches(page) as dispatch:
+                dispatch('touchStart', 'engineer_goggles')
+                dispatch('touchEnd', 'engineer_goggles')
+                dismantled = animation_step(page, 12)
+            assert dismantled['release']['engineer_goggles_charges'] == 2
+            assert dismantled['release']['traps'] == []
+            if dimensions in ((390, 844), (844, 390)):
+                layout['real_time_to_exhaust_cap_seconds'] = release_watch_clock(page)
+            assert not errors, errors
+            layouts.append(layout)
+        finally:
+            context.close()
+    return layouts
+
+
+RELEASE_AUDIO_CAPTURE = """
+(() => {
+    const connect = AudioNode.prototype.connect;
+    AudioNode.prototype.connect = function(destination, ...args) {
+        const result = connect.call(this, destination, ...args);
+        const context = this.context;
+        if (destination === context.destination) {
+            if (!window.releaseCaptureAudio) {
+                window.releaseCaptureAudio = context.createMediaStreamDestination();
+            }
+            connect.call(this, window.releaseCaptureAudio);
+        }
+        return result;
+    };
+})();
+"""
+
+
+def start_release_clip(page):
+    page.evaluate("""() => {
+        const canvas = document.querySelector('canvas');
+        const stream = canvas.captureStream(30);
+        const audio = window.releaseCaptureAudio;
+        if (!audio || audio.context.state !== 'running') {
+            throw new Error('The Web game audio did not start');
+        }
+        stream.addTrack(audio.stream.getAudioTracks()[0].clone());
+        const type = 'video/webm;codecs=vp9,opus';
+        const recorder = new MediaRecorder(stream, {mimeType: type, videoBitsPerSecond: 6000000});
+        const chunks = [];
+        recorder.ondataavailable = event => chunks.push(event.data);
+        window.finishReleaseClip = () => new Promise(resolve => {
+            recorder.onstop = () => {
+                stream.getTracks().forEach(track => track.stop());
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result.split(',')[1]);
+                reader.readAsDataURL(new Blob(chunks, {type: 'video/webm'}));
+            };
+            recorder.stop();
+        });
+        recorder.start();
+    }""")
+
+
+def finish_release_clip(page, clip):
+    path = SHOTS / f'release-{clip}.webm'
+    path.write_bytes(base64.b64decode(page.evaluate('window.finishReleaseClip()')))
+    return str(path.relative_to(ROOT))
+
+
+def wait_release_state(page, condition, timeout=10000):
+    return page.wait_for_function(f"""() => {{
+        const state = window.stackAttackState;
+        const release = state.release;
+        return ({condition}) ? state : false;
+    }}""", timeout=timeout).json_value()
+
+
+def begin_release_clip(page, case):
+    release_board(page, case)
+    start_release_clip(page)
+    page.wait_for_timeout(400)
+    animation_step(page, 0, animation_hold=False)
+
+
+def release_videos(browser):
+    errors = []
+    context = browser.new_context(viewport={'width': 1280, 'height': 720}, device_scale_factor=1)
+    page = context.new_page()
+    page.add_init_script(RELEASE_AUDIO_CAPTURE)
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    files = {}
+    try:
+        assert page.goto(URL).status == 200
+        wait_screen(page, 'menu')
+        button(page, 'play')
+        wait_screen(page, 'playing')
+
+        begin_release_clip(page, 'cap')
+        page.keyboard.down('KeyF')
+        wait_release_state(page, 'release.watch_cap_active && state.visible_crates[0]?.y > 6.2')
+        page.keyboard.down('ArrowRight')
+        wait_release_state(page, 'state.player[0] > 5.1')
+        page.keyboard.up('ArrowRight')
+        page.keyboard.up('KeyF')
+        wait_release_state(page, '!release.watch_cap_active && state.visible_crates[0]?.y >= 9.99')
+        page.wait_for_timeout(500)
+        files['cap'] = finish_release_clip(page, 'cap')
+
+        begin_release_clip(page, 'boots')
+        wait_release_state(page, 'release.traps[0]?.phase === "open"')
+        page.keyboard.down('ArrowRight')
+        wait_release_state(page, 'release.trap_hold_time > 0')
+        page.keyboard.up('ArrowRight')
+        wait_release_state(page, 'release.hunting_boots_charges === 1 && release.traps.length === 0')
+        page.wait_for_timeout(500)
+        files['boots'] = finish_release_clip(page, 'boots')
+
+        begin_release_clip(page, 'goggles')
+        wait_release_state(page, 'release.traps[0]?.phase === "warning"')
+        page.wait_for_timeout(350)
+        page.keyboard.press('KeyF')
+        wait_release_state(page, 'release.engineer_goggles_charges === 2 && release.traps.length === 0')
+        page.wait_for_timeout(600)
+        files['goggles'] = finish_release_clip(page, 'goggles')
+
+        begin_release_clip(page, 'repair')
+        page.keyboard.press('KeyG')
+        wait_release_state(page, 'release.slingshot_charges === 4 && state.cranes[0].broken')
+        wait_release_state(page, 'state.cranes[0].repair_phase === "repair"')
+        wait_release_state(page, 'state.cranes[0].repair_phase === "passenger" && !state.cranes[0].broken')
+        page.wait_for_timeout(1200)
+        files['repair'] = finish_release_clip(page, 'repair')
+
+        begin_release_clip(page, 'metal')
+        wait_release_state(page, 'state.visible_crates.some(crate => crate.material === "metal")')
+        wait_release_state(page, 'state.clear_animation.phase !== "none" && state.lines === 1')
+        wait_release_state(page, 'state.cleared_crates === 10 && state.state === "playing"')
+        page.wait_for_timeout(750)
+        files['metal'] = finish_release_clip(page, 'metal')
+        assert not errors, errors
+    finally:
+        context.close()
+    return files
+
+
+
 try:
     with sync_playwright() as p:
         browser_options = {}
@@ -3358,6 +3626,23 @@ try:
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         full_check = not any(vars(args).values())
+        if args.release_video:
+            clips = release_videos(browser)
+            print('RELEASE_VIDEO', json.dumps(clips), flush=True)
+            browser.close()
+            raise SystemExit(0)
+        release = release_checks(browser) if args.release_only or full_check else []
+        if release:
+            print('RELEASE', json.dumps(release), flush=True)
+        if args.release_only:
+            source = json.loads((BUILD/'web/build-source.json').read_text())
+            report = {'status':'PASS', 'browser':browser.version, 'renderer':'SwiftShader',
+                      'checks':release, 'commit':source['commit'], 'source_clean':source['source_clean'],
+                      'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest()}
+            assert report['pck_sha256'] == source['files']['index.pck']
+            (BUILD/'release-web-check.json').write_text(json.dumps(report, indent=2) + '\n')
+            browser.close()
+            raise SystemExit(0)
         if args.demo_only or full_check:
             demo_checks(browser, record=args.demo_only)
         if args.demo_only:
@@ -3626,7 +3911,7 @@ try:
             results.append(result)
             print(json.dumps(result), flush=True)
             context.close()
-        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'ground':ground, 'bonuses':bonuses, 'mallet':mallet, 'helmet':helmet, 'boots':boots, 'gloves':gloves, 'keyboard':keyboard, 'animations':animations, 'cranes':cranes, 'statistics':statistics, 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
+        report = {'status':'PASS','browser':browser.version,'renderer':'SwiftShader', 'release':release, 'ground':ground, 'bonuses':bonuses, 'mallet':mallet, 'helmet':helmet, 'boots':boots, 'gloves':gloves, 'keyboard':keyboard, 'animations':animations, 'cranes':cranes, 'statistics':statistics, 'wooden_crates':crates,'workshop':workshop,'menu_layouts':menus, 'sprite_poses':sprites, 'ui_batch':ui_batch, 'game_over':results_over,'button_styles':button_styles,
                   'pck_sha256':hashlib.sha256((BUILD/'web/index.pck').read_bytes()).hexdigest(),
                   'page_errors':all_errors,'failed_requests':all_failed_requests,'checks':results}
         (BUILD/'web-check.json').write_text(json.dumps(report,indent=2)+'\n')

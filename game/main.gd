@@ -31,13 +31,18 @@ var jump_keys := {}
 var jump_pointers := {}
 var pull_pointers := {}
 var mallet_pointers := {}
-var lamp_pointers := {}
+var head_pointers := {}
+var shot_pointers := {}
+var shot_pending := false
+var head_action_pending := false
+var frame_time_usec := 0
+var qa_release_events: Array[Dictionary] = []
 var speed_pointers := {}
 var speed_keys := {}
 var jump_pending := false
 var mallet_pending := false
 var lamp_pending := false
-var lamp_key_held := false
+var head_key_held := false
 var spring_meter_peak := 0
 var spring_meter_limit := 0
 var spring_meter_flash := 0.0
@@ -218,6 +223,8 @@ func _show_screen(value: String) -> void:
 		"over":
 			_heading(content, "Смена окончена")
 			_result_score(content)
+			if model.loss_reason in ["metal_crushed", "trap", "mechanic"]:
+				_text(content, STATISTICS_VIEW.loss_description(model.loss_reason), 14, MINT)
 			_button(content, "Играть снова", "again", _start_game)
 			_button(content, "Главное меню", "home", func(): _show_screen("menu"))
 			if not profile.last_error.is_empty():
@@ -519,6 +526,7 @@ func _start_game() -> void:
 	qa_gloves_pulls.clear()
 	qa_mallet_events.clear()
 	qa_bonus_events.clear()
+	qa_release_events.clear()
 	qa_animation_held = false
 	crush_elapsed = -1.0
 	session += 1
@@ -572,12 +580,15 @@ func _release_controls() -> void:
 	jump_pointers.clear()
 	pull_pointers.clear()
 	mallet_pointers.clear()
-	lamp_pointers.clear()
+	head_pointers.clear()
+	shot_pointers.clear()
+	shot_pending = false
+	head_action_pending = false
 	_release_speed_input()
 	jump_pending = false
 	mallet_pending = false
 	lamp_pending = false
-	lamp_key_held = false
+	head_key_held = false
 	spring_meter_peak = 0
 	spring_meter_flash = 0.0
 	pull_key_held = false
@@ -698,6 +709,8 @@ func _input(event: InputEvent) -> void:
 			pull_key_held = event.pressed and model.gloves_charges > 0
 			if event.pressed and model.mallet_charges > 0:
 				mallet_pending = true
+			if event.pressed and model.slingshot_charges > 0:
+				shot_pending = true
 			if pull_key_held:
 				jump_pending = false
 		get_viewport().set_input_as_handled()
@@ -712,9 +725,10 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.physical_keycode == KEY_F and crush_elapsed < 0.0:
 		if not event.echo:
-			if event.pressed and not lamp_key_held:
+			if event.pressed and not head_key_held:
 				lamp_pending = model.lamp_helmet_charges > 0
-			lamp_key_held = event.pressed
+				head_action_pending = model.engineer_goggles_charges > 0
+			head_key_held = event.pressed
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.physical_keycode in [KEY_SPACE, KEY_UP] and crush_elapsed < 0.0:
@@ -740,13 +754,15 @@ func _input(event: InputEvent) -> void:
 		var down: bool = event.pressed and not event.canceled
 		_pointer(event.index, event.position, down, down)
 	elif event is InputEventScreenDrag and (pointers.has(event.index) or pull_pointers.has(event.index)
-			or mallet_pointers.has(event.index) or lamp_pointers.has(event.index) or speed_pointers.has(event.index)):
+			or mallet_pointers.has(event.index) or head_pointers.has(event.index)
+			or shot_pointers.has(event.index) or speed_pointers.has(event.index)):
 		_pointer(event.index, event.position, true)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		var real_press: bool = event.pressed and event.device != InputEvent.DEVICE_ID_EMULATION
 		_pointer(-1, event.position, event.pressed, real_press)
 	elif event is InputEventMouseMotion and (pointers.has(-1) or pull_pointers.has(-1)
-			or mallet_pointers.has(-1) or lamp_pointers.has(-1) or speed_pointers.has(-1)):
+			or mallet_pointers.has(-1) or head_pointers.has(-1)
+			or shot_pointers.has(-1) or speed_pointers.has(-1)):
 		_pointer(-1, event.position, true)
 
 
@@ -755,9 +771,10 @@ func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false
 		jump_pointers.erase(id)
 		var was_pulling := pull_pointers.erase(id)
 		var was_hitting := mallet_pointers.erase(id)
-		var was_lighting := lamp_pointers.erase(id)
+		var was_on_head := head_pointers.erase(id)
+		var was_shooting := shot_pointers.erase(id)
 		var was_running := speed_pointers.erase(id)
-		if pointers.erase(id) or was_pulling or was_hitting or was_lighting or was_running:
+		if pointers.erase(id) or was_pulling or was_hitting or was_on_head or was_shooting or was_running:
 			get_viewport().set_input_as_handled()
 		return
 	var speed_control: Rect2 = world.controls.get("speed", Rect2())
@@ -768,13 +785,24 @@ func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false
 			speed_pointers.erase(id)
 		get_viewport().set_input_as_handled()
 		return
-	var lamp_control: Rect2 = world.controls.get("lamp", Rect2())
-	var on_lamp := lamp_control.has_point(position)
-	if just_pressed and on_lamp:
-		lamp_pointers[id] = true
-		lamp_pending = true
-	if lamp_pointers.has(id):
-		lamp_pointers[id] = on_lamp
+	var head_control: Rect2 = world.controls.get("watch_cap",
+		world.controls.get("engineer_goggles", world.controls.get("lamp", Rect2())))
+	var on_head := head_control.has_point(position)
+	if just_pressed and on_head:
+		head_pointers[id] = true
+		lamp_pending = model.lamp_helmet_charges > 0
+		head_action_pending = model.engineer_goggles_charges > 0
+	if head_pointers.has(id):
+		head_pointers[id] = on_head
+		get_viewport().set_input_as_handled()
+		return
+	var shot_control: Rect2 = world.controls.get("slingshot", Rect2())
+	var on_shot := shot_control.has_point(position)
+	if just_pressed and on_shot:
+		shot_pointers[id] = true
+		shot_pending = true
+	if shot_pointers.has(id):
+		shot_pointers[id] = on_shot
 		get_viewport().set_input_as_handled()
 		return
 	var mallet_control: Rect2 = world.controls.get("mallet", Rect2())
@@ -798,7 +826,7 @@ func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false
 		return
 	var action := ""
 	for candidate in world.controls:
-		if candidate not in ["grab", "mallet", "lamp", "speed"] and world.controls[candidate].has_point(position):
+		if candidate in ["left", "right", "jump"] and world.controls[candidate].has_point(position):
 			action = candidate
 			break
 	if not action.is_empty():
@@ -812,7 +840,7 @@ func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false
 		pointers.erase(id)
 
 
-func _advance_game(delta: float) -> bool:
+func _advance_game(delta: float, realtime: float = -1.0) -> bool:
 	if model == null or screen != "playing":
 		return false
 	if crush_elapsed >= 0.0:
@@ -835,19 +863,29 @@ func _advance_game(delta: float) -> bool:
 		actions.append("grab")
 	if model.mallet_charges > 0 and (mallet_pointers.values().has(true) or Input.is_physical_key_pressed(KEY_G)):
 		actions.append("mallet")
-	if model.lamp_helmet_charges > 0 and (lamp_key_held or lamp_pointers.values().has(true)):
-		actions.append("lamp")
+	var head_held := head_key_held or head_pointers.values().has(true)
+	if head_held:
+		for action in ["lamp", "engineer_goggles", "watch_cap"]:
+			if world.controls.has(action):
+				actions.append(action)
+	if model.slingshot_charges > 0 and (shot_pointers.values().has(true) or shot_pending):
+		actions.append("slingshot")
 	var speed_held := not speed_keys.is_empty() or not speed_pointers.is_empty()
 	if speed_held:
 		actions.append("speed")
 	world.pressed_actions = actions
 	world.axis = 0.0 if pulling else axis
 	model.advance(delta, axis, jump_pending, pull_held, mallet_pending,
-		{"jump_held": _jump_held() and not pulling, "lamp_pressed": lamp_pending, "speed_held": speed_held})
+		{"jump_held": _jump_held() and not pulling, "lamp_pressed": lamp_pending, "speed_held": speed_held,
+			"goggles_pressed": head_action_pending, "watch_held": head_held,
+			"slingshot_pressed": shot_pending, "real_delta": delta if realtime < 0.0 else realtime})
 	jump_pending = false
 	mallet_pending = false
 	lamp_pending = false
+	head_action_pending = false
+	shot_pending = false
 	for event in model.events:
+		_workshop_event(event)
 		match event.type:
 			"jump": sound.effect("jump")
 			"air_jump":
@@ -904,7 +942,7 @@ func _advance_game(delta: float) -> bool:
 			"drop":
 				if qa_enabled:
 					qa_crane_releases.append({"crane": event.crane, "column": event.column,
-						"crate_id": event.crate_id, "variant": event.variant, "tick": event.tick})
+						"crate_id": event.crate_id, "variant": event.variant, "tick": event.tick, "material": event.material})
 					if qa_crane_releases.size() > 24:
 						qa_crane_releases.pop_front()
 			"line":
@@ -913,7 +951,7 @@ func _advance_game(delta: float) -> bool:
 				world.line_effect(int(event.chain))
 			"over":
 				sound.loss(event.reason)
-				if event.reason == "crushed":
+				if event.reason in ["crushed", "metal_crushed"]:
 					_record_result()
 					_release_controls()
 					crush_elapsed = 0.0
@@ -926,6 +964,28 @@ func _advance_game(delta: float) -> bool:
 	if screen == "playing":
 		_update_pickup()
 	return screen == "playing" and crush_elapsed < 0.0 and model.is_crate_sliding(axis, pull_held)
+
+
+func _workshop_event(event: Dictionary, haptics: bool = true) -> void:
+	var kind: String = event.type
+	match kind:
+		"watch_start", "watch_end", "watch_break", "trap_warning", "trap_open", "trap_crushed", \
+		"trap_caught", "trap_escape", "trap_disarmed", "mallet_ring", "metal_land", "metal_impact", \
+		"slingshot_fire", "crane_break", "mechanic_repair", "crane_fixed", "mechanic_hit", "mechanic_land":
+			sound.effect(kind, haptics)
+			world.workshop_effect(event)
+			if kind == "mallet_ring":
+				world.mallet_miss()
+			if qa_enabled and haptics:
+				qa_release_events.append(event)
+				if qa_release_events.size() > 32:
+					qa_release_events.pop_front()
+			if haptics and kind in ["watch_break", "trap_disarmed", "slingshot_fire"]:
+				world._layout()
+		"mechanic_guard":
+			var cue := "lamp_break" if event.lamp else ("helmet_break" if event.helmet_broke else "helmet_hit")
+			sound.effect(cue, haptics)
+			world._layout()
 
 
 func _record_bonus_event(event: Dictionary) -> void:
@@ -966,6 +1026,7 @@ func _advance_demo(delta: float) -> bool:
 	world.axis = demo.axis
 	EQUIPMENT_VIEW.update_hud(gear_counts, world)
 	for event in demo.events:
+		_workshop_event(event, false)
 		match event.type:
 			"jump", "land": sound.effect(str(event.type), false)
 			"over": sound.loss(event.reason, false)
@@ -978,23 +1039,32 @@ func _advance_demo(delta: float) -> bool:
 func _update_crush_view() -> void:
 	var elapsed := crush_elapsed
 	if _background_demo():
-		elapsed = demo.over_elapsed if demo.model.state == "over" and demo.model.loss_reason == "crushed" else -1.0
+		elapsed = demo.over_elapsed if demo.model.state == "over" and demo.model.loss_reason in ["crushed", "metal_crushed"] else -1.0
 	world.crush_progress = minf(elapsed / CRUSH_ANIMATION_TIME, 1.0) if elapsed >= 0.0 else -1.0
 
 
 func _process(delta: float) -> void:
 	if world == null:
 		return
+	var now := Time.get_ticks_usec()
+	var real_delta := delta if frame_time_usec == 0 else (now - frame_time_usec) / 1000000.0
+	frame_time_usec = now
 	if screen == "menu":
 		_update_menu_idle()
+	var world_delta := delta
 	var slide_moving := _advance_demo(delta)
 	if screen == "playing" and not (qa_enabled and (qa_hero_pose or qa_animation_held)):
-		slide_moving = _advance_game(delta)
+		var animating_loss := crush_elapsed >= 0.0
+		slide_moving = _advance_game(delta, real_delta)
+		if not animating_loss:
+			world_delta = model.frame_world_delta
+	elif _background_demo() and demo.model.watch_cap_active:
+		world_delta *= 0.5
 	slide_active = slide_focused and slide_moving
 	sound.set_slide_active(slide_active, delta)
 	_update_crush_view()
 	var frozen := screen == "paused" or (qa_enabled and (qa_hero_pose or qa_freeze_demo or qa_animation_held))
-	world.animate(0.0 if frozen else delta)
+	world.animate(0.0 if frozen else world_delta)
 	if qa_enabled:
 		qa_timer += delta
 		if qa_timer >= 0.08:
@@ -1040,7 +1110,7 @@ func _publish_qa() -> void:
 	var retiring_ids := []
 	for crate in world.model.crates:
 		visible_crates.append({"id": crate.id, "x": crate.x, "y": crate.y, "color": crate.color,
-			"variant": crate.variant})
+			"variant": crate.variant, "material": crate.material})
 		if world.model.is_clearing_crate(int(crate.id)):
 			retiring_ids.append(crate.id)
 	var cranes := []
@@ -1051,7 +1121,9 @@ func _publish_qa() -> void:
 		var cargo := world.crane_cargo_rect(index)
 		cranes.append({"x": crane.x, "direction": crane.direction, "loaded": crane.loaded,
 			"waiting": crane.waiting, "wait_remaining": crane.wait_remaining,
-			"release_column": crane.release_column, "open_time": crane.open_time, "variant": crane.variant})
+			"release_column": crane.release_column, "open_time": crane.open_time, "variant": crane.variant,
+			"material": crane.material, "repair_phase": world.model.repair.workers[index].phase,
+			"broken": world.model.repair.workers[index].broken})
 		cargo_rects.append([cargo.position.x, cargo.position.y, cargo.size.x, cargo.size.y])
 		var trolley := world.crane_trolley_center(index)
 		trolleys.append([trolley.x, trolley.y])
@@ -1060,6 +1132,11 @@ func _publish_qa() -> void:
 	var status := {"ready": true, "screen": screen, "score": model.score,
 		"lines": model.lines, "cleared_crates": model.cleared_crates, "broken_crates": model.broken_crates,
 		"loss_reason": model.loss_reason,
+		"release": {"watch_cap_time": model.watch_cap_time, "watch_cap_active": model.watch_cap_active,
+			"hunting_boots_charges": model.hunting_boots_charges, "engineer_goggles_charges": model.engineer_goggles_charges,
+			"slingshot_charges": model.slingshot_charges, "trap_hold_time": model.trap_hold_time,
+			"traps": model.traps, "shots": model.repair.shots.size(), "fallen": model.repair.fallen.size(),
+			"events": qa_release_events},
 		"session": session, "ticks": model.ticks, "state": model.state,
 		"animation_held": qa_animation_held,
 		"jump_pending": jump_pending, "jump_held": _jump_held(),
@@ -1224,6 +1301,13 @@ func _qa_command() -> void:
 				_advance_game(StackSimulation.STEP)
 				world.animate(StackSimulation.STEP)
 		_update_crush_view()
+		return
+	if str(request.get("scenario", "")) == "release_board" and screen == "playing":
+		var board := str(request.get("case", ""))
+		if board in ["input", "cap", "boots", "goggles", "repair", "metal"]:
+			_qa_prepare_equipment_board(bool(request.get("animation_hold", false)))
+			preload("res://game/qa_demo_boards.gd").prepare_release(model, board)
+			_show_screen("playing")
 		return
 	if str(request.get("scenario", "")) == "crate_appearance" and screen in ["menu", "playing"]:
 		_qa_crate_appearance(request)
@@ -1406,6 +1490,7 @@ func _qa_prepare_equipment_board(hold: bool) -> void:
 	qa_gloves_pulls.clear()
 	qa_mallet_events.clear()
 	qa_bonus_events.clear()
+	qa_release_events.clear()
 	world.caption_life = 0.0
 	world.boots_exhaust_life = 0.0
 	world.helmet_impacts.clear()
@@ -1416,6 +1501,8 @@ func _qa_prepare_equipment_board(hold: bool) -> void:
 	model.cancel_grab()
 	model.crates.clear()
 	model.ground_items.clear()
+	model.traps.clear()
+	model.repair.reset(14)
 	model._loot_rng.seed = 14
 	model.cranes_enabled = false
 	model.cranes[0].x = 2.5

@@ -1,7 +1,11 @@
 class_name StackWorldView
 extends Control
 ## Workshop presentation driven by the cell simulation.
-var model: StackSimulation
+var model: StackSimulation:
+	set(value):
+		if model != value:
+			_workshop_impacts.clear()
+		model = value
 var active := false
 var clock := 0.0
 var axis := 0.0
@@ -27,6 +31,7 @@ var _mallet_follow_age := -1.0
 var _mallet_facing := 1
 var _mallet_broke := false
 var _mallet_impacts: Array[Dictionary] = []
+var _workshop_impacts: Array[Dictionary] = []
 const FONT: Font = preload("res://art/workshop_font.fnt")
 const HERO_SIZE := Vector2(16, 24)
 const HERO_OFFSET := Vector2(-1, -2)
@@ -39,6 +44,21 @@ const HERO_HELMET_ATLAS: Texture2D = preload("res://art/hero_helmet.png")
 const HERO_GLOVES_ATLAS: Texture2D = preload("res://art/hero_work_gloves.png")
 const HERO_MALLET_ATLAS: Texture2D = preload("res://art/hero_mallet.png")
 const HERO_BONUS_GEAR: Texture2D = preload("res://art/hero_bonus_gear.png")
+const WORKSHOP_GEAR: Texture2D = preload("res://art/hero_workshop_gear.png")
+const WORKSHOP_GEAR_ROWS := ["watch_cap", "hunting_boots", "engineer_goggles", "slingshot"]
+const WORKSHOP_GEAR_ORDER := [1, 3, 0, 2]
+const WORKSHOP_ICONS := {
+	"watch_cap": preload("res://art/watch_cap.png"),
+	"engineer_goggles": preload("res://art/engineer_goggles.png"),
+	"hunting_boots": preload("res://art/hunting_boots.png"),
+	"slingshot": preload("res://art/slingshot.png"),
+}
+const METAL_TEXTURE: Texture2D = preload("res://art/crate_metal.png")
+const TRAPS: Texture2D = preload("res://art/traps.png")
+const MECHANIC: Texture2D = preload("res://art/crane_mechanic.png")
+const WATCH_LIGHT := Color("8bdded")
+const WARNING_LIGHT := Color("fd8274")
+const WORKSHOP_EFFECT_LIFE := 0.36
 const BONUS_GEAR_ROWS := ["strong_arms", "speed_boots", "spring_boots", "lamp_helmet"]
 const BONUS_GEAR_DRAW_ORDER := [1, 2, 0, 3]
 const LAMP_HELMET_FRAGMENTS: Texture2D = preload("res://art/lamp_helmet_fragments.png")
@@ -104,9 +124,23 @@ func _ready() -> void:
 func _layout() -> void:
 	if model == null: return
 	var landscape := size.x > size.y
-	var hand_action := model.gloves_charges > 0 or model.mallet_charges > 0
-	var lamp_action := model.lamp_helmet_equipped and model.lamp_helmet_charges > 0
-	var slots := 6 if hand_action and lamp_action and model.speed_boots_charges > 0 else 5
+	var hand_action := ""
+	if model.gloves_charges > 0:
+		hand_action = "grab"
+	elif model.mallet_charges > 0:
+		hand_action = "mallet"
+	elif model.equipped_charges("slingshot") > 0:
+		hand_action = "slingshot"
+	var head_action := ""
+	if model.lamp_helmet_equipped and model.lamp_helmet_charges > 0:
+		head_action = "lamp"
+	elif model.equipped_charges("watch_cap") > 0:
+		head_action = "watch_cap"
+	elif model.equipped_charges("engineer_goggles") > 0:
+		head_action = "engineer_goggles"
+	var has_hand := not hand_action.is_empty()
+	var has_head := not head_action.is_empty()
+	var slots := 6 if has_hand and has_head and model.speed_boots_charges > 0 else 5
 	var button_width := clampf(floorf((size.x - 24.0 - (slots - 1) * 7.0) / slots), 48, 70)
 	var button_size := Vector2(button_width, 52 if landscape else 60)
 	var margin := 12.0
@@ -116,13 +150,13 @@ func _layout() -> void:
 	controls = {"left": Rect2(Vector2(margin, bottom), button_size),
 		"right": Rect2(Vector2(margin + stride, bottom), button_size),
 		"jump": Rect2(Vector2(jump_x, bottom), button_size)}
-	if hand_action:
-		controls["grab" if model.gloves_charges > 0 else "mallet"] = Rect2(Vector2(jump_x - stride, bottom), button_size)
+	if has_hand:
+		controls[hand_action] = Rect2(Vector2(jump_x - stride, bottom), button_size)
 	if model.speed_boots_charges > 0:
-		var speed_x := jump_x - (2 if hand_action else 1) * stride
+		var speed_x := jump_x - (2 if has_hand else 1) * stride
 		controls["speed"] = Rect2(Vector2(speed_x, bottom), button_size)
-	if lamp_action:
-		controls["lamp"] = Rect2(Vector2(margin + 2 * stride, bottom), button_size)
+	if has_head:
+		controls[head_action] = Rect2(Vector2(margin + 2 * stride, bottom), button_size)
 
 	var frame := WAREHOUSE_FRAME + 3
 	# Keep one centered stage for the demo, match and result. On short, wide
@@ -217,6 +251,10 @@ func animate(delta: float) -> void:
 		_mallet_impacts[index].age += delta
 		if _mallet_impacts[index].age >= MALLET_DEBRIS_TIME:
 			_mallet_impacts.remove_at(index)
+	for index in range(_workshop_impacts.size() - 1, -1, -1):
+		_workshop_impacts[index].age += delta
+		if _workshop_impacts[index].age >= WORKSHOP_EFFECT_LIFE:
+			_workshop_impacts.remove_at(index)
 	for index in range(helmet_impacts.size() - 1, -1, -1):
 		var impact := helmet_impacts[index]
 		impact.age += delta
@@ -235,6 +273,35 @@ func spring_jump_effect(event: Dictionary) -> void:
 
 func reset_bonus_effects() -> void:
 	spring_steam_life = 0.0
+	_workshop_impacts.clear()
+
+func workshop_effect(event: Dictionary) -> void:
+	var kind := str(event.type)
+	var tint: Color
+	match kind:
+		"watch_start", "watch_end", "watch_break", "trap_escape", "trap_disarmed", "crane_fixed":
+			tint = WATCH_LIGHT
+		"trap_open", "trap_caught", "crane_break", "mechanic_hit":
+			tint = WARNING_LIGHT
+		"trap_crushed", "mallet_ring", "metal_land", "metal_impact", "mechanic_land":
+			tint = EFFECT_AMBER
+		_:
+			return
+	var position: Vector2
+	if kind.begins_with("watch_"):
+		position = Vector2(float(event.player_x) + model.tuning.player_width * 0.5, float(event.player_y))
+	elif event.has("position"):
+		var origin: Variant = event.position
+		if origin is Vector2:
+			position = origin
+		else:
+			return
+	else:
+		position = Vector2(float(event.get("x", 0)), float(event.get("y", 0)))
+		if kind.begins_with("metal_") or kind == "mallet_ring":
+			position += Vector2(0.5, 0.7)
+	_workshop_impacts.append({"position": position * PIXELS_PER_CELL,
+		"kind": kind, "tint": tint, "age": 0.0, "contact": event.get("contact", "")})
 
 func gloves_break(event: Dictionary) -> void:
 	gloves_break_life = GLOVES_BREAK_TIME
@@ -430,6 +497,7 @@ func _draw_cranes() -> void:
 		var crane := model.cranes[index]
 		if not bool(crane.waiting):
 			_draw_crane(span, crane, index)
+		_draw_crane_worker(index, crane)
 	_draw_crane_end_stops(span)
 
 func _draw_crane_track(span: Rect2, index: int) -> void:
@@ -443,7 +511,7 @@ func _draw_crane_track(span: Rect2, index: int) -> void:
 		draw_rect(Rect2(x, y - 1.0, 1.0, 1.0), CRANE_LIGHT[index])
 
 func _draw_crane_end_stops(span: Rect2) -> void:
-	var width := minf(7.0, -span.position.x)
+	var width := minf(StackCraneRepair.END_STOP_WIDTH, -span.position.x)
 	if width < 2.0:
 		return
 	for x in [span.position.x, span.end.x - width]:
@@ -462,20 +530,27 @@ func _draw_crane_rect(bounds: Rect2, span: Rect2, color: Color) -> void:
 func _crate_source(variant: int) -> Rect2:
 	return Rect2(variant * CRATE_TILE_SIZE, 0, CRATE_TILE_SIZE, CRATE_TILE_SIZE)
 
-func _draw_crate(bounds: Rect2, variant: int, tint: Color = Color.WHITE) -> void:
-	draw_texture_rect_region(CRATE_TEXTURE, bounds, _crate_source(variant), tint)
+func _draw_crate(bounds: Rect2, variant: int, material: String, tint: Color = Color.WHITE) -> void:
+	if material == "metal":
+		draw_texture_rect(METAL_TEXTURE, bounds, false, tint)
+	else:
+		draw_texture_rect_region(CRATE_TEXTURE, bounds, _crate_source(variant), tint)
 
-func _draw_crane_crate(position: Vector2, span: Rect2, variant: int) -> void:
+func _draw_crane_crate(position: Vector2, span: Rect2, variant: int, material: String) -> void:
 	var bounds := Rect2(position, Vector2.ONE * PIXELS_PER_CELL)
 	var visible := bounds.intersection(span)
 	if visible == bounds:
-		_draw_crate(bounds, variant)
+		_draw_crate(bounds, variant, material)
 	elif visible.has_area():
-		var texture_scale := CRATE_TILE_SIZE / PIXELS_PER_CELL
-		var source := _crate_source(variant)
+		var source := Rect2(Vector2.ZERO, Vector2.ONE * PIXELS_PER_CELL)
+		var texture := METAL_TEXTURE
+		if material != "metal":
+			source = _crate_source(variant)
+			texture = CRATE_TEXTURE
+		var texture_scale := source.size.x / PIXELS_PER_CELL
 		source.position += (visible.position - bounds.position) * texture_scale
 		source.size = visible.size * texture_scale
-		draw_texture_rect_region(CRATE_TEXTURE, visible, source)
+		draw_texture_rect_region(texture, visible, source)
 
 func _draw_crane(span: Rect2, crane: Dictionary, index: int) -> void:
 	var cargo := _crane_cargo_origin(crane)
@@ -496,24 +571,20 @@ func _draw_crane(span: Rect2, crane: Dictionary, index: int) -> void:
 		_draw_crane_rect(Rect2(center.x + side, center.y - 1.0, 2.0, 2.0), span, metal)
 
 	if bool(crane.loaded):
-		_draw_crane_crate(cargo, span, int(crane.variant))
-	var cue := float(crane.open_time)
-	var spread := 0.0
-	if cue > 0.0:
-		var duration := model.tuning.crane_open_time
-		var opening := 0.55 + (duration - cue) / (duration * 0.25)
-		var closing := cue / (duration * 0.35)
-		spread = roundf(7.0 * clampf(minf(opening, closing), 0.0, 1.0))
+		_draw_crane_crate(cargo, span, int(crane.variant), str(crane.material))
+	var spread := StackCraneRepair.jaw_spread(float(crane.open_time), model.tuning.crane_open_time)
 	_draw_crane_rect(Rect2(center.x - 6.0, jaw_y - 2.0, 12.0, 5.0), span, INK)
 	_draw_crane_rect(Rect2(center.x - 5.0, jaw_y - 2.0, 10.0, 3.0), span, body)
 	_draw_crane_rect(Rect2(center.x - 2.0, jaw_y - 2.0, 4.0, 1.0), span, light)
 	for side: float in [-1.0, 1.0]:
 		_draw_crane_jaw(span, Vector2(center.x, jaw_y), side, spread, body, light)
+	if model.repair.workers[index].broken:
+		_draw_broken_crane(center)
 
 func _draw_crane_jaw(span: Rect2, joint: Vector2, side: float, spread: float, body: Color, light: Color) -> void:
 	var shoulder := joint.x + 5.0 * side
 	var wrist := joint.x + (9.0 + roundf(spread * 0.6)) * side
-	var hinge := joint.x + (12.0 + spread) * side
+	var hinge := joint.x + (StackCraneRepair.JAW_HINGE_X + spread) * side
 	var rise := roundf(spread * 0.33)
 	var palm := Rect2(minf(shoulder, wrist) - 1.0, joint.y, absf(wrist - shoulder) + 3.0, 4.0)
 	var arm := Rect2(minf(wrist, hinge) - 1.0, joint.y + 2.0, absf(hinge - wrist) + 3.0, 5.0)
@@ -524,6 +595,106 @@ func _draw_crane_jaw(span: Rect2, joint: Vector2, side: float, spread: float, bo
 	for part: Rect2 in [palm, arm, finger, toe]:
 		_draw_crane_rect(part.grow(-1.0), span, body)
 	_draw_crane_rect(Rect2(wrist, joint.y + 3.0, 1.0, 1.0), span, light)
+
+func _draw_broken_crane(center: Vector2) -> void:
+	var blink := int(clock * 11.0) % 2
+	var tint := WARNING_LIGHT if blink == 0 else Color("d76a54")
+	draw_rect(Rect2(center - Vector2(12, 7), Vector2(24, 14)), tint, false, 1)
+	draw_rect(Rect2(center - Vector2(7, 2), Vector2(3, 3)), tint)
+	var bolt := PackedVector2Array([Vector2(4, -4), Vector2(0, 1), Vector2(5, 1), Vector2(2, 6)])
+	for i in range(bolt.size()):
+		bolt[i] += center
+	draw_polyline(bolt, tint, 1.5)
+	for side: float in [-1.0, 1.0]:
+		var spark := center + Vector2(side * (14 + blink), -3 + (side + 1) * 3)
+		draw_line(spark, spark + Vector2(side * 3, -2), EFFECT_AMBER)
+
+func _draw_mechanic_sprite(at: Vector2, frame: int, direction: float = 1.0) -> void:
+	var dimensions := Vector2(25, 21)
+	var bounds := Rect2(at - dimensions * 0.5, dimensions)
+	bounds.size.x *= direction
+	draw_texture_rect_region(MECHANIC, bounds, Rect2(frame * 36, 0, 36, 30))
+
+func _draw_crane_worker(index: int, crane: Dictionary) -> void:
+	var worker: Dictionary = model.repair.workers[index]
+	var phase := str(worker.phase)
+	if phase == "idle":
+		return
+	var at: Vector2 = model.repair.worker_position(model, index) * PIXELS_PER_CELL
+	var direction := float(crane.direction)
+	match phase:
+		"climb":
+			_draw_mechanic_sprite(at, int(clock * 10.0) % 2, direction)
+		"repair":
+			_draw_mechanic_sprite(at, 2 + int(float(worker.elapsed) * 6.0) % 2, direction)
+			var position := at + Vector2(-10, -25)
+			var progress := clampf(float(worker.elapsed) / StackCraneRepair.REPAIR_TIME, 0.0, 1.0)
+			draw_rect(Rect2(position - Vector2.ONE, Vector2(22, 5)), INK)
+			draw_rect(Rect2(position, Vector2(20, 3)), Color("355760"))
+			draw_rect(Rect2(position, Vector2(20 * progress, 3)), WATCH_LIGHT)
+			if int(float(worker.elapsed) * 12.0) % 6 == 0:
+				_draw_crush_star(at + Vector2(10 * direction, -6), 0.8)
+		"passenger":
+			# The passenger pose faces left in the atlas.
+			_draw_mechanic_sprite(at, 4, -direction)
+
+func _draw_repair_flight() -> void:
+	for shot in model.repair.shots:
+		var from: Vector2 = shot.from * PIXELS_PER_CELL
+		var target: Vector2 = shot.to * PIXELS_PER_CELL
+		var fraction := clampf(float(shot.elapsed) / float(shot.duration), 0.0, 1.0)
+		var count := maxi(1, ceili(from.distance_to(target) / 12.0))
+		for i in range(count + 1):
+			var t := float(i) / count
+			var dot := StackCraneRepair.shot_position(shot, t) * PIXELS_PER_CELL
+			draw_rect(Rect2(dot.round(), Vector2(2, 2)), Color(EFFECT_AMBER, 0.85 if t <= fraction else 0.36))
+		var pebble: Vector2 = (shot.position * PIXELS_PER_CELL).round()
+		draw_rect(Rect2(pebble - Vector2(2, 2), Vector2(5, 5)), Color(EFFECT_AMBER, 0.66))
+		draw_rect(Rect2(pebble - Vector2.ONE, Vector2(3, 3)), CREAM)
+	for worker in model.repair.fallen:
+		_draw_mechanic_sprite(worker.position * PIXELS_PER_CELL, 5)
+
+func _draw_traps() -> void:
+	for trap in model.traps:
+		var at := _crate_origin(float(trap.x), float(trap.y))
+		var column := 0
+		var sway := 0.0
+		match str(trap.phase):
+			"warning":
+				column = 1
+				sway = sin((StackSimulation.TRAP_WARNING_SECONDS - float(trap.timer)) * 52.0) * 1.5
+			"open":
+				column = 2
+		var bounds := Rect2(at + Vector2(-11 + roundf(sway), -20), Vector2(22, 20))
+		draw_texture_rect_region(TRAPS, bounds, Rect2(24 * column, 0, 24, 24))
+		if column == 2:
+			draw_rect(Rect2(at + Vector2(-2, -7), Vector2(5, 2)), WARNING_LIGHT)
+
+func _draw_watch_aura(hero: Rect2) -> void:
+	var origin := hero.get_center()
+	var pulse := 0.5 + 0.5 * sin(clock * 15.0)
+	var radius := 14.0 + roundf(2.0 * pulse)
+	var tint := Color(WATCH_LIGHT, 0.66 + 0.28 * pulse)
+	for start: float in [clock * 3.0, PI + clock * 3.0]:
+		draw_arc(origin, radius, start, start + 1.95, 10, tint, 1.4)
+	draw_rect(Rect2(origin + Vector2(-13, -13), Vector2(2, 4)), tint)
+	draw_rect(Rect2(origin + Vector2(-9, -13), Vector2(2, 4)), tint)
+
+func _draw_workshop_impacts(width: float, floor_y: float) -> void:
+	for impact in _workshop_impacts:
+		var age := float(impact.age) / WORKSHOP_EFFECT_LIFE
+		var center: Vector2 = impact.position
+		var tint := Color(impact.tint, 1.0 - age)
+		var kind := str(impact.kind)
+		if kind == "mechanic_land" and impact.contact == "wood":
+			_draw_wood_fragments(center, float(impact.age), false, width, floor_y)
+		if kind in ["watch_start", "watch_end", "trap_escape", "trap_disarmed", "trap_open"]:
+			draw_arc(center + Vector2(0, -2), 4.0 + 13.0 * age, PI, TAU, 14, tint, 1.5)
+		for direction: Vector2 in [Vector2(-1.0, -0.6), Vector2(-0.35, -1.0),
+				Vector2(0.3, -0.75), Vector2(1.0, -0.4)]:
+			var at := center + direction * (4.0 + age * 15.0)
+			if at.x >= 0.0 and at.x <= width and at.y < floor_y:
+				draw_rect(Rect2(at.round(), Vector2(3, 2)), tint)
 
 func _draw_clearing_row(width: float, floor_y: float, phase: String) -> void:
 	var row := Rect2(0.0, floor_y - PIXELS_PER_CELL, width, PIXELS_PER_CELL)
@@ -545,7 +716,7 @@ func _draw_clearing_row(width: float, floor_y: float, phase: String) -> void:
 		var x := _crate_origin(float(crate.x), float(crate.y)).x
 		var left := roundf(lerpf(width * 0.5, x, width_scale))
 		var right := roundf(lerpf(width * 0.5, x + PIXELS_PER_CELL, width_scale))
-		_draw_crate(Rect2(left, floor_y - height, right - left, height), int(crate.variant), tint)
+		_draw_crate(Rect2(left, floor_y - height, right - left, height), int(crate.variant), str(crate.material), tint)
 	_draw_receiving_lip(row, openness)
 	if glow > 0.0:
 		draw_rect(row.grow(1.0), Color(EFFECT_AMBER, glow * 0.28), false, 3.0)
@@ -611,6 +782,10 @@ func _draw_bonus_gear(bounds: Rect2, frame: String) -> void:
 		if present[row]:
 			var source := Rect2(Vector2(column, row) * HERO_FRAME_PIXELS, HERO_FRAME_PIXELS)
 			draw_texture_rect_region(HERO_BONUS_GEAR, bounds, source)
+	for row in WORKSHOP_GEAR_ORDER:
+		if model.equipped_charges(WORKSHOP_GEAR_ROWS[row]) >= 0:
+			var source := Rect2(Vector2(column, row) * HERO_FRAME_PIXELS, HERO_FRAME_PIXELS)
+			draw_texture_rect_region(WORKSHOP_GEAR, bounds, source)
 
 func _draw_mallet_hero(bounds: Rect2, frame: String, transform: Transform2D) -> void:
 	var phase := mallet_animation_phase()
@@ -661,6 +836,11 @@ static func pause_portrait(boots_equipped: bool, helmet_equipped: bool = false,
 			if bonus_gear.get(BONUS_GEAR_ROWS[row], false):
 				var source := Rect2i(Vector2i(0, int(HERO_FRAME_PIXELS.y) * row), Vector2i(HERO_FRAME_PIXELS))
 				image.blend_rect(overlays, source, Vector2i.ZERO)
+		var workshop_gear := WORKSHOP_GEAR.get_image()
+		for row in WORKSHOP_GEAR_ORDER:
+			if bonus_gear.get(WORKSHOP_GEAR_ROWS[row], false):
+				var source := Rect2i(Vector2i(0, int(HERO_FRAME_PIXELS.y) * row), Vector2i(HERO_FRAME_PIXELS))
+				image.blend_rect(workshop_gear, source, Vector2i.ZERO)
 		return ImageTexture.create_from_image(image)
 	if atlas == null:
 		return HERO_TEXTURES.idle
@@ -941,7 +1121,7 @@ func _draw_crush(impact: Dictionary, width: float) -> void:
 			var glove := Vector2(x, pose.end.y - 4.0)
 			draw_rect(Rect2(glove, Vector2(4, 3)), Color(INK, reach))
 			draw_rect(Rect2(glove + Vector2(1, 0), Vector2(2, 2)), Color(Color("f1bb83"), reach))
-	_draw_crate(crate, int(impact.variant))
+	_draw_crate(crate, int(impact.variant), str(impact.material))
 	if reach > 0.0:
 		var center := _hero_bounds().get_center().x
 		for x in [center - 6.0, center + 2.0]:
@@ -1000,18 +1180,25 @@ func _draw_field_objects() -> void:
 			impact = crate
 			continue
 		var position := _crate_origin(float(crate.x), float(crate.y))
-		_draw_crate(Rect2(position, Vector2.ONE * PIXELS_PER_CELL), int(crate.variant))
+		_draw_crate(Rect2(position, Vector2.ONE * PIXELS_PER_CELL), int(crate.variant), str(crate.material))
 	for item in model.ground_items:
 		var at := _crate_origin(float(item.x), float(item.y))
-		var source := ground_icon_region(item.kind)
-		draw_texture_rect_region(GROUND_ATLAS, Rect2(at - Vector2(10, 16), Vector2(20, 16)), source)
+		var bounds := Rect2(at - Vector2(10, 16), Vector2(20, 16))
+		if WORKSHOP_ICONS.has(item.kind):
+			draw_texture_rect(WORKSHOP_ICONS[item.kind], Rect2(at - Vector2(10, 20), Vector2(20, 20)), false)
+		else:
+			draw_texture_rect_region(GROUND_ATLAS, bounds, ground_icon_region(item.kind))
 		if item.get("row_splinters", false):
 			var age := (model.ticks - int(item.born)) * StackSimulation.STEP
 			if item.born >= 0 and age < HELMET_WOOD_TIME:
 				_draw_wood_fragments(_crate_origin(item.x, item.origin_y), age, false, width, floor_y)
+	_draw_traps()
+	_draw_repair_flight()
 	if impact.is_empty():
 		var bounds := _hero_bounds()
 		var compression := float(model.spring_charge_stages)
+		if model.trap_hold_time > 0.0:
+			compression += 2.0
 		bounds.position.y += compression
 		bounds.size.y -= compression
 		_draw_lamp_guides(width, floor_y)
@@ -1019,8 +1206,11 @@ func _draw_field_objects() -> void:
 		_draw_spring_steam(width, floor_y)
 		_draw_boots_exhaust(bounds, floor_y)
 		_draw_mallet_hero(bounds, hero_frame(), Transform2D(0, Vector2.ONE * cell / PIXELS_PER_CELL, 0, field.position))
+		if model.watch_cap_active:
+			_draw_watch_aura(bounds)
 	else:
 		_draw_crush(impact, width)
+	_draw_workshop_impacts(width, floor_y)
 	if active:
 		_draw_helmet_impacts(width, floor_y)
 		_draw_glove_fragments(width, floor_y)
@@ -1101,7 +1291,8 @@ func _draw_controls() -> void:
 		var rect: Rect2 = controls[action]
 		var down: bool = (pressed_actions.has(action)
 			or (action == "mallet" and mallet_animation_phase() != "none")
-			or (action == "lamp" and model.lamp_active_time > 0.0))
+			or (action == "lamp" and model.lamp_active_time > 0.0)
+			or (action == "watch_cap" and model.watch_cap_active))
 		var grabbing: bool = action == "grab" and model.grabbed_crate_id >= 0
 		var p := rect.position
 		var s := rect.size
@@ -1124,9 +1315,10 @@ func _draw_controls() -> void:
 				draw_circle(indicator, 3.0, EFFECT_AMBER)
 				draw_rect(Rect2(indicator - Vector2.ONE, Vector2(2, 2)), CREAM)
 			draw_texture_rect_region(GRAB_ICONS, Rect2(icon_at, GRAB_ICON_SIZE), source)
-		elif ACTION_ICONS.has(action):
+		elif ACTION_ICONS.has(action) or WORKSHOP_ICONS.has(action):
 			var icon_size := Vector2(32, 32)
-			draw_texture_rect(ACTION_ICONS[action], Rect2(rect.get_center() - icon_size * 0.5, icon_size), false)
+			var icon: Texture2D = ACTION_ICONS.get(action, WORKSHOP_ICONS.get(action))
+			draw_texture_rect(icon, Rect2(rect.get_center() - icon_size * 0.5, icon_size), false)
 		else:
 			var direction := Vector2.UP if action == "jump" else (Vector2.LEFT if action == "left" else Vector2.RIGHT)
 			_draw_arrow(rect.get_center() + Vector2(1, 2), direction, Color("0b2632"))
