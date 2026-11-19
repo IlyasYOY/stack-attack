@@ -222,10 +222,11 @@ func advance(delta: float, axis: float, jump_pressed: bool = false, pull_held: b
 	elif jump_pressed:
 		_request_jump()
 	var jump_held := bool(bonus_input.get("jump_held", false))
+	var speed_held := bool(bonus_input.get("speed_held", false))
 	accumulator += maxf(delta, 0.0)
 	while accumulator + EPS * 0.01 >= STEP:
 		accumulator -= STEP
-		_tick(clampf(axis, -1.0, 1.0), pull_held, jump_held)
+		_tick(clampf(axis, -1.0, 1.0), pull_held, jump_held, speed_held)
 		if state == "over":
 			accumulator = 0.0
 			break
@@ -322,10 +323,10 @@ func equipped_in_slot(kind: String) -> String:
 	return ""
 
 
-func pick_up_nearest() -> void:
+func pick_up_nearest() -> String:
 	var item := nearest_item()
 	if item.is_empty():
-		return
+		return ""
 	var kind := str(item.kind)
 	var charges := int(item.charges)
 	var progress := float(item.progress)
@@ -350,6 +351,7 @@ func pick_up_nearest() -> void:
 		lamp_helmet_equipped = true
 	elif kind == "speed_boots":
 		speed_boots_progress = progress
+	return kind
 
 
 # Sweep the leading edge. Each crate resolves its first contact only, and new
@@ -434,7 +436,7 @@ func cancel_bonus_input() -> void:
 	speed_boost_active = false
 
 
-func _tick(axis: float, pull_held: bool, jump_held: bool) -> void:
+func _tick(axis: float, pull_held: bool, jump_held: bool, speed_held: bool) -> void:
 	ticks += 1
 	_push_contact_id = -1
 	_sliding_push_direction = 0.0
@@ -450,7 +452,7 @@ func _tick(axis: float, pull_held: bool, jump_held: bool) -> void:
 	if _gloves_take_control(pull_held):
 		_move_with_gloves(pull_held and gloves_charges > 0)
 	else:
-		_walk_player(axis)
+		_walk_player(axis, speed_held)
 	_advance_mallet()
 	_move_player_vertically(jump_held)
 	_move_items()
@@ -648,13 +650,14 @@ func _move_player_vertically(jump_held: bool) -> void:
 	player.y = maxf(PLAYER_TOP, proposed_y)
 
 
-func _walk_player(axis: float) -> void:
+func _walk_player(axis: float, speed_held: bool) -> void:
 	var width := tuning.player_width
 	var old_x := player.x
 	if not is_zero_approx(axis):
 		facing = 1 if axis > 0.0 else -1
 	var step := axis * tuning.player_speed * STEP
-	if speed_boots_charges > 0:
+	var boosting := speed_held and speed_boots_charges > 0
+	if boosting:
 		step = signf(step) * minf(absf(step) * SPEED_BOOTS_MULTIPLIER,
 			float(speed_boots_charges) - speed_boots_progress)
 	var proposed_x := clampf(player.x + step, 0.0, tuning.columns - width)
@@ -670,7 +673,7 @@ func _walk_player(axis: float) -> void:
 			_try_push(crate, -1)
 			proposed_x = maxf(proposed_x, float(crate.x) + 1.0)
 	player.x = clampf(proposed_x, 0.0, tuning.columns - width)
-	if speed_boots_charges > 0:
+	if boosting:
 		_spend_speed_distance(maxf(0.0, (player.x - old_x) * signf(axis)))
 
 

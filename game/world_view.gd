@@ -41,10 +41,12 @@ const HERO_MALLET_ATLAS: Texture2D = preload("res://art/hero_mallet.png")
 const HERO_BONUS_GEAR: Texture2D = preload("res://art/hero_bonus_gear.png")
 const BONUS_GEAR_ROWS := ["strong_arms", "speed_boots", "spring_boots", "lamp_helmet"]
 const BONUS_GEAR_DRAW_ORDER := [1, 2, 0, 3]
-const LAMP_HELMET_TEXTURE: Texture2D = preload("res://art/lamp_helmet.png")
 const LAMP_HELMET_FRAGMENTS: Texture2D = preload("res://art/lamp_helmet_fragments.png")
 const SPRING_STEAM_TIME := 0.37
 const MALLET_TEXTURE: Texture2D = preload("res://art/wooden_mallet.png")
+const ACTION_ICONS := {
+	"mallet": MALLET_TEXTURE, "lamp": preload("res://art/lamp_helmet.png"), "speed": preload("res://art/speed_boots.png"),
+}
 const MALLET_FRAGMENTS: Texture2D = preload("res://art/mallet_fragments.png")
 const HERO_TEXTURES := {
 	"idle": preload("res://art/hero_idle.png"), "walk": preload("res://art/hero_walk.png"),
@@ -102,7 +104,10 @@ func _ready() -> void:
 func _layout() -> void:
 	if model == null: return
 	var landscape := size.x > size.y
-	var button_width := clampf(floorf((size.x - 52.0) / 5.0), 48, 70)
+	var hand_action := model.gloves_charges > 0 or model.mallet_charges > 0
+	var lamp_action := model.lamp_helmet_equipped and model.lamp_helmet_charges > 0
+	var slots := 6 if hand_action and lamp_action and model.speed_boots_charges > 0 else 5
+	var button_width := clampf(floorf((size.x - 24.0 - (slots - 1) * 7.0) / slots), 48, 70)
 	var button_size := Vector2(button_width, 52 if landscape else 60)
 	var margin := 12.0
 	var bottom := size.y - margin - button_size.y
@@ -111,9 +116,12 @@ func _layout() -> void:
 	controls = {"left": Rect2(Vector2(margin, bottom), button_size),
 		"right": Rect2(Vector2(margin + stride, bottom), button_size),
 		"jump": Rect2(Vector2(jump_x, bottom), button_size)}
-	if model.gloves_charges > 0 or model.mallet_charges > 0:
+	if hand_action:
 		controls["grab" if model.gloves_charges > 0 else "mallet"] = Rect2(Vector2(jump_x - stride, bottom), button_size)
-	if model.lamp_helmet_equipped and model.lamp_helmet_charges > 0:
+	if model.speed_boots_charges > 0:
+		var speed_x := jump_x - (2 if hand_action else 1) * stride
+		controls["speed"] = Rect2(Vector2(speed_x, bottom), button_size)
+	if lamp_action:
 		controls["lamp"] = Rect2(Vector2(margin + 2 * stride, bottom), button_size)
 
 	var frame := WAREHOUSE_FRAME + 3
@@ -1116,10 +1124,9 @@ func _draw_controls() -> void:
 				draw_circle(indicator, 3.0, EFFECT_AMBER)
 				draw_rect(Rect2(indicator - Vector2.ONE, Vector2(2, 2)), CREAM)
 			draw_texture_rect_region(GRAB_ICONS, Rect2(icon_at, GRAB_ICON_SIZE), source)
-		elif action in ["mallet", "lamp"]:
+		elif ACTION_ICONS.has(action):
 			var icon_size := Vector2(32, 32)
-			var icon := MALLET_TEXTURE if action == "mallet" else LAMP_HELMET_TEXTURE
-			draw_texture_rect(icon, Rect2(rect.get_center() - icon_size * 0.5, icon_size), false)
+			draw_texture_rect(ACTION_ICONS[action], Rect2(rect.get_center() - icon_size * 0.5, icon_size), false)
 		else:
 			var direction := Vector2.UP if action == "jump" else (Vector2.LEFT if action == "left" else Vector2.RIGHT)
 			_draw_arrow(rect.get_center() + Vector2(1, 2), direction, Color("0b2632"))

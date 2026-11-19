@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import sys
 import threading
+import time
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError, sync_playwright
 from PIL import Image, ImageChops, ImageStat
 
@@ -21,6 +22,8 @@ parser = argparse.ArgumentParser(description=__doc__)
 group = parser.add_mutually_exclusive_group()
 group.add_argument('--workshop-only', action='store_true', help='Capture and validate the workshop visual slice')
 group.add_argument('--sprites-only', action='store_true', help='Run only frozen-pose rendered sprite regressions')
+group.add_argument('--demo-only', action='store_true', help='Check and record the menu demo in Chromium')
+group.add_argument('--menu-idle-only', action='store_true', help='Check the real menu idle timeout and wake gestures')
 group.add_argument('--ui-only', action='store_true', help='Run demo isolation and vibration UI regressions only')
 group.add_argument('--game-over-only', action='store_true', help='Run score-only result screen regressions and capture screenshots')
 group.add_argument('--statistics-only', action='store_true', help='Check Statistics and capture its rendered overview and history')
@@ -123,6 +126,8 @@ def check_touch_control_layout(snapshot):
         expected.add('mallet')
     if snapshot['lamp_helmet_charges'] > 0:
         expected.add('lamp')
+    if snapshot['speed_boots_charges'] > 0:
+        expected.add('speed')
     assert snapshot['controls'].keys() == expected
     checked = []
     for action, rect in snapshot['controls'].items():
@@ -1800,6 +1805,30 @@ def body_slot_checks(page, shots):
     set_bonus_board(page, {})
 
 
+def start_game_video(page):
+    page.evaluate("""() => {
+        const stream = document.querySelector('canvas').captureStream(30);
+        const recorder = new MediaRecorder(stream, {mimeType:'video/webm;codecs=vp8'});
+        const chunks = [];
+        recorder.ondataavailable = event => chunks.push(event.data);
+        window.finishGameVideo = () => new Promise(resolve => {
+            recorder.onstop = () => {
+                stream.getTracks().forEach(track => track.stop());
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result.split(',')[1]);
+                reader.readAsDataURL(new Blob(chunks, {type:'video/webm'}));
+            };
+            recorder.stop();
+        });
+        recorder.start();
+    }""")
+
+
+def save_game_video(page, name):
+    video = page.evaluate('window.finishGameVideo()')
+    (SHOTS / name).write_bytes(base64.b64decode(video))
+
+
 def ground_checks(browser, record=False):
     errors, shots = [], []
     context, page = open_boots_game(browser, (600, 960), errors)
@@ -1813,22 +1842,7 @@ def ground_checks(browser, record=False):
         shots.append(screenshot(page, 'ground-eight-items.png'))
 
         if record:
-            page.evaluate("""() => {
-                const stream = document.querySelector('canvas').captureStream(30);
-                const recorder = new MediaRecorder(stream, {mimeType:'video/webm;codecs=vp8'});
-                const chunks = [];
-                recorder.ondataavailable = event => chunks.push(event.data);
-                window.finishLootVideo = () => new Promise(resolve => {
-                    recorder.onstop = () => {
-                        stream.getTracks().forEach(track => track.stop());
-                        const reader = new FileReader();
-                        reader.onload = () => resolve(reader.result.split(',')[1]);
-                        reader.readAsDataURL(new Blob(chunks, {type:'video/webm'}));
-                    };
-                    recorder.stop();
-                });
-                recorder.start();
-            }""")
+            start_game_video(page)
             page.wait_for_timeout(800)
 
         # Seed 2 makes the real destruction rolls for this row yield three distinct items.
@@ -1920,8 +1934,7 @@ def ground_checks(browser, record=False):
         shots.append(screenshot(page, 'ground-side-after.png'))
         if record:
             page.wait_for_timeout(700)
-            video = page.evaluate('window.finishLootVideo()')
-            (SHOTS / 'ground-scenarios.webm').write_bytes(base64.b64decode(video))
+            save_game_video(page, 'ground-scenarios.webm')
     finally:
         context.close()
     assert not errors, errors
@@ -2246,29 +2259,34 @@ def gloves_board(page, *, facing=1, x=None, gap=0, extra=(), player_x=None):
 
 
 @contextmanager
-def glove_touches(page):
+def control_touches(page):
     controls = state(page)['controls']
     points = {}
-    for identifier, action in enumerate(('grab', 'jump', 'left', 'right'), 1):
+    for identifier, action in enumerate(('grab', 'jump', 'left', 'right', 'speed'), 1):
         if action in controls:
             x, y = point(page, controls[action])
             points[action] = {'x':x, 'y':y, 'id':identifier}
     cdp = page.context.new_cdp_session(page)
 
+    active = False
+
     def dispatch(event, *actions):
+        nonlocal active
         cdp.send('Input.dispatchTouchEvent', {'type':event, 'touchPoints':[points[action] for action in actions]})
+        active = bool(actions) and event != 'touchCancel'
 
     try:
         yield dispatch
     finally:
-        dispatch('touchEnd')
+        if active:
+            dispatch('touchEnd')
         cdp.detach()
 
 
 @contextmanager
 def hold_grab(page, touch):
     if touch:
-        with glove_touches(page) as dispatch:
+        with control_touches(page) as dispatch:
             dispatch('touchStart', 'grab')
             yield
     else:
@@ -2394,7 +2412,7 @@ def keyboard_glove_pull(page, shots):
 def multitouch_glove_pull(page, shots):
     board = gloves_board(page, facing=-1, gap=.12, extra=[[1, 10, 0]])
     target_id = board['visible_crates'][0]['id']
-    with glove_touches(page) as dispatch:
+    with control_touches(page) as dispatch:
         dispatch('touchStart', 'grab', 'left', 'jump')
         check_partial_pull(board, animation_step(page, 1))
         gloves_shot(page, 'grabbed', shots)
@@ -2881,6 +2899,88 @@ def bonus_events(snapshot, kind):
     return [event for event in snapshot['bonus_events'] if event['type'] == kind]
 
 
+def speed_boots_checks(page):
+    feet = {'feet': 'speed_boots'}
+    board = set_bonus_board(page, {**feet, 'hands': 'gloves', 'head': 'lamp_helmet'})
+    check_touch_control_layout(board)
+    with control_touches(page) as touch:
+        touch('touchStart', 'right')
+        walk = animation_step(page, 12)
+        assert abs(walk['player'][0] - board['player'][0] - .36) < .001
+        assert walk['speed_boots_progress'] == 0
+        touch('touchStart', 'right', 'speed')
+        fast = animation_step(page, 12)
+        assert abs(fast['player'][0] - walk['player'][0] - .558) < .001
+        assert abs(fast['speed_boots_progress'] - .558) < .001
+        touch('touchEnd', 'speed')
+        released = animation_step(page, 12)
+        assert abs(released['player'][0] - fast['player'][0] - .36) < .001
+        assert released['speed_boots_progress'] == fast['speed_boots_progress']
+        touch('touchStart', 'right', 'speed')
+        again = animation_step(page, 12)
+        assert again['speed_boots_charges'] == board['speed_boots_charges'] - 1
+        touch('touchCancel')
+        stopped = animation_step(page, 12)
+        assert stopped['player'] == again['player'] and not stopped['speed_boost_active']
+
+    x, y = point(page, board['controls']['speed'])
+    page.mouse.move(x, y)
+    page.keyboard.down('ArrowLeft')
+    page.mouse.down()
+    try:
+        assert animation_step(page, 6)['speed_boost_active']
+        page.mouse.move(x, y - 70)
+        assert not animation_step(page, 6)['speed_boost_active']
+        page.mouse.move(x, y)
+        assert not animation_step(page, 6)['speed_boost_active']
+    finally:
+        page.mouse.up()
+        page.keyboard.up('ArrowLeft')
+
+    # A held key cannot transfer to another pair, even if it is the same item type.
+    animation_request(page, 'ground_board', items=[['speed_boots', 4.7, 11, 1]], animation_hold=True)
+    page.keyboard.down('ShiftLeft')
+    page.keyboard.press('KeyE')
+    page.keyboard.down('ArrowRight')
+    try:
+        ordinary = animation_step(page, 12)
+        assert ordinary['speed_boots_progress'] == 0
+        page.keyboard.up('ShiftLeft')
+        page.keyboard.down('ShiftLeft')
+        fast = animation_step(page, 12)
+        assert abs(fast['player'][0] - ordinary['player'][0] - .558) < .001
+        finished = animation_step(page, 16)
+        assert finished['speed_boots_charges'] == 0 and 'speed' not in finished['controls']
+        normal = animation_step(page, 12)
+        assert abs(normal['player'][0] - finished['player'][0] - .36) < .001
+    finally:
+        page.keyboard.up('ShiftLeft')
+        page.keyboard.up('ArrowRight')
+
+    for interrupt in ('pause', 'focus'):
+        set_bonus_board(page, feet)
+        page.keyboard.down('ShiftLeft')
+        page.keyboard.down('ArrowLeft')
+        try:
+            active = animation_step(page, 6)
+            assert active['speed_boost_active']
+            if interrupt == 'focus':
+                gloves_focus_loss(page)
+            else:
+                page.keyboard.press('Escape')
+                wait_screen(page, 'paused')
+            button(page, 'resume', True)
+            wait_screen(page, 'playing')
+            page.keyboard.up('ArrowLeft')
+            page.keyboard.down('ArrowLeft')
+            resumed = animation_step(page, 12)
+            assert abs(active['player'][0] - resumed['player'][0] - .36) < .001
+            assert resumed['speed_boots_progress'] == active['speed_boots_progress']
+        finally:
+            page.keyboard.up('ArrowLeft')
+            page.keyboard.up('ShiftLeft')
+
+
 def bonuses_checks(browser):
     errors, shots = [], []
     portrait, landscape = (320, 568), (568, 320)
@@ -2932,15 +3032,7 @@ def bonuses_checks(browser):
             assert after[name+'_charges'] == blocked[name+'_charges']
         assert not bonus_events(after, 'lamp_reveal') and not bonus_events(after, 'strong_push')
 
-        runner = set_bonus_board(page, {'feet':'speed_boots'}, charges={'speed_boots':1})
-        page.keyboard.down('ArrowRight')
-        try:
-            fast = animation_step(page, 12)
-            finished = animation_step(page, 16)
-        finally:
-            page.keyboard.up('ArrowRight')
-        assert fast['player'][0] - runner['player'][0] > .49 and fast['speed_boots_charges'] == 1
-        assert finished['speed_boots_charges'] == 0 and finished['player'][0] > runner['player'][0]+1
+        speed_boots_checks(page)
 
         rescue = set_bonus_board(page, {'head':'lamp_helmet', 'hands':'mallet', 'feet':'spring_boots'},
             player=[4.35,10.12], crates=[[4,9.02,6]], charges={'lamp_helmet':3})
@@ -3094,6 +3186,110 @@ def workshop_screens(browser):
     return checks
 
 
+def wait_for_menu_fade(page):
+    """Sample the real rendered controls across the production idle timeout."""
+    initial = state(page)
+    started = time.monotonic()
+    buttons = [item for item in initial['panel']['items'] if item['kind'] == 'Button']
+    title, = [item for item in initial['panel']['items'] if item['kind'] == 'Label']
+    assert title['text'] == 'Stack Attack' and title['opacity'] == 1
+    assert len(buttons) == 3 and all(item['opacity'] == 1 for item in buttons)
+    fading = page.wait_for_function("""() => {
+        const s = window.stackAttackState;
+        return s.panel.items.some(i => i.kind === 'Button' && i.opacity < 1) && s;
+    }""", timeout=34000).json_value()
+    elapsed = time.monotonic() - started
+    assert 29.5 < elapsed < 32, ('idle timeout', elapsed)
+    assert all(0 < item['opacity'] < 1 for item in fading['panel']['items'] if item['kind'] == 'Button')
+    page.wait_for_function("""() => window.stackAttackState.panel.items.every(
+        item => item.kind !== 'Button' || item.opacity === 0)""", timeout=2000)
+    hidden = state(page)
+    assert hidden['panel']['items'][0] == title and hidden['buttons'] == initial['buttons']
+    page.wait_for_timeout(600)
+    assert initial['demo']['ticks'] < fading['demo']['ticks'] < hidden['demo']['ticks'] < state(page)['demo']['ticks']
+    return round(elapsed, 2)
+
+
+def demo_checks(browser, record=False):
+    viewport = {'width': 600, 'height': 860}
+    for natural in (False, True):
+        context = browser.new_context(viewport=viewport)
+        page = context.new_page()
+        try:
+            page.goto(URL)
+            wait_screen(page, 'menu')
+            initial = state(page)
+            page.mouse.move(5, 5)
+            if record and natural:
+                start_game_video(page)
+            if natural or record:
+                wait_for_menu_fade(page)
+            if record and not natural:
+                start_game_video(page)
+            if natural:
+                page.wait_for_timeout(8000)
+                demo = state(page)['demo']
+                assert demo['ticks'] > initial['demo']['ticks'] and demo['drops'] > 0 and demo['jumps'] > 0, demo
+                print('NATURAL_DEMO', demo, flush=True)
+            else:
+                scenario(page, 'demo_dodge')
+                page.wait_for_function('window.stackAttackState.demo.player[0] > 1.02')
+                page.wait_for_timeout(1000)
+                assert state(page)['demo']['losses'] == 0
+                scenario(page, 'demo_row')
+                page.wait_for_function('window.stackAttackState.demo.lines === 1', timeout=6000)
+                page.wait_for_timeout(600)
+                scenario(page, 'demo_pickup')
+                page.wait_for_function('window.stackAttackState.demo.helmet === 5', timeout=6000)
+                page.wait_for_timeout(800)
+            final = state(page)
+            assert final['screen'] == 'menu' and final['session'] == initial['session']
+            assert personal_statistics(final) == personal_statistics(initial)
+            if record:
+                save_game_video(page, 'demo-natural.webm' if natural else 'demo-scenarios.webm')
+        finally:
+            context.close()
+
+
+def menu_idle_checks(browser):
+    for layout, width, height in [('portrait', 390, 844), ('landscape', 844, 390)]:
+        context = browser.new_context(viewport={'width': width, 'height': height}, has_touch=True)
+        page = context.new_page()
+        page.goto(URL)
+        wait_screen(page, 'menu')
+        initial = state(page)
+        assert initial['layout'] == layout and initial['panel']['focus'] == 'play'
+        x, y = point(page, initial['buttons']['play'])
+        page.mouse.move(5, 5)
+        elapsed = [wait_for_menu_fade(page)]
+        hidden_ticks = state(page)['demo']['ticks']
+        if layout == 'portrait':
+            page.touchscreen.tap(x, y)
+        else:
+            page.mouse.move(x, y)
+            page.wait_for_timeout(200)
+            moved = state(page)
+            assert moved['panel']['focus'] == 'play' and moved['demo']['ticks'] > hidden_ticks
+            elapsed.append(wait_for_menu_fade(page))
+            hidden_ticks = state(page)['demo']['ticks']
+            page.keyboard.down('Enter')
+            page.keyboard.down('Enter')  # browser auto-repeat
+            page.keyboard.up('Enter')
+        page.wait_for_timeout(350)
+        awake = state(page)
+        assert awake['screen'] == 'menu' and awake['session'] == initial['session']
+        assert all(item['opacity'] == 1 for item in awake['panel']['items'])
+        assert awake['demo']['ticks'] > hidden_ticks
+        if layout == 'portrait':
+            page.touchscreen.tap(x, y)
+        else:
+            page.keyboard.press('Enter')
+        wait_screen(page, 'playing')
+        assert state(page)['session'] == initial['session'] + 1
+        print('MENU_IDLE', layout, elapsed, 'PASS', flush=True)
+        context.close()
+
+
 def menu_layouts(browser):
     context = browser.new_context(viewport={'width':390, 'height':844}, has_touch=True, device_scale_factor=1)
     page = context.new_page()
@@ -3162,6 +3358,16 @@ try:
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         full_check = not any(vars(args).values())
+        if args.demo_only or full_check:
+            demo_checks(browser, record=args.demo_only)
+        if args.demo_only:
+            browser.close()
+            raise SystemExit(0)
+        if args.menu_idle_only or full_check:
+            menu_idle_checks(browser)
+        if args.menu_idle_only:
+            browser.close()
+            raise SystemExit(0)
         ground = ground_checks(browser, record=args.loot_only) if args.loot_only or full_check else {}
         if ground:
             print('GROUND', json.dumps(ground), flush=True)

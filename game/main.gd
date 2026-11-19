@@ -4,13 +4,21 @@ const STATISTICS_VIEW = preload("res://game/statistics_view.gd")
 const EQUIPMENT_VIEW = preload("res://game/equipment_view.gd")
 const CRUSH_ANIMATION_TIME := 0.42
 const SPRING_METER_FLASH_TIME := 0.18
+const MENU_IDLE_MS := 30_000
+const MENU_FADE_MS := 500
 var model: StackSimulation
 var demo: StackDemo
 var profile: StackProfile
 var sound: StackSound
 var world: StackWorldView
 var ui: Control
-var screen := "menu"
+var screen := ""
+var menu_last_input_ms := 0
+var menu_opacity := 1.0
+var wake_key := KEY_NONE
+var wake_mouse_button := MOUSE_BUTTON_NONE
+var wake_touch := -1
+var wake_emulated_mouse := false
 var buttons := {}
 var sliders := {}
 var panel: PanelContainer
@@ -24,6 +32,8 @@ var jump_pointers := {}
 var pull_pointers := {}
 var mallet_pointers := {}
 var lamp_pointers := {}
+var speed_pointers := {}
+var speed_keys := {}
 var jump_pending := false
 var mallet_pending := false
 var lamp_pending := false
@@ -172,6 +182,10 @@ func _show_screen(value: String) -> void:
 		qa_statistics_preview = null
 	var previous_focus := get_viewport().gui_get_focus_owner()
 	var focus_name := str(previous_focus.name) if previous_focus != null else ""
+	if value != screen:
+		menu_last_input_ms = Time.get_ticks_msec()
+		menu_opacity = 1.0
+		_clear_wake_input()
 	screen = value
 	theme = _make_theme()
 	_release_controls()
@@ -194,6 +208,7 @@ func _show_screen(value: String) -> void:
 			_button(content, "Играть", "play", _start_game)
 			_button(content, "Статистика", "statistics", _open_statistics)
 			_button(content, "Настройки", "settings", func(): _show_screen("settings"))
+			_apply_menu_opacity()
 		"paused":
 			_heading(content, "Пауза")
 			EQUIPMENT_VIEW.build_pause(panel, content, _compact_panel(), model, _text)
@@ -448,7 +463,8 @@ func _build_hud() -> void:
 
 func _pick_up() -> void:
 	if screen == "playing" and crush_elapsed < 0.0:
-		model.pick_up_nearest()
+		if model.pick_up_nearest() in StackSimulation.SLOTS.feet:
+			_release_speed_input()
 		EQUIPMENT_VIEW.update_hud(gear_counts, world)
 		_update_pickup()
 		world._layout()
@@ -557,6 +573,7 @@ func _release_controls() -> void:
 	pull_pointers.clear()
 	mallet_pointers.clear()
 	lamp_pointers.clear()
+	_release_speed_input()
 	jump_pending = false
 	mallet_pending = false
 	lamp_pending = false
@@ -575,6 +592,11 @@ func _release_controls() -> void:
 		world.cancel_mallet_swing()
 
 
+func _release_speed_input() -> void:
+	speed_keys.clear()
+	speed_pointers.clear()
+
+
 func _stop_crate_slide() -> void:
 	slide_active = false
 	if sound != null:
@@ -589,10 +611,77 @@ func _jump_held() -> bool:
 	return not jump_keys.is_empty() or not jump_pointers.is_empty()
 
 
+func _apply_menu_opacity() -> void:
+	for button in buttons.values():
+		button.modulate.a = menu_opacity
+
+
+func _update_menu_idle() -> void:
+	var elapsed := Time.get_ticks_msec() - menu_last_input_ms
+	var opacity := clampf(1.0 - float(elapsed - MENU_IDLE_MS) / MENU_FADE_MS, 0.0, 1.0)
+	if opacity != menu_opacity:
+		menu_opacity = opacity
+		_apply_menu_opacity()
+
+
+func _clear_wake_input() -> void:
+	wake_key = KEY_NONE
+	wake_mouse_button = MOUSE_BUTTON_NONE
+	wake_touch = -1
+	wake_emulated_mouse = false
+
+
+func _menu_input(event: InputEvent) -> bool:
+	if not (event is InputEventKey or event is InputEventMouse or
+			event is InputEventScreenTouch or event is InputEventScreenDrag):
+		return false
+	var waking := menu_opacity < 1.0
+	menu_last_input_ms = Time.get_ticks_msec()
+	if waking:
+		menu_opacity = 1.0
+		_apply_menu_opacity()
+
+	if event is InputEventKey:
+		if waking and event.pressed:
+			wake_key = event.physical_keycode
+		if wake_key != KEY_NONE and wake_key == event.physical_keycode:
+			if not event.pressed:
+				wake_key = KEY_NONE
+			return true
+	elif event is InputEventScreenTouch:
+		# On Web the emulated left button can arrive before its source touch.
+		if event.pressed and (waking or wake_emulated_mouse) and wake_touch < 0:
+			wake_touch = event.index
+		if event.index == wake_touch:
+			if not event.pressed or event.canceled:
+				wake_touch = -1
+			return true
+	elif event is InputEventScreenDrag:
+		return waking or event.index == wake_touch
+	elif event is InputEventMouseButton and event.device == InputEvent.DEVICE_ID_EMULATION:
+		var consume := waking or wake_emulated_mouse or wake_touch >= 0
+		wake_emulated_mouse = consume and event.pressed and not event.canceled
+		return consume
+	elif event is InputEventMouseButton:
+		if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN,
+				MOUSE_BUTTON_WHEEL_LEFT, MOUSE_BUTTON_WHEEL_RIGHT]:
+			return waking
+		if waking and event.pressed:
+			wake_mouse_button = event.button_index
+		if wake_mouse_button == event.button_index:
+			if not event.pressed or event.canceled:
+				wake_mouse_button = MOUSE_BUTTON_NONE
+			return true
+	return waking
+
+
 func _input(event: InputEvent) -> void:
 	if sound != null and ((event is InputEventMouseButton and event.pressed) or
 		(event is InputEventScreenTouch and event.pressed) or (event is InputEventKey and event.pressed)):
 		sound.unlock()
+	if screen == "menu" and _menu_input(event):
+		get_viewport().set_input_as_handled()
+		return
 	if screen == "paused" and event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
 		_show_screen("playing")
 		get_viewport().set_input_as_handled()
@@ -611,6 +700,14 @@ func _input(event: InputEvent) -> void:
 				mallet_pending = true
 			if pull_key_held:
 				jump_pending = false
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and event.physical_keycode == KEY_SHIFT and crush_elapsed < 0.0:
+		if not event.echo:
+			if event.pressed and model.speed_boots_charges > 0:
+				speed_keys[event.location] = true
+			else:
+				speed_keys.erase(event.location)
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.physical_keycode == KEY_F and crush_elapsed < 0.0:
@@ -643,13 +740,13 @@ func _input(event: InputEvent) -> void:
 		var down: bool = event.pressed and not event.canceled
 		_pointer(event.index, event.position, down, down)
 	elif event is InputEventScreenDrag and (pointers.has(event.index) or pull_pointers.has(event.index)
-			or mallet_pointers.has(event.index) or lamp_pointers.has(event.index)):
+			or mallet_pointers.has(event.index) or lamp_pointers.has(event.index) or speed_pointers.has(event.index)):
 		_pointer(event.index, event.position, true)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		var real_press: bool = event.pressed and event.device != InputEvent.DEVICE_ID_EMULATION
 		_pointer(-1, event.position, event.pressed, real_press)
 	elif event is InputEventMouseMotion and (pointers.has(-1) or pull_pointers.has(-1)
-			or mallet_pointers.has(-1) or lamp_pointers.has(-1)):
+			or mallet_pointers.has(-1) or lamp_pointers.has(-1) or speed_pointers.has(-1)):
 		_pointer(-1, event.position, true)
 
 
@@ -659,8 +756,17 @@ func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false
 		var was_pulling := pull_pointers.erase(id)
 		var was_hitting := mallet_pointers.erase(id)
 		var was_lighting := lamp_pointers.erase(id)
-		if pointers.erase(id) or was_pulling or was_hitting or was_lighting:
+		var was_running := speed_pointers.erase(id)
+		if pointers.erase(id) or was_pulling or was_hitting or was_lighting or was_running:
 			get_viewport().set_input_as_handled()
+		return
+	var speed_control: Rect2 = world.controls.get("speed", Rect2())
+	if just_pressed and speed_control.has_point(position):
+		speed_pointers[id] = true
+	if speed_pointers.has(id):
+		if not speed_control.has_point(position):
+			speed_pointers.erase(id)
+		get_viewport().set_input_as_handled()
 		return
 	var lamp_control: Rect2 = world.controls.get("lamp", Rect2())
 	var on_lamp := lamp_control.has_point(position)
@@ -692,7 +798,7 @@ func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false
 		return
 	var action := ""
 	for candidate in world.controls:
-		if candidate not in ["grab", "mallet", "lamp"] and world.controls[candidate].has_point(position):
+		if candidate not in ["grab", "mallet", "lamp", "speed"] and world.controls[candidate].has_point(position):
 			action = candidate
 			break
 	if not action.is_empty():
@@ -731,10 +837,13 @@ func _advance_game(delta: float) -> bool:
 		actions.append("mallet")
 	if model.lamp_helmet_charges > 0 and (lamp_key_held or lamp_pointers.values().has(true)):
 		actions.append("lamp")
+	var speed_held := not speed_keys.is_empty() or not speed_pointers.is_empty()
+	if speed_held:
+		actions.append("speed")
 	world.pressed_actions = actions
 	world.axis = 0.0 if pulling else axis
 	model.advance(delta, axis, jump_pending, pull_held, mallet_pending,
-		{"jump_held": _jump_held() and not pulling, "lamp_pressed": lamp_pending})
+		{"jump_held": _jump_held() and not pulling, "lamp_pressed": lamp_pending, "speed_held": speed_held})
 	jump_pending = false
 	mallet_pending = false
 	lamp_pending = false
@@ -762,7 +871,12 @@ func _advance_game(delta: float) -> bool:
 				world.lamp_break_effect(event)
 				world._layout()
 				_record_bonus_event(event)
-			"strong_push", "speed_step":
+			"speed_step":
+				if model.speed_boots_charges == 0:
+					_release_speed_input()
+					world._layout()
+				_record_bonus_event(event)
+			"strong_push":
 				_record_bonus_event(event)
 			"ground_impact":
 				sound.effect("helmet_hit")
@@ -871,6 +985,8 @@ func _update_crush_view() -> void:
 func _process(delta: float) -> void:
 	if world == null:
 		return
+	if screen == "menu":
+		_update_menu_idle()
 	var slide_moving := _advance_demo(delta)
 	if screen == "playing" and not (qa_enabled and (qa_hero_pose or qa_animation_held)):
 		slide_moving = _advance_game(delta)
@@ -892,6 +1008,7 @@ func _notification(what: int) -> void:
 		slide_focused = true
 	elif what in [NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_WINDOW_FOCUS_OUT] and is_inside_tree():
 		slide_focused = false
+		_clear_wake_input()
 		if screen == "playing":
 			_pause()
 		else:
@@ -999,7 +1116,7 @@ func _publish_qa() -> void:
 		"demo": {"active": _background_demo(), "rounds": demo.rounds, "ticks": demo.total_ticks,
 			"jumps": demo.jumps, "drops": demo.drops, "lines": demo.lines, "losses": demo.losses,
 			"player": [demo.model.player.x, demo.model.player.y], "facing": demo.model.facing,
-			"state": demo.model.state,
+			"state": demo.model.state, "helmet": demo.model.helmet_charges,
 			"separate_model": demo.model != model},
 		"profile": {"music": profile.music, "effects": profile.effects,
 			"matches": profile.matches, "statistics": profile.statistics(), "records": profile.records,
@@ -1050,7 +1167,7 @@ func _panel_snapshot() -> Dictionary:
 				"text": str(control.text) if control is Label or control is Button else "",
 				"alignment": control.horizontal_alignment if control is Label else -1,
 				"font_size": control.get_theme_font_size("font_size") if control is Label else 0,
-				"styles": _button_style_snapshot(control),
+				"opacity": control.modulate.a, "styles": _button_style_snapshot(control),
 				"focusable": control.focus_mode == Control.FOCUS_ALL})
 	var focused := get_viewport().gui_get_focus_owner()
 	return {"rect": [rect.position.x, rect.position.y, rect.size.x, rect.size.y], "items": items,
@@ -1121,6 +1238,11 @@ func _qa_command() -> void:
 		qa_android_settings = true
 		qa_freeze_demo = true
 		_show_screen("settings")
+		return
+	if request.get("scenario") in ["demo_dodge", "demo_row", "demo_pickup"] and screen == "menu":
+		demo = preload("res://game/qa_demo_boards.gd").prepare(str(request.scenario))
+		world.model = demo.model
+		qa_freeze_demo = false
 		return
 	if str(request.get("scenario", "")) == "demo_crush" and _background_demo():
 		demo.model.state = "playing"

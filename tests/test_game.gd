@@ -68,6 +68,7 @@ func run() -> void:
 	storage()
 	broken_crate_history()
 	random_sessions()
+	demo_scenarios()
 	demo_games()
 	await app_flow()
 	await vibration_toggle()
@@ -506,7 +507,7 @@ func equipment_rewards() -> void:
 
 	var worn := empty()
 	equip(worn, "speed_boots")
-	worn.advance(.09, 1)
+	worn.advance(.09, 1, false, false, false, {"speed_held": true})
 	var progress := worn.speed_boots_progress
 	var feet := worn.add_ground_item("boots", worn.player.x + .3, 11, 2)
 	worn.pick_up_nearest()
@@ -759,23 +760,38 @@ func bonus_equipment() -> void:
 
 	var runner := empty()
 	runner.speed_boots_charges = 1
+	var boost := {"speed_held": true}
 	var start := runner.player.x
-	runner.advance(.4, 0)
-	check(runner.speed_boots_charges == 1 and runner.player.x == start, "Idle speed boots must not drain")
+	runner.advance(.25, 1)
+	check(is_equal_approx(runner.player.x - start, .25 * runner.tuning.player_speed)
+		and runner.speed_boots_progress == 0 and not runner.speed_boost_active,
+		"Equipping speed boots preserves ordinary speed and charge")
+	runner.advance(.4, 0, false, false, false, boost)
+	check(runner.speed_boots_progress == 0, "Holding boost while idle must not drain")
+	start = runner.player.x
+	runner.advance(.1, -1, false, false, false, boost)
+	var spent := start - runner.player.x
+	check(is_equal_approx(spent, .1 * runner.tuning.player_speed * Simulation.SPEED_BOOTS_MULTIPLIER)
+		and is_equal_approx(runner.speed_boots_progress, spent), "Charge tracks actual boosted distance to the left")
+	runner.advance(.25, 1)
+	check(is_equal_approx(runner.speed_boots_progress, spent) and not runner.speed_boost_active,
+		"Walking between boosts retains fractional charge")
+	start = runner.player.x
 	for tick in range(120):
-		runner.advance(Simulation.STEP, 1)
+		runner.advance(Simulation.STEP, 1, false, false, false, boost)
 		if runner.speed_boots_charges == 0:
 			break
-	check(runner.speed_boots_charges == 0 and absf(runner.player.x - start - 1) < .055,
-		"Speed boosts finish the last full cell before removing the equipment")
+	check(runner.speed_boots_charges == 0 and absf(runner.player.x - start + spent - 1) < .0001,
+		"Reversing and resuming spends the remaining fraction of the last cell")
 	var normal_at := runner.player.x
-	runner.advance(.25, 1)
+	runner.advance(.25, 1, false, false, false, boost)
 	check(absf(runner.player.x - normal_at - .25 * runner.tuning.player_speed) < .002,
 		"After the last charge, the same input continues at ordinary speed")
 	runner.player.x = runner.tuning.columns - runner.tuning.player_width
 	runner.speed_boots_charges = 2
-	runner.advance(.5, 1)
-	check(runner.speed_boots_charges == 2, "Walking against the field edge must not drain speed boots")
+	runner.advance(.5, 1, false, false, false, boost)
+	check(runner.speed_boots_charges == 2 and is_zero_approx(runner.speed_boots_progress),
+		"Holding boost against the field edge must not drain speed boots")
 
 	var lamp := empty()
 	lamp.lamp_helmet_equipped = true
@@ -1509,6 +1525,24 @@ func broken_crate_history() -> void:
 	DirAccess.remove_absolute(path)
 
 
+func demo_scenarios() -> void:
+	const Boards = preload("res://game/qa_demo_boards.gd")
+	var dodge := Boards.prepare("demo_dodge")
+	dodge.advance(0.32)
+	check(dodge.model.player.x > 1 and dodge.model.helmet_charges == 0, "Escape toward open space before taking a nearby item")
+	dodge.advance(0.65)
+	check(dodge.losses == 0 and dodge.model.crates.size() == 1 and float(dodge.model.crates[0].vy) == 0, "The dodge must survive the actual landing")
+	var row := Boards.prepare("demo_row")
+	row.advance(1.5)
+	check(row.lines == 1 and row.model.cleared_crates == row.tuning.columns, "Push a surplus crate into the last gap and clear a real row")
+	var pickup := Boards.prepare("demo_pickup")
+	pickup.advance(1.0)
+	check(pickup.model.helmet_charges == Simulation.HELMET_MAX_CHARGES and pickup.model.ground_items.is_empty(), "Approach and collect a useful helmet through normal pickup")
+	pickup.model.add_ground_item("helmet", pickup.model.player.x + 0.3, pickup.tuning.rows, 1)
+	pickup.advance(0.3)
+	check(pickup.model.helmet_charges == Simulation.HELMET_MAX_CHARGES, "Keep the better equipped item")
+
+
 func demo_games() -> void:
 	var personal := Simulation.new(Config.new(), 74)
 	var rng_state: int = personal._rng.state
@@ -1568,6 +1602,26 @@ func vibration_toggle() -> void:
 	DirAccess.remove_absolute(path)
 
 
+func check_idle_menu(app) -> void:
+	var demo_model = app.demo.model
+	app.menu_last_input_ms = Time.get_ticks_msec() - app.MENU_IDLE_MS - app.MENU_FADE_MS
+	app._update_menu_idle()
+	check(app.buttons.play.modulate.a == 0.0, "Idle must fade the menu buttons fully")
+	app._resize()
+	check(app.buttons.play.modulate.a == 0.0 and app.world.model == demo_model,
+		"Relayout must preserve the hidden buttons and the running demo")
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	check(app._menu_input(click) and app.buttons.play.modulate.a == 1.0,
+		"An idle click must wake the menu before GUI dispatch")
+	click.pressed = false
+	check(app._menu_input(click), "The release from the waking click must also be consumed")
+	click.pressed = true
+	check(not app._menu_input(click) and app.world.model == demo_model,
+		"The next click must reach the GUI with the same background model")
+
+
 func app_flow() -> void:
 	check(ProjectSettings.get_setting("application/config/name") == "Stack Attack · Ночная смена", "Visual changes must preserve the existing user data namespace")
 	var path := "user://test-match-flow-%d.json" % Time.get_ticks_usec()
@@ -1579,6 +1633,7 @@ func app_flow() -> void:
 	app.sound.apply_volumes()
 	check(app.sound.music_player.stream.loop_mode == AudioStreamWAV.LOOP_FORWARD and app.sound.music_player.stream.loop_end > 300000, "Music must loop over decoded frames on every platform")
 	check(app.screen == "menu" and app.buttons.has("play") and app.buttons.has("settings") and app.buttons.has("statistics"), "Main menu must offer the agreed screens")
+	check_idle_menu(app)
 	var art_model = app.world.model
 	var art_snapshot := [art_model.player, art_model.score, art_model.crates.duplicate(true), art_model._rng.state, art_model.ticks]
 	for boots in [false, true]:
