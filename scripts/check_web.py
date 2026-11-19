@@ -22,6 +22,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 group = parser.add_mutually_exclusive_group()
 group.add_argument('--workshop-only', action='store_true', help='Capture and validate the workshop visual slice')
 group.add_argument('--sprites-only', action='store_true', help='Run only frozen-pose rendered sprite regressions')
+group.add_argument('--demo-only', action='store_true', help='Check and record the menu demo in Chromium')
 group.add_argument('--menu-idle-only', action='store_true', help='Check the real menu idle timeout and wake gestures')
 group.add_argument('--ui-only', action='store_true', help='Run demo isolation and vibration UI regressions only')
 group.add_argument('--game-over-only', action='store_true', help='Run score-only result screen regressions and capture screenshots')
@@ -1804,6 +1805,30 @@ def body_slot_checks(page, shots):
     set_bonus_board(page, {})
 
 
+def start_game_video(page):
+    page.evaluate("""() => {
+        const stream = document.querySelector('canvas').captureStream(30);
+        const recorder = new MediaRecorder(stream, {mimeType:'video/webm;codecs=vp8'});
+        const chunks = [];
+        recorder.ondataavailable = event => chunks.push(event.data);
+        window.finishGameVideo = () => new Promise(resolve => {
+            recorder.onstop = () => {
+                stream.getTracks().forEach(track => track.stop());
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result.split(',')[1]);
+                reader.readAsDataURL(new Blob(chunks, {type:'video/webm'}));
+            };
+            recorder.stop();
+        });
+        recorder.start();
+    }""")
+
+
+def save_game_video(page, name):
+    video = page.evaluate('window.finishGameVideo()')
+    (SHOTS / name).write_bytes(base64.b64decode(video))
+
+
 def ground_checks(browser, record=False):
     errors, shots = [], []
     context, page = open_boots_game(browser, (600, 960), errors)
@@ -1817,22 +1842,7 @@ def ground_checks(browser, record=False):
         shots.append(screenshot(page, 'ground-eight-items.png'))
 
         if record:
-            page.evaluate("""() => {
-                const stream = document.querySelector('canvas').captureStream(30);
-                const recorder = new MediaRecorder(stream, {mimeType:'video/webm;codecs=vp8'});
-                const chunks = [];
-                recorder.ondataavailable = event => chunks.push(event.data);
-                window.finishLootVideo = () => new Promise(resolve => {
-                    recorder.onstop = () => {
-                        stream.getTracks().forEach(track => track.stop());
-                        const reader = new FileReader();
-                        reader.onload = () => resolve(reader.result.split(',')[1]);
-                        reader.readAsDataURL(new Blob(chunks, {type:'video/webm'}));
-                    };
-                    recorder.stop();
-                });
-                recorder.start();
-            }""")
+            start_game_video(page)
             page.wait_for_timeout(800)
 
         # Seed 2 makes the real destruction rolls for this row yield three distinct items.
@@ -1924,8 +1934,7 @@ def ground_checks(browser, record=False):
         shots.append(screenshot(page, 'ground-side-after.png'))
         if record:
             page.wait_for_timeout(700)
-            video = page.evaluate('window.finishLootVideo()')
-            (SHOTS / 'ground-scenarios.webm').write_bytes(base64.b64decode(video))
+            save_game_video(page, 'ground-scenarios.webm')
     finally:
         context.close()
     assert not errors, errors
@@ -3201,6 +3210,47 @@ def wait_for_menu_fade(page):
     return round(elapsed, 2)
 
 
+def demo_checks(browser, record=False):
+    viewport = {'width': 600, 'height': 860}
+    for natural in (False, True):
+        context = browser.new_context(viewport=viewport)
+        page = context.new_page()
+        try:
+            page.goto(URL)
+            wait_screen(page, 'menu')
+            initial = state(page)
+            page.mouse.move(5, 5)
+            if record and natural:
+                start_game_video(page)
+            if natural or record:
+                wait_for_menu_fade(page)
+            if record and not natural:
+                start_game_video(page)
+            if natural:
+                page.wait_for_timeout(8000)
+                demo = state(page)['demo']
+                assert demo['ticks'] > initial['demo']['ticks'] and demo['drops'] > 0 and demo['jumps'] > 0, demo
+                print('NATURAL_DEMO', demo, flush=True)
+            else:
+                scenario(page, 'demo_dodge')
+                page.wait_for_function('window.stackAttackState.demo.player[0] > 1.02')
+                page.wait_for_timeout(1000)
+                assert state(page)['demo']['losses'] == 0
+                scenario(page, 'demo_row')
+                page.wait_for_function('window.stackAttackState.demo.lines === 1', timeout=6000)
+                page.wait_for_timeout(600)
+                scenario(page, 'demo_pickup')
+                page.wait_for_function('window.stackAttackState.demo.helmet === 5', timeout=6000)
+                page.wait_for_timeout(800)
+            final = state(page)
+            assert final['screen'] == 'menu' and final['session'] == initial['session']
+            assert personal_statistics(final) == personal_statistics(initial)
+            if record:
+                save_game_video(page, 'demo-natural.webm' if natural else 'demo-scenarios.webm')
+        finally:
+            context.close()
+
+
 def menu_idle_checks(browser):
     for layout, width, height in [('portrait', 390, 844), ('landscape', 844, 390)]:
         context = browser.new_context(viewport={'width': width, 'height': height}, has_touch=True)
@@ -3308,6 +3358,11 @@ try:
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         full_check = not any(vars(args).values())
+        if args.demo_only or full_check:
+            demo_checks(browser, record=args.demo_only)
+        if args.demo_only:
+            browser.close()
+            raise SystemExit(0)
         if args.menu_idle_only or full_check:
             menu_idle_checks(browser)
         if args.menu_idle_only:

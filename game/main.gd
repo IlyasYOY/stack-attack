@@ -1116,7 +1116,7 @@ func _publish_qa() -> void:
 		"demo": {"active": _background_demo(), "rounds": demo.rounds, "ticks": demo.total_ticks,
 			"jumps": demo.jumps, "drops": demo.drops, "lines": demo.lines, "losses": demo.losses,
 			"player": [demo.model.player.x, demo.model.player.y], "facing": demo.model.facing,
-			"state": demo.model.state,
+			"state": demo.model.state, "helmet": demo.model.helmet_charges,
 			"separate_model": demo.model != model},
 		"profile": {"music": profile.music, "effects": profile.effects,
 			"matches": profile.matches, "statistics": profile.statistics(), "records": profile.records,
@@ -1238,6 +1238,11 @@ func _qa_command() -> void:
 		qa_android_settings = true
 		qa_freeze_demo = true
 		_show_screen("settings")
+		return
+	if request.get("scenario") in ["demo_dodge", "demo_row", "demo_pickup"] and screen == "menu":
+		demo = preload("res://game/qa_demo_boards.gd").prepare(str(request.scenario))
+		world.model = demo.model
+		qa_freeze_demo = false
 		return
 	if str(request.get("scenario", "")) == "demo_crush" and _background_demo():
 		demo.model.state = "playing"

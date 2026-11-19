@@ -68,6 +68,7 @@ func run() -> void:
 	storage()
 	broken_crate_history()
 	random_sessions()
+	demo_scenarios()
 	demo_games()
 	await app_flow()
 	await vibration_toggle()
@@ -1522,6 +1523,24 @@ func broken_crate_history() -> void:
 		and stats.total_broken_crates == 3 and stats.total_crates == 80 and stats.total_lines == 8,
 		"Count measured breaks separately and preserve matches without a valid break count")
 	DirAccess.remove_absolute(path)
+
+
+func demo_scenarios() -> void:
+	const Boards = preload("res://game/qa_demo_boards.gd")
+	var dodge := Boards.prepare("demo_dodge")
+	dodge.advance(0.32)
+	check(dodge.model.player.x > 1 and dodge.model.helmet_charges == 0, "Escape toward open space before taking a nearby item")
+	dodge.advance(0.65)
+	check(dodge.losses == 0 and dodge.model.crates.size() == 1 and float(dodge.model.crates[0].vy) == 0, "The dodge must survive the actual landing")
+	var row := Boards.prepare("demo_row")
+	row.advance(1.5)
+	check(row.lines == 1 and row.model.cleared_crates == row.tuning.columns, "Push a surplus crate into the last gap and clear a real row")
+	var pickup := Boards.prepare("demo_pickup")
+	pickup.advance(1.0)
+	check(pickup.model.helmet_charges == Simulation.HELMET_MAX_CHARGES and pickup.model.ground_items.is_empty(), "Approach and collect a useful helmet through normal pickup")
+	pickup.model.add_ground_item("helmet", pickup.model.player.x + 0.3, pickup.tuning.rows, 1)
+	pickup.advance(0.3)
+	check(pickup.model.helmet_charges == Simulation.HELMET_MAX_CHARGES, "Keep the better equipped item")
 
 
 func demo_games() -> void:
