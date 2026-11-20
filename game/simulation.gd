@@ -898,7 +898,14 @@ func player_bounds() -> Rect2:
 
 
 func push_bounds() -> Rect2:
-	return player_bounds()
+	var bounds := player_bounds()
+	if not grounded:
+		# Jacket and belt occupy y=9..17 relative to the collider in the
+		# 24-pixel field artwork. Keep both side faces reachable at any speed.
+		var height := bounds.size.y
+		bounds.position.y += height * 0.43
+		bounds.size.y = height * 0.37
+	return bounds
 
 
 func _walk_player(axis: float, speed_held: bool) -> void:
@@ -1191,6 +1198,10 @@ func _advance_strong_push() -> float:
 
 
 func _try_push(crate: Dictionary, direction: int) -> bool:
+	if not grounded:
+		var contact := push_bounds()
+		if not _overlap(contact.position.y, contact.size.y, float(crate.y), 1.0):
+			return false
 	if is_strong_pushing():
 		if crate.id == _strong_pair[0].id and direction == _strong_direction:
 			_push_contact_id = int(crate.id)

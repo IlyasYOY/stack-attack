@@ -45,6 +45,7 @@ func advance(game: StackSimulation, duration: float, axis: float = 0.0) -> void:
 func run() -> void:
 	movement_and_jump()
 	pushing_and_danger()
+	air_push_at_wall()
 	crate_variant_assignment()
 	crate_slide_signal()
 	diagonal_crate_collisions()
@@ -141,6 +142,30 @@ func pushing_and_danger() -> void:
 	blocked.add_crate(5, 10)
 	advance(blocked, .4, 1)
 	check(absf(float(lower.x) - 4) < .001, "One push must not move an entire horizontal chain")
+
+
+func air_push_at_wall() -> void:
+	for direction: int in [-1, 1]:
+		for frame_ticks: int in [1, 2]:
+			for distance_from_wall: float in [0.0, 0.30]:
+				var game := empty()
+				var crate_column := 1 if direction > 0 else game.tuning.columns - 2
+				var crate := game.add_crate(crate_column, game.tuning.rows - 1)
+				game.player.x = distance_from_wall if direction > 0 else (
+					game.tuning.columns - game.tuning.player_width - distance_from_wall)
+				var tick_delta := frame_ticks * Simulation.STEP
+				# Jump first, then hold toward the box from tick 3 through 42.
+				for tick in range(0, 42, frame_ticks):
+					game.advance(tick_delta, direction if tick >= 2 else 0, tick == 0)
+				var glance := distance_from_wall == 0.0
+				check(not game.grounded and crate.target_x == (crate_column if glance else crate_column + direction),
+					"A corner graze must leave the crate still, a body hit must push while airborne")
+				advance(game, 0.8)
+				check(crate.x == crate.target_x and game.grounded,
+					"Air contact must finish on the expected grid column and the player must land")
+				if glance:
+					check(is_equal_approx(game.player.y + game.tuning.player_height, float(crate.y)),
+						"The wall jump must land on top of the stationary crate")
 
 
 func crate_variant_assignment() -> void:
