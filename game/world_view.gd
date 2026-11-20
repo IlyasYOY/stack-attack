@@ -1229,9 +1229,9 @@ func _draw_push_bounds() -> void:
 	var contact := model.push_bounds()
 	if contact != body:
 		draw_rect(Rect2(body.position * PIXELS_PER_CELL, body.size * PIXELS_PER_CELL),
-			Color("35e9fc"), false, 0.5)
+			Color("35e9fc"), false, -1.0)
 	draw_rect(Rect2(contact.position * PIXELS_PER_CELL, contact.size * PIXELS_PER_CELL),
-		Color("ff49ba"), false, 0.6)
+		Color("ff49ba"), false, -1.0)
 
 
 func _draw_warehouse() -> void:
