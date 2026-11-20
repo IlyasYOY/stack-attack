@@ -505,14 +505,17 @@ func equipped_in_slot(kind: String) -> String:
 	return ""
 
 
+func can_pick_up_item(item: Dictionary) -> bool:
+	# The pending steel step owns the equipped hands until it settles.
+	return not item.is_empty() and (item.kind not in SLOTS.hands or
+		not crates.any(func(crate: Dictionary) -> bool: return crate.has("metal_push")))
+
+
 func pick_up_nearest() -> String:
 	var item := nearest_item()
-	if item.is_empty():
+	if not can_pick_up_item(item):
 		return ""
 	var kind := str(item.kind)
-	# The pending steel step owns the equipped hands until it settles.
-	if kind in SLOTS.hands and crates.any(func(crate: Dictionary) -> bool: return crate.has("metal_push")):
-		return ""
 	var charges := int(item.charges)
 	var progress := float(item.progress)
 	var old := equipped_in_slot(kind)

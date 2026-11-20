@@ -16,6 +16,7 @@ var controls := {}
 var pressed_actions: Array[String] = []
 var line_caption := ""
 var caption_life := 0.0
+var keyboard_hints := false
 var equipment_body := Rect2()
 var equipment_strip := Rect2()
 var crush_progress := -1.0
@@ -83,6 +84,7 @@ const HUD_CLEARANCE_Y := 60.0
 const WAREHOUSE_FRAME := 13.0
 const BADGE_WIDTH := 46.0
 const BADGE_HEIGHT := 26.0
+const KEYCAP_HEIGHT := 14.0
 const STRIP_HEIGHT := 76.0
 const SWAP_SIZE := 48.0
 const GRAB_ICONS: Texture2D = preload("res://art/glove_controls.png")
@@ -204,7 +206,9 @@ static func ground_icon_region(kind: String) -> Rect2:
 
 func slot_height(kind: String) -> float:
 	var center := equipment_body.position.y + equipment_body.size.y * 0.54
-	var spacing := maxf(BADGE_HEIGHT + 4, equipment_body.size.y * 0.38)
+	var hint_height := KEYCAP_HEIGHT if keyboard_hints else 0.0
+	center -= hint_height * 0.5
+	var spacing := maxf(BADGE_HEIGHT + hint_height + 4, equipment_body.size.y * 0.38)
 	if kind in StackSimulation.SLOTS.head:
 		return roundf(center - spacing)
 	if kind in StackSimulation.SLOTS.feet:
@@ -219,7 +223,8 @@ func strip_slot(kind: String) -> Rect2:
 	elif kind in StackSimulation.SLOTS.feet:
 		index = 2
 	var width := (equipment_body.position.x - equipment_strip.position.x - 12) / 3.0
-	return Rect2(equipment_strip.position + Vector2(4 + index * width, 4), Vector2(width, SWAP_SIZE))
+	return Rect2(equipment_strip.position + Vector2(4 + index * width, 0 if keyboard_hints else 4),
+		Vector2(width, SWAP_SIZE))
 
 
 func badge_position(kind: String, plate_size: Vector2) -> Vector2:
@@ -230,7 +235,7 @@ func badge_position(kind: String, plate_size: Vector2) -> Vector2:
 
 
 func equipment_bottom() -> float:
-	return maxf(equipment_body.end.y, slot_height("boots") + BADGE_HEIGHT * 0.5)
+	return maxf(equipment_body.end.y, slot_height("boots") + BADGE_HEIGHT * 0.5 + (KEYCAP_HEIGHT if keyboard_hints else 0.0))
 
 
 func animate(delta: float) -> void:
