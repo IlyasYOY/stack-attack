@@ -893,8 +893,17 @@ func _move_player_vertically(jump_held: bool) -> void:
 	player.y = maxf(PLAYER_TOP, proposed_y)
 
 
+func player_bounds() -> Rect2:
+	return Rect2(player, Vector2(tuning.player_width, tuning.player_height))
+
+
+func push_bounds() -> Rect2:
+	return player_bounds()
+
+
 func _walk_player(axis: float, speed_held: bool) -> void:
-	var width := tuning.player_width
+	var body := player_bounds()
+	var width := body.size.x
 	var old_x := player.x
 	if not is_zero_approx(axis):
 		facing = 1 if axis > 0.0 else -1
@@ -905,7 +914,7 @@ func _walk_player(axis: float, speed_held: bool) -> void:
 			float(speed_boots_charges) - speed_boots_progress)
 	var proposed_x := clampf(player.x + step, 0.0, tuning.columns - width)
 	for crate in crates:
-		if not _overlap(player.y, tuning.player_height, float(crate.y), 1.0):
+		if not _overlap(body.position.y, body.size.y, float(crate.y), 1.0):
 			continue
 		if not _overlap(proposed_x, width, float(crate.x), 1.0):
 			continue

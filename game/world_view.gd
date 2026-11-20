@@ -1223,6 +1223,17 @@ func _draw_field_objects() -> void:
 	if phase == "collapse":
 		_draw_clear_dust(width, floor_y, collapse_elapsed)
 
+# Called only by the dedicated Web review export, in the field's pixel transform.
+func _draw_push_bounds() -> void:
+	var body := model.player_bounds()
+	var contact := model.push_bounds()
+	if contact != body:
+		draw_rect(Rect2(body.position * PIXELS_PER_CELL, body.size * PIXELS_PER_CELL),
+			Color("35e9fc"), false, 0.5)
+	draw_rect(Rect2(contact.position * PIXELS_PER_CELL, contact.size * PIXELS_PER_CELL),
+		Color("ff49ba"), false, 0.6)
+
+
 func _draw_warehouse() -> void:
 	var outer := field.grow(WAREHOUSE_FRAME)
 	draw_rect(outer.grow(3),Color("0a1e28"))
@@ -1248,6 +1259,8 @@ func _draw_warehouse() -> void:
 	draw_set_transform(field.position, 0.0, Vector2.ONE * cell / PIXELS_PER_CELL)
 	_draw_cranes()
 	_draw_field_objects()
+	if OS.is_debug_build() and OS.has_feature("push_review") and active:
+		_draw_push_bounds()
 	draw_set_transform(Vector2.ZERO)
 	var floor_y := field.end.y
 	draw_rect(Rect2(field.position.x-8,floor_y,field.size.x+16,8),Color("bc8549"))
