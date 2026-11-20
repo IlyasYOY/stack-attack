@@ -20,6 +20,12 @@ const NAMES := {"boots": "Ботинки-ракеты", "helmet": "Каска", 
 	"lamp_helmet": "Каска с фонарём", "spring_boots": "Пружинные ботинки",
 	"watch_cap": "Колпак часовщика", "hunting_boots": "Охотничьи сапоги",
 	"engineer_goggles": "Очки инженера", "slingshot": "Рогатка"}
+const ACTION_KEYS := {
+	"lamp_helmet": "F", "engineer_goggles": "F", "watch_cap": "F",
+	"gloves": "G", "mallet": "G", "slingshot": "G",
+	"speed_boots": "Shift", "boots": "Space", "spring_boots": "Space",
+}
+const KEY_FONT_SIZE := 10
 const CAPACITIES := StackSimulation.CAPACITIES
 const CREAM := Color("f4e3ba")
 const GOLD := Color("e7b46b")
@@ -93,6 +99,35 @@ static func _equipment_slot(text: Callable, slots: GridContainer, title: String,
 	label.accessibility_name = "%s · %s" % [NAMES[item], label.text]
 
 
+# Draw outside the badge's content box so the counter, meter and timer keep their space.
+static func _attach_keycap(control: Control, pickup := false) -> void:
+	var face := _style(Color("29444a"), GOLD, 0)
+	face.set_corner_radius_all(2)
+	face.border_width_bottom = 2
+	control.draw.connect(func():
+		var key: String = control.get_meta("action_key", "")
+		if key.is_empty():
+			return
+		var rect := keycap_rect(control, key, pickup)
+		control.draw_style_box(face, rect)
+		control.draw_string(StackWorldView.FONT, rect.position + Vector2(0, 10), key,
+			HORIZONTAL_ALIGNMENT_CENTER, rect.size.x, KEY_FONT_SIZE, CREAM))
+
+
+static func keycap_rect(control: Control, key: String, pickup: bool) -> Rect2:
+	var width := StackWorldView.FONT.get_string_size(key, HORIZONTAL_ALIGNMENT_LEFT, -1, KEY_FONT_SIZE).x + 6
+	var corner := control.size.round()
+	if pickup:
+		corner.y -= StackWorldView.KEYCAP_HEIGHT
+	return Rect2(corner - Vector2(width, 0), Vector2(width, StackWorldView.KEYCAP_HEIGHT))
+
+
+static func set_action_key(control: Control, key: String) -> void:
+	if control.get_meta("action_key", "") != key:
+		control.set_meta("action_key", key)
+		control.queue_redraw()
+
+
 static func build_hud(parent: Control, item: String) -> Label:
 	var plate := PanelContainer.new()
 	plate.name = item + "_hud"
@@ -103,14 +138,13 @@ static func build_hud(parent: Control, item: String) -> Label:
 
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 2)
+	row.add_theme_constant_override("separation", 1 if item in ["watch_cap", "spring_boots"] else 2)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	plate.add_child(row)
 	_picture(row, ICONS[item], Vector2.ONE * (15 if item in ["spring_boots", "watch_cap"] else 20))
 	if item == "watch_cap":
 		plate.draw.connect(_draw_watch_reserve.bind(plate))
 	if item == "spring_boots":
-		row.add_theme_constant_override("separation", 1)
 		var meter := Control.new()
 		meter.name = "spring_charge_meter"
 		meter.custom_minimum_size = Vector2(5, 20)
@@ -121,9 +155,11 @@ static func build_hud(parent: Control, item: String) -> Label:
 	var count := Label.new()
 	count.name = item + "_charges"
 	count.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	count.add_theme_font_size_override("font_size", 14 if item == "watch_cap" else 16)
+	count.add_theme_font_size_override("font_size", 13 if item == "watch_cap" else 16)
 	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(count)
+	if ACTION_KEYS.has(item):
+		_attach_keycap(plate)
 	plate.hide()
 	return count
 
@@ -141,6 +177,7 @@ static func update_hud(badges: Dictionary, world: StackWorldView, spring_peak: i
 		plate.visible = charge_count >= 0
 		if plate.visible:
 			plate.position = world.badge_position(item, plate.size)
+			set_action_key(plate, ACTION_KEYS.get(item, "") if world.keyboard_hints and charge_count > 0 else "")
 			var remaining := str(charge_count)
 			if item == "watch_cap":
 				remaining = _watch_time_text(model.watch_cap_time)
@@ -170,6 +207,7 @@ static func build_swap(parent: Control, action: Callable) -> Button:
 	parent.add_child(button)
 	button.pressed.connect(action)
 	button.draw.connect(_draw_swap.bind(button))
+	_attach_keycap(button, true)
 	return button
 
 

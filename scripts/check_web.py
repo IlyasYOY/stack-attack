@@ -30,6 +30,7 @@ group.add_argument('--statistics-only', action='store_true', help='Check Statist
 group.add_argument('--cranes-only', action='store_true', help='Check crane passes and capture both playing layouts')
 group.add_argument('--crates-only', action='store_true', help='Check ten rendered wooden crate appearances and their lifetime')
 group.add_argument('--animations-only', action='store_true', help='Check row clear and crush transitions and capture their rendered phases')
+group.add_argument('--key-hints-only', action='store_true', help='Check equipment keycaps and input changes')
 group.add_argument('--keyboard-only', action='store_true', help='Check jump keys and menu keyboard isolation')
 group.add_argument('--loot-only', action='store_true', help='Record deterministic ground loot, impacts and swaps')
 group.add_argument('--bonuses-only', action='store_true', help='Check expanded equipment in combination')
@@ -3373,6 +3374,117 @@ def check_watch_motion(before, during, after, frames):
     return {'slowed_cells': round(slow, 4), 'normal_cells': round(normal, 4), 'seconds_spent': round(spent, 4)}
 
 
+def check_hint_layout(page, expected, name):
+    snapshot = state(page)
+    hints = snapshot['key_hints']
+    assert {item: hint['key'] for item, hint in hints.items()} == expected, hints
+    width, height = snapshot['viewport']
+    image = Image.open(io.BytesIO(page.screenshot(path=str(SHOTS / name)))).convert('RGB')
+    obstacles = [snapshot['field'], snapshot['equipment_body'], snapshot['buttons']['pause'],
+                 *snapshot['controls'].values()]
+    for item, hint in hints.items():
+        x, y, w, h = hint['rect']
+        ox, oy, ow, oh = hint['owner']
+        assert x + w == ox + ow and y == oy + oh - (h if item == 'pickup' else 0)
+        check_boots_rect(snapshot, hint['rect'])
+        for ax, ay, aw, ah in [hint['owner'], hint['rect']]:
+            for bx, by, bw, bh in obstacles:
+                assert ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay, (
+                    name, item, (ax, ay, aw, ah), (bx, by, bw, bh))
+        obstacles.extend([hint['owner'], hint['rect']])
+        box = [round(x * image.width / width), round(y * image.height / height),
+               round((x+w) * image.width / width), round((y+h) * image.height / height)]
+        colors = {color for _, color in image.crop(box).getcolors()}
+        # Rendered face, gold rim and cream lettering must all survive canvas scaling.
+        assert {(41, 68, 74), (231, 180, 107), (244, 227, 186)} <= colors, (name, item, box)
+
+
+def key_hint_checks(browser):
+    context = browser.new_context(viewport={'width': 1280, 'height': 720})
+    page = context.new_page()
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    page.on('console', lambda message: errors.append(message.text) if message.type == 'error' else None)
+    page.goto(URL)
+    wait_screen(page, 'menu')
+    button(page, 'play')
+    wait_screen(page, 'playing')
+    release_board(page, 'input')
+    keys = {'watch_cap': 'F', 'slingshot': 'G', 'speed_boots': 'Shift', 'pickup': 'E'}
+    crates = [[0, 10, 0], [0, 9, 0], [1, 10, 0], [6, 10, 0], [7, 10, 0], [7, 9, 0]]
+    ground = dict(items=[['lamp_helmet', 4.7, 11, 1]], crates=crates, animation_hold=True)
+    views = []
+    for dimensions in [(1280, 720), (502, 360), (499, 360), (360, 640), (320, 568)]:
+        resize_boots_view(page, dimensions)
+        if dimensions == (360, 640):
+            pick_ground(page, 'spring_boots', touch=False)
+            del keys['speed_boots']
+            keys['spring_boots'] = 'Space'
+        snapshot = animation_request(page, 'ground_board', **ground)
+        views.append(snapshot['viewport'])
+        check_hint_layout(page, keys, f'key-hints-{dimensions[0]}x{dimensions[1]}.png')
+        check_touch_control_layout(snapshot)
+    assert views[1][0] >= 500 > views[2][0], views
+
+    page.keyboard.press('KeyE')
+    swapped = animation_step(page, 1)
+    assert swapped['nearest_item']['kind'] == 'watch_cap' and swapped['key_hints']['pickup']['key'] == 'E'
+    page.keyboard.down('ArrowLeft')
+    away = animation_step(page, 80)
+    page.keyboard.up('ArrowLeft')
+    assert not away['nearest_item'] and 'pickup' not in away['key_hints']
+    set_bonus_board(page, {'head': 'lamp_helmet', 'hands': 'slingshot', 'feet': 'spring_boots'},
+                    charges={'lamp_helmet': 1}, cranes_enabled=True,
+                    cranes=[{'x': 0, 'waiting': False, 'loaded': True, 'release_column': 8}])
+    page.keyboard.press('KeyF')
+    spent = animation_step(page, 1)
+    assert spent['lamp_active_time'] > 0 and spent['lamp_helmet_equipped']
+    assert spent['lamp_helmet_hud']['text'] == '0' and 'lamp_helmet' not in spent['key_hints']
+    page.keyboard.press('KeyG')
+    assert animation_step(page, 1)['release']['slingshot_charges'] == 4
+    page.keyboard.down('Space')
+    assert animation_step(page, 42)['spring_charge_stages'] > 0
+    page.keyboard.up('Space')
+    assert not animation_step(page, 6)['grounded']
+
+    for loadout, expected in [
+        ({'head': 'helmet', 'hands': 'strong_arms', 'feet': 'hunting_boots'}, {}),
+        ({'head': 'engineer_goggles', 'hands': 'mallet', 'feet': 'boots'},
+         {'engineer_goggles': 'F', 'mallet': 'G', 'boots': 'Space'}),
+        ({'hands': 'gloves', 'feet': 'speed_boots'}, {'gloves': 'G', 'speed_boots': 'Shift'}),
+    ]:
+        snapshot = set_bonus_board(page, loadout)
+        assert {i: h['key'] for i, h in snapshot['key_hints'].items()} == expected
+    page.keyboard.down('ShiftLeft')
+    assert not animation_step(page, 6)['speed_boost_active']
+    page.keyboard.down('ArrowRight')
+    assert animation_step(page, 6)['speed_boost_active']
+    page.keyboard.up('ShiftLeft')
+    page.keyboard.up('ArrowRight')
+    set_bonus_board(page, {})
+    pick_ground(page, 'boots', touch=False)
+    assert 'pickup' not in state(page)['key_hints']
+    assert not errors, errors
+    context.close()
+
+    context, page = open_boots_game(browser, (320, 568), errors)
+    set_bonus_board(page, {'head': 'lamp_helmet', 'hands': 'gloves', 'feet': 'speed_boots'})
+    before = animation_request(page, 'ground_board', **ground)
+    assert 'pickup' in before['buttons'] and not before['key_hints']
+    page.keyboard.press('KeyA')
+    keyboard = animation_step(page, 0)
+    assert set(keyboard['key_hints']) == {'lamp_helmet', 'gloves', 'speed_boots', 'pickup'}
+    with control_touches(page) as touch:
+        touch('touchStart', 'right', 'speed')
+        after = animation_step(page, 12)
+        assert after['speed_boost_active'] and not after['key_hints']
+    for field in ('field', 'equipment_body', 'controls'):
+        assert before[field] == keyboard[field] == after[field]
+    assert not errors, errors
+    context.close()
+    return views
+
+
 def release_keyboard(page):
     frames = 36
     before = release_board(page, 'input')
@@ -3626,6 +3738,11 @@ try:
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         full_check = not any(vars(args).values())
+        if full_check or args.key_hints_only:
+            print('KEY_HINTS_PASS', key_hint_checks(browser), flush=True)
+        if args.key_hints_only:
+            browser.close()
+            raise SystemExit(0)
         if args.release_video:
             clips = release_videos(browser)
             print('RELEASE_VIDEO', json.dumps(clips), flush=True)

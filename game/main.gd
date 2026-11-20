@@ -23,6 +23,7 @@ var buttons := {}
 var sliders := {}
 var panel: PanelContainer
 var score_label: Label
+var keyboard_input := false
 var pickup_button: Button
 var found_label: Label
 var gear_counts := {}
@@ -74,6 +75,7 @@ const GOLD := Color("d7a45a")
 
 
 func _ready() -> void:
+	keyboard_input = not DisplayServer.is_touchscreen_available()
 	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	if OS.has_feature("web") and OS.is_debug_build():
 		qa_enabled = bool(JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('qa') === '1'"))
@@ -195,6 +197,7 @@ func _show_screen(value: String) -> void:
 	theme = _make_theme()
 	_release_controls()
 	_clear_ui()
+	world.keyboard_hints = keyboard_input and screen == "playing"
 	world.active = screen in ["playing", "paused"]
 	world.model = demo.model if _background_demo() else model
 	world._layout()
@@ -484,6 +487,8 @@ func _update_pickup() -> void:
 	if item.is_empty():
 		return
 	var kind := str(item.kind)
+	var show_key := world.keyboard_hints and model.can_pick_up_item(item)
+	EQUIPMENT_VIEW.set_action_key(pickup_button, "E" if show_key else "")
 	var body := world.equipment_body
 	if world.equipment_strip.has_area():
 		var slot := world.strip_slot(kind)
@@ -503,7 +508,7 @@ func _update_pickup() -> void:
 		found_label.text = EQUIPMENT_VIEW.NAMES[kind]
 	var equipped := model.equipped_in_slot(kind)
 	var action := "Обменять" if not equipped.is_empty() else "Подобрать"
-	pickup_button.tooltip_text = "%s (E) · %s · %d" % [action, found_label.text, item.charges]
+	pickup_button.tooltip_text = "%s%s · %s · %d" % [action, " (E)" if show_key else "", found_label.text, item.charges]
 	pickup_button.accessibility_name = pickup_button.tooltip_text
 
 
@@ -686,7 +691,26 @@ func _menu_input(event: InputEvent) -> bool:
 	return waking
 
 
+func _track_hint_input(event: InputEvent) -> void:
+	if event.device == InputEvent.DEVICE_ID_EMULATION:
+		return
+	var keyboard := keyboard_input
+	if event is InputEventKey and event.pressed:
+		keyboard = true
+	elif event is InputEventScreenTouch and event.pressed:
+		keyboard = false
+	if keyboard == keyboard_input:
+		return
+	keyboard_input = keyboard
+	if screen == "playing":
+		world.keyboard_hints = keyboard
+		world.queue_redraw()
+		EQUIPMENT_VIEW.update_hud(gear_counts, world, spring_meter_peak if spring_meter_flash > 0.0 else 0, spring_meter_limit)
+		_update_pickup()
+
+
 func _input(event: InputEvent) -> void:
+	_track_hint_input(event)
 	if sound != null and ((event is InputEventMouseButton and event.pressed) or
 		(event is InputEventScreenTouch and event.pressed) or (event is InputEventKey and event.pressed)):
 		sound.unlock()
@@ -1127,6 +1151,12 @@ func _publish_qa() -> void:
 		cargo_rects.append([cargo.position.x, cargo.position.y, cargo.size.x, cargo.size.y])
 		var trolley := world.crane_trolley_center(index)
 		trolleys.append([trolley.x, trolley.y])
+	var hints := {}
+	for item in gear_counts:
+		var plate: Control = gear_counts[item].get_parent().get_parent()
+		_qa_keycap(hints, item, plate)
+	if screen == "playing":
+		_qa_keycap(hints, "pickup", pickup_button)
 	var rail := world.crane_rail
 	var body := world.equipment_body
 	var status := {"ready": true, "screen": screen, "score": model.score,
@@ -1185,7 +1215,7 @@ func _publish_qa() -> void:
 		"crane_cargo_rects": cargo_rects,
 		"crane_settings": {"speed": TUNING.crane_speed, "wait_min": TUNING.crane_wait_min,
 			"wait_max": TUNING.crane_wait_max, "margin": StackSimulation.CRANE_EDGE_MARGIN},
-		"buttons": rects, "sliders": slider_rects, "controls": input_rects,
+		"key_hints": hints, "buttons": rects, "sliders": slider_rects, "controls": input_rects,
 		"missing_menu_glyphs": _missing_menu_glyphs(),
 		"panel": _panel_snapshot(),
 		"button_modes": button_modes,
@@ -1204,6 +1234,17 @@ func _publish_qa() -> void:
 			"music_muted": AudioServer.is_bus_mute(AudioServer.get_bus_index("Music")),
 			"effects_muted": AudioServer.is_bus_mute(AudioServer.get_bus_index("Effects"))}}
 	JavaScriptBridge.eval("window.stackAttackState = " + JSON.stringify(status))
+
+
+func _qa_keycap(hints: Dictionary, id: String, control: Control) -> void:
+	var key: String = control.get_meta("action_key", "")
+	if key.is_empty() or not control.is_visible_in_tree():
+		return
+	var owner_rect := control.get_global_rect()
+	var rect := EQUIPMENT_VIEW.keycap_rect(control, key, id == "pickup")
+	rect.position += owner_rect.position
+	hints[id] = {"key": key, "rect": [rect.position.x, rect.position.y, rect.size.x, rect.size.y],
+		"owner": [owner_rect.position.x, owner_rect.position.y, owner_rect.size.x, owner_rect.size.y]}
 
 
 func _gear_hud_snapshot(count: Label) -> Dictionary:

@@ -183,11 +183,13 @@ static func _metal(check: Callable) -> void:
 	game.crates.erase(stop)
 	game.advance(STEP, 1)
 	var offered := game.add_ground_item("slingshot", game.player.x + 0.28, 11)
+	check.call(not game.can_pick_up_item(game.nearest_item()), "A locked hand exchange has no pickup hint")
 	check.call(game.pick_up_nearest().is_empty() and offered.kind == "slingshot",
 		"A pending steel step keeps ownership of the hands")
 	game.advance(0.34, 0)
 	check.call(is_equal_approx(crate.x, 4.0) and game.strong_arms_charges == 1,
 		"One completed metal move spends one charge")
+	check.call(game.can_pick_up_item(game.nearest_item()), "The pickup hint returns when hands are available")
 	check.call(game.pick_up_nearest() == "slingshot" and offered.kind == "strong_arms" and offered.charges == 1,
 		"Hands can be exchanged as soon as the steel step settles")
 	game.ground_items.clear()
