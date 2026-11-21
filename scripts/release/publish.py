@@ -25,6 +25,26 @@ def listing(endpoint):
     return [json.loads(line) for line in output.splitlines()]
 
 
+def select_version(requested, sha, tags, releases):
+    stable = {t["name"][1:]: t["commit"]["sha"] for t in tags
+              if t["name"].startswith("v") and STABLE.fullmatch(t["name"][1:])}
+    latest = max(stable, key=parts, default=None)
+    assigned = {v for v, source in stable.items() if source == sha}
+    assigned.update(r["tag_name"][1:] for r in releases if r["target_commitish"] == sha
+                    and r["tag_name"].startswith("v") and STABLE.fullmatch(r["tag_name"][1:]))
+    if len(assigned) > 1 or (requested and assigned and requested not in assigned):
+        raise ValueError(f"Source already has a different stable version: {sorted(assigned)}")
+    if requested or assigned:
+        version = requested or next(iter(assigned))
+    elif latest is not None:
+        major, minor, patch = parts(latest)
+        version = f"{major}.{minor}.{patch + 1}"
+    else:
+        raise ValueError("Choose the first stable version using the manual workflow")
+    version_code(version)
+    return version, stable.get(latest)
+
+
 def state(version, sha, tags, releases):
     """Only our draft for this exact version and source may be resumed."""
     tag = "v" + version
@@ -68,14 +88,20 @@ def digest(path):
 def release(mode, version, sha, directory=None):
     if mode not in ("plan", "publish") or not re.fullmatch("[0-9a-f]{40}", sha):
         raise ValueError("Invalid operation or source SHA")
-    code = version_code(version)
     repo = os.environ["GITHUB_REPOSITORY"]
     base = f"repos/{repo}"
-    tag = "v" + version
     tags = listing(base + "/tags?per_page=100")
-    status, record = state(version, sha, tags, listing(base + "/releases?per_page=100"))
+    releases = listing(base + "/releases?per_page=100")
+    version, latest_source = select_version(version, sha, tags, releases)
+    tag = "v" + version
+    status, record = state(version, sha, tags, releases)
+    if status != "published" and latest_source and latest_source != sha:
+        relation = json.loads(api(f"{base}/compare/{latest_source}...{sha}", "--jq", "{status}"))
+        if relation["status"] != "ahead":
+            raise ValueError("The source must descend from the highest stable tag")
     if mode == "plan":
         with Path(os.environ["GITHUB_OUTPUT"]).open("a") as out:
+            print(f"version={version}", file=out)
             print("needed=" + ("false" if status == "published" else "true"), file=out)
     if status == "published" or mode == "plan":
         print(f"{tag} @ {sha}: {status}")
@@ -86,7 +112,7 @@ def release(mode, version, sha, directory=None):
     sums = folder / "SHA256SUMS.txt"
     sums.write_text("".join(f"{digest(p)}  {p.name}\n" for p in (apk, web)))
     expected = {p.name: "sha256:" + digest(p) for p in (apk, web, sums)}
-    body = (f"Stack Attack {version} · Android versionCode {code}\n\n"
+    body = (f"Stack Attack {version} · Android versionCode {version_code(version)}\n\n"
             f"Source commit: `{sha}`\n\nAPK certificate SHA-256: `{os.environ['APK_SIGNING_CERT_SHA256']}`\n\n"
             f"[Live demo (independently deployed)]({DEMO})\n\n"
             f"SHA-256\n\n```text\n{sums.read_text()}```\n\n"

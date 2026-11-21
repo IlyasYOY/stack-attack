@@ -1,6 +1,7 @@
 name: Publish Stack Attack
 run-name: Release ${{ inputs.version }} from ${{ github.sha }}
 on:
+  workflow_call:
   workflow_dispatch:
     inputs:
       version:
@@ -11,9 +12,8 @@ on:
 permissions: {}
 concurrency:
   group: stack-attack-stable-release
-  cancel-in-progress: false
+  queue: max
 env:
-  VERSION: ${{ inputs.version }}
   RELEASE_MAINTAINERS: ${{ vars.RELEASE_MAINTAINERS || '[]' }}
 
 jobs:
@@ -23,6 +23,7 @@ jobs:
     permissions:
       contents: read
     outputs:
+      version: ${{ steps.plan.outputs.version }}
       needed: ${{ steps.plan.outputs.needed }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -32,10 +33,13 @@ jobs:
       - run: bash scripts/release/authorize.sh
       - id: plan
         env:
+          VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/release/publish.py plan "$VERSION" "$GITHUB_SHA"
 
   build:
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
     needs: plan
     if: needs.plan.outputs.needed == 'true'
     runs-on: ubuntu-24.04
@@ -89,7 +93,9 @@ jobs:
           retention-days: 7
 
   sign:
-    needs: build
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    needs: [plan, build]
     runs-on: ubuntu-24.04
     environment:
       name: android-release
@@ -141,11 +147,12 @@ jobs:
           retention-days: 7
 
   publish:
-    needs: [build, sign]
+    needs: [plan, build, sign]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
+      VERSION: ${{ needs.plan.outputs.version }}
       APK_SIGNING_CERT_SHA256: ${{ needs.sign.outputs.certificate }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

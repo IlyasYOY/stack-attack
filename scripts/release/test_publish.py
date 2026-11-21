@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from publish import release, state
+from publish import release, select_version, state
 from version import version_code
 
 SHA = "a" * 40
@@ -60,6 +60,23 @@ class ReleaseTests(unittest.TestCase):
         for version in ("01.0.0", "v1.2.3", "1.0.0-rc.1", "0.1000.0", "2100.0.0", "1.0.0\n"):
             with self.subTest(version=version), self.assertRaises(ValueError):
                 version_code(version)
+
+    def test_auto_version(self):
+        tags = [dict(name=name, commit={"sha": "b" * 40}) for name in
+                ("v1.1.9", "v1.1.10", "v1.1.11-rc.1", "v02.0.0", "other")]
+        self.assertEqual(select_version("", SHA, tags, []), ("1.1.11", "b" * 40))
+        self.assertEqual(select_version("2.0.0", SHA, tags, [])[0], "2.0.0")
+        with self.assertRaises(ValueError):
+            select_version("", SHA, [], [])
+        with self.assertRaises(ValueError):
+            select_version("", SHA, [dict(name="v1.2.999", commit={"sha": "b" * 40})], [])
+
+    def test_source_reservation(self):
+        draft = dict(tag_name=TAG, target_commitish=SHA)
+        for tags, releases in (([], [draft]), ([dict(name=TAG, commit={"sha": SHA})], [])):
+            self.assertEqual(select_version("", SHA, tags, releases)[0], TAG[1:])
+            with self.assertRaisesRegex(ValueError, "already has"):
+                select_version("1.2.4", SHA, tags, releases)
 
     def test_conflicts(self):
         for tags, releases in (([{"name": TAG, "commit": {"sha": SHA}}], []),

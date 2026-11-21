@@ -168,3 +168,15 @@ jobs:
           PAGES_URL: ${{ needs.deploy-pages.outputs.page_url }}
           CHROMIUM_BIN: /usr/bin/google-chrome
         run: bash scripts/with_playwright.sh scripts/check_pages.py "$PAGES_URL" "$GITHUB_SHA"
+
+  release:
+    needs: [headless, verify-pages]
+    if: >-
+      ${{ !cancelled() && github.repository == 'IlyasYOY/stack-attack' &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.headless.result == 'success' &&
+      (needs.verify-pages.result == 'success' ||
+       (needs.headless.outputs.publish_pages != 'true' && needs.verify-pages.result == 'skipped')) }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
