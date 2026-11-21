@@ -6,6 +6,8 @@ Use the left and right arrow keys to move and Space or the up arrow to jump. Pre
 
 Each destroyed wooden crate has a 10% chance of dropping an item (any of the 12 items is equally likely) and a 3% chance of dropping a trap. Otherwise the crate is empty. Iron crates make up 10% of new loads. You can move them with Strong Arms, and they drop into the receiver when the bottom row is full. See the [game rules](docs/prototype.md) for equipment and collisions.
 
+[Publishing signed Android and Web releases](docs/releases.md)
+
 ## Run the Web version from source
 
 Run the commands from the repository root. On Linux and macOS you need the standard Godot 4.7.2 build (GDScript), Bash, Git, Make, GNU `timeout`, `curl`, `unzip`, `shasum`, Python 3.13 and `uv`. Compare the output of `godot --version` with [.godot-version](.godot-version). If your package manager offers a different version, get the editor from the [Godot 4.7.2 archive](https://godotengine.org/download/archive/4.7.2-stable/).
