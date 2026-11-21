@@ -1206,6 +1206,7 @@ func _publish_qa() -> void:
 		"columns": model.tuning.columns, "rows": model.tuning.rows, "crates": model.crates.size(), "first_crate_x": model.crates[0].x if not model.crates.is_empty() else -1,
 		"layout": "landscape" if size.x > size.y else "portrait", "viewport": [size.x, size.y],
 		"field": [world.field.position.x, world.field.position.y, world.field.size.x, world.field.size.y], "visible_crates": visible_crates,
+		"overload_phase": StackCraneOverload.Phase.keys()[model.overload.phase],
 		"cranes": cranes, "crane_releases": qa_crane_releases, "crane_preview": qa_crane_preview,
 		"crane_rail": [rail.position.x, rail.position.y, rail.size.x, rail.size.y], "crane_trolleys": trolleys,
 		"crane_cargo_rects": cargo_rects,
@@ -1413,6 +1414,9 @@ func _qa_command() -> void:
 		model.cranes[1].x = TUNING.columns + 0.75
 		model.cranes[0].release_column = 7
 		model.cranes[1].release_column = 1
+		if request.get("overload_preview", false):
+			model.elapsed = model.overload.phase_end - 2.0
+			model.player.x = 3.15
 		world.caption_life = 0.0
 		return
 	if str(request.get("scenario", "")) == "hero_pose":

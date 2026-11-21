@@ -94,6 +94,7 @@ const CREAM := Color("f4e3ba")
 const GOLD := Color("d7a45a")
 const CLEAR_GLOW_FRACTION := 0.30
 const CLEAR_LIP_TIME := 0.08
+const RAIL_BLUE := Color("80dbff")
 const EFFECT_AMBER := Color("ffc276")
 const EFFECT_DUST := Color("e9c598")
 const BOOTS_EXHAUST_TIME := 0.20
@@ -500,6 +501,7 @@ func _draw_cranes() -> void:
 		Vector2(crane_rail.size.x * PIXELS_PER_CELL / cell, 2.0 - CRANE_TOP))
 	for index in range(CRANE_TRACK_Y.size()):
 		_draw_crane_track(span, index)
+		_draw_rail_discharge(span, index)
 		var crane := model.cranes[index]
 		if not bool(crane.waiting):
 			_draw_crane(span, crane, index)
@@ -515,6 +517,28 @@ func _draw_crane_track(span: Rect2, index: int) -> void:
 	for x in range(5, int(model.tuning.columns * PIXELS_PER_CELL), 36):
 		draw_rect(Rect2(x - 1, y - 1.0, 3.0, 3.0), INK)
 		draw_rect(Rect2(x, y - 1.0, 1.0, 1.0), CRANE_LIGHT[index])
+
+func _draw_rail_discharge(span: Rect2, index: int) -> void:
+	var effect := model.overload
+	if effect.phase == StackCraneOverload.Phase.NORMAL:
+		return
+	var y: float = CRANE_TRACK_Y[index]
+	var frame := floori(model.elapsed * 9.0)
+	var active := effect.phase == StackCraneOverload.Phase.ACTIVE
+	var fading := effect.phase == StackCraneOverload.Phase.FADING
+	var energy := clampf((effect.phase_end - model.elapsed) / effect.FADE_TIME, 0, 1) if fading else 1.0
+	for spot in range(2):
+		var x := 8 + posmod(frame * 13 + index * 57 + spot * 109, int(span.size.x) - 24)
+		var tip := Vector2(x + roundf(span.position.x), y - 3 + posmod(frame + spot, 3))
+		if active:
+			# Stepped pixel arcs sit just above the rail, behind each trolley.
+			for offset in [Vector2(-4, 0), Vector2(-2, -1), Vector2(0, -3), Vector2(2, -2), Vector2(4, -1)]:
+				_draw_crane_rect(Rect2(tip + offset, Vector2(2, 2)), span, RAIL_BLUE)
+			_draw_crane_rect(Rect2(tip + Vector2(0, -3), Vector2(2, 1)), span, Color("e2f8ff"))
+		else:
+			var tint := EFFECT_AMBER if (frame + spot + index) % 2 == 0 else RAIL_BLUE
+			_draw_crane_rect(Rect2(tip, Vector2(2, 2)), span, Color(tint, energy))
+			_draw_crane_rect(Rect2(tip + Vector2(3, -2), Vector2.ONE), span, Color(tint, energy))
 
 func _draw_crane_end_stops(span: Rect2) -> void:
 	var width := minf(StackCraneRepair.END_STOP_WIDTH, -span.position.x)
@@ -561,6 +585,13 @@ func _draw_crane_crate(position: Vector2, span: Rect2, variant: int, material: S
 func _draw_crane(span: Rect2, crane: Dictionary, index: int) -> void:
 	var cargo := _crane_cargo_origin(crane)
 	var center := _crane_center(cargo, index)
+	if model.overload.phase == StackCraneOverload.Phase.ACTIVE \
+			and not model.repair.workers[index].broken and model.state == "playing":
+		var behind := -int(crane.direction)
+		for stripe in range(2):
+			var length := 9 - 4 * stripe
+			var start_x := center.x + behind * (11 + stripe * 2) - (length if behind < 0 else 0)
+			_draw_crane_rect(Rect2(start_x, center.y + stripe * 3 - 2, length, 1), span, RAIL_BLUE)
 	var jaw_y := cargo.y - 2.0
 	var body: Color = CRANE_BODY[index]
 	var light: Color = CRANE_LIGHT[index]
