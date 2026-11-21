@@ -735,8 +735,6 @@ func _input(event: InputEvent) -> void:
 				mallet_pending = true
 			if event.pressed and model.slingshot_charges > 0:
 				shot_pending = true
-			if pull_key_held:
-				jump_pending = false
 		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey and event.physical_keycode == KEY_SHIFT and crush_elapsed < 0.0:
@@ -758,7 +756,7 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.physical_keycode in [KEY_SPACE, KEY_UP] and crush_elapsed < 0.0:
 		if not event.echo:
 			if event.pressed:
-				if not jump_keys.has(event.physical_keycode) and not _pull_held() and not model.is_pulling():
+				if not jump_keys.has(event.physical_keycode):
 					jump_pending = true
 				jump_keys[event.physical_keycode] = true
 			else:
@@ -843,7 +841,6 @@ func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false
 	if just_pressed and on_pull:
 		pull_pointers[id] = true
 		pointers.erase(id)
-		jump_pending = false
 	if pull_pointers.has(id):
 		pull_pointers[id] = on_pull
 		get_viewport().set_input_as_handled()
@@ -857,8 +854,7 @@ func _pointer(id: int, position: Vector2, down: bool, just_pressed: bool = false
 		pointers[id] = action
 		if action == "jump" and not jump_pointers.has(id):
 			jump_pointers[id] = true
-			if not _pull_held() and not model.is_pulling():
-				jump_pending = true
+			jump_pending = true
 		get_viewport().set_input_as_handled()
 	elif pointers.has(id):
 		pointers.erase(id)
@@ -900,7 +896,7 @@ func _advance_game(delta: float, realtime: float = -1.0) -> bool:
 	world.pressed_actions = actions
 	world.axis = 0.0 if pulling else axis
 	model.advance(delta, axis, jump_pending, pull_held, mallet_pending,
-		{"jump_held": _jump_held() and not pulling, "lamp_pressed": lamp_pending, "speed_held": speed_held,
+		{"jump_held": _jump_held(), "lamp_pressed": lamp_pending, "speed_held": speed_held,
 			"goggles_pressed": head_action_pending, "watch_held": head_held,
 			"slingshot_pressed": shot_pending, "real_delta": delta if realtime < 0.0 else realtime})
 	jump_pending = false

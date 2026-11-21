@@ -1068,9 +1068,40 @@ func gloves_detachment() -> void:
 	ledge.add_crate(4, 10)
 	ledge.advance(.29, 0, false, true)
 	ledge.advance(.4, 0)
-	check(ledge.grabbed_crate_id == -1 and ledge.gloves_charges == 6 and float(ledge_crate.x) == 4.0
+	check(ledge.grabbed_crate_id == -1 and ledge.gloves_charges == 5 and float(ledge_crate.x) == 3.0
 		and is_equal_approx(ledge.player.y + ledge.tuning.player_height, 11.0) and crates_separate(ledge),
-		"Walking the pair off the hero's support must detach and let ordinary gravity take over")
+		"Stepping off the ledge must leave the crate on the vacated cell and spend one charge")
+
+	var unsupported := gloved()
+	var falling := unsupported.crates[0]
+	falling.y = 9.0
+	unsupported.player.y -= 1.0
+	var platform := unsupported.add_crate(3, 10)
+	unsupported.add_crate(4, 10)
+	unsupported.advance(8 * Simulation.STEP, 0, false, true)
+	unsupported.crates.erase(platform)
+	unsupported.advance(0.9, 0)
+	check(float(falling.x) == 3.0 and float(falling.y) == 10.0 and unsupported.gloves_charges == 5,
+		"The committed crate must fall normally when its destination loses support")
+
+	for direction in [1, -1]:
+		var jump := gloved(direction)
+		var crate := jump.crates[0]
+		jump.advance(5 * Simulation.STEP, 0, false, true)
+		jump.advance(Simulation.STEP, -direction, true, true)
+		check(not jump.grounded and jump.player_velocity.y < 0.0 and jump.is_pulling(),
+			"Jumping back with the gloves must lift the hero while the crate keeps moving")
+		var previous := float(crate.x)
+		var pulls := 0
+		for tick in range(90):
+			jump.advance(Simulation.STEP, 0)
+			var travel: float = (previous - float(crate.x)) * direction
+			check(travel >= -Simulation.EPS and travel <= jump.tuning.push_speed * Simulation.STEP + Simulation.EPS,
+				"Release in flight must finish the cell without reversing or snapping")
+			pulls += jump.events.filter(func(event): return event.type == "gloves_pull").size()
+			previous = float(crate.x)
+		check(pulls == 1 and jump.gloves_charges == 5 and previous == 4.0 - direction,
+			"Release in flight must finish exactly one cell in either direction")
 
 	var stacked := gloved()
 	var upper := stacked.add_crate(4, 9)

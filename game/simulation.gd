@@ -257,7 +257,9 @@ func advance(delta: float, axis: float, jump_pressed: bool = false, pull_held: b
 		_lamp_pending = _lamp_pending or bool(bonus_input.get("lamp_pressed", false))
 		_goggles_pending = _goggles_pending or bool(bonus_input.get("goggles_pressed", false))
 		_shot_pending = _shot_pending or bool(bonus_input.get("slingshot_pressed", false))
-	if _gloves_take_control(pull_held):
+	var retreat_jump := (pull_held and signf(axis) == -facing
+		and (is_pulling() or not _find_grabbable_crate().is_empty()))
+	if _gloves_take_control(pull_held) and not retreat_jump:
 		_jump_buffer = 0.0
 		_air_jump_requested = false
 		_cancel_spring_charge()
@@ -965,7 +967,8 @@ func _held_crate() -> Dictionary:
 	if id < 0:
 		return {}
 	for crate in crates:
-		if int(crate.id) == id and _can_hold(crate):
+		# A started cell keeps its target when the hero jumps or walks off the ledge.
+		if int(crate.id) == id and (is_pulling() or _can_hold(crate)):
 			return crate
 	return {}
 
@@ -1011,8 +1014,10 @@ func _pull_path_clear(crate: Dictionary, player_target: float, crate_target: flo
 	if (player_target < -EPS or player_target + tuning.player_width > tuning.columns + EPS
 			or crate_target < 0.0 or crate_target > tuning.columns - 1.0):
 		return false
-	var player_edge := minf(player.x, player_target)
-	var player_span := tuning.player_width + absf(player_target - player.x)
+	# Sweep the leading edge. The trailing foot can briefly overlap the lip
+	# when the player's forgiving support margin lets them step off a ledge.
+	var player_edge := player.x + tuning.player_width if player_target > player.x else player_target
+	var player_span := absf(player_target - player.x)
 	var crate_edge := minf(float(crate.x), crate_target)
 	var crate_span := 1.0 + absf(crate_target - float(crate.x))
 	for other in crates:
