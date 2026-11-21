@@ -17,6 +17,7 @@ run_godot export-import --headless --editor --path "$PROJECT_ROOT" --import
 if [[ "$target" == all || "$target" == web ]]; then
   mkdir -p build/web
   run_godot export-web --headless --path "$PROJECT_ROOT" --export-debug Web "$PROJECT_ROOT/build/web/index.html"
+  cp notices/GODOT_LICENSE.txt notices/GODOT_COPYRIGHT.txt build/web/
   python3 scripts/record_build.py web
 fi
 if [[ "$target" == all || "$target" == android ]]; then
