@@ -1840,6 +1840,42 @@ def save_game_video(page, name):
     (SHOTS / name).write_bytes(base64.b64decode(video))
 
 
+def check_workshop_overload_light(page, record):
+    initial = animation_request(page, 'cranes', overload_preview=True, animation_hold=True)
+    width, height = initial['viewport']
+
+    def sample(expected, save=False):
+        assert state(page)['overload_phase'] == expected
+        png = page.locator('canvas').screenshot()
+        shot = Image.open(io.BytesIO(png)).convert('RGB')
+        if save:
+            (SHOTS / 'crane-overload.png').write_bytes(png)
+        # Sample existing scenery in logical viewport coordinates.
+        def pixel(x, y):
+            return shot.getpixel((round(x * shot.width / width), round(y * shot.height / height)))
+        return pixel(width * .12, height * .32), pixel(24, height * .74 + 6), pixel(4, 4)
+
+    ordinary = sample('NORMAL')
+    animation_step(page, 180)
+    animation_step(page, 180)
+    warning = sample('WARNING')
+    for frames in (180, 180, 144):
+        animation_step(page, frames)
+    active = sample('ACTIVE', save=record)
+    for _ in range(48):
+        if animation_step(page, 24)['overload_phase'] == 'FADING':
+            break
+    early_fade = sample('FADING')
+    animation_step(page, 24)
+    late_fade = sample('FADING')
+    animation_step(page, 60)
+    assert sample('NORMAL') == ordinary, 'Scenery did not return to its original palette'
+    for index in (0, 1):  # Gear hub and window pane
+        assert ordinary[index][1] < warning[index][1] < active[index][1], (ordinary, warning, active)
+        assert ordinary[index][1] <= late_fade[index][1] < early_fade[index][1] <= active[index][1]
+    assert all(colors[2] == ordinary[2] for colors in (warning, active, early_fade, late_fade)), 'Sky flashed'
+
+
 def overload_checks(browser, record=False):
     errors = []
     context = browser.new_context(viewport={'width': 960, 'height': 600}, device_scale_factor=1)
@@ -1872,12 +1908,11 @@ def overload_checks(browser, record=False):
                 x, y, w, h = rail
                 colors = shot.crop((int(x*sx), int(y*sy), int((x+w)*sx), int((y+h)*sy))).get_flattened_data()
                 assert (128, 219, 255) in colors, 'Blue discharge missing from the rails during overload'
-                if record:
-                    (SHOTS / 'crane-overload.png').write_bytes(png)
         assert not errors, errors
         if record:
             page.wait_for_timeout(400)
             save_game_video(page, 'crane-overload.webm')
+        check_workshop_overload_light(page, record)
         print('OVERLOAD_PASS: normal, warning, active, fading and return to normal', flush=True)
     finally:
         context.close()
