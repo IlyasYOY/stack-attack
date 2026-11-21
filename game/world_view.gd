@@ -140,8 +140,9 @@ func _layout() -> void:
 		head_action = "watch_cap"
 	elif model.equipped_charges("engineer_goggles") > 0:
 		head_action = "engineer_goggles"
-	var has_hand := not hand_action.is_empty()
-	var has_head := not head_action.is_empty()
+	var item_buttons := not OS.has_feature("web") or DisplayServer.is_touchscreen_available()
+	var has_hand := item_buttons and not hand_action.is_empty()
+	var has_head := item_buttons and not head_action.is_empty()
 	var slots := 6 if has_hand and has_head and model.speed_boots_charges > 0 else 5
 	var button_width := clampf(floorf((size.x - 24.0 - (slots - 1) * 7.0) / slots), 48, 70)
 	var button_size := Vector2(button_width, 52 if landscape else 60)
@@ -154,7 +155,7 @@ func _layout() -> void:
 		"jump": Rect2(Vector2(jump_x, bottom), button_size)}
 	if has_hand:
 		controls[hand_action] = Rect2(Vector2(jump_x - stride, bottom), button_size)
-	if model.speed_boots_charges > 0:
+	if item_buttons and model.speed_boots_charges > 0:
 		var speed_x := jump_x - (2 if has_hand else 1) * stride
 		controls["speed"] = Rect2(Vector2(speed_x, bottom), button_size)
 	if has_head:

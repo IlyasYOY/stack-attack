@@ -119,7 +119,7 @@ def button(page, name, touch=False):
     page.wait_for_timeout(160)
 
 
-def check_touch_control_layout(snapshot):
+def check_touch_control_layout(snapshot, *, touch=True):
     width, height = snapshot['viewport']
     field_x, field_y, field_width, field_height = snapshot['field']
     expected = {'left', 'right', 'jump'}
@@ -136,6 +136,8 @@ def check_touch_control_layout(snapshot):
         remaining = 'watch_cap_time' if key == 'watch_cap' else key + '_charges'
         if release.get(remaining, 0) > 0:
             expected.add(key)
+    if not touch:
+        expected = {'left', 'right', 'jump'}
     assert snapshot['controls'].keys() == expected
     checked = []
     for action, rect in snapshot['controls'].items():
@@ -1728,7 +1730,7 @@ def use_air_jump(page, touch, shots, *, held=False, capture=False):
             assert_frozen_animation(airborne, rotated)
             assert rotated['player_velocity'] == airborne['player_velocity']
             assert_boots(rotated, True, 0)
-            check_touch_control_layout(rotated)
+            check_touch_control_layout(rotated, touch=touch)
             check_boots_hud(rotated, 0)
             shot = boots_shot(page, phase, shots)
             check_boots_exhaust(Image.open(ROOT / shot).convert('RGB'), rotated, True)
@@ -2487,6 +2489,48 @@ def gloves_release_checks(page, portrait, landscape, shots):
             check_partial_pull(board, animation_step(page, 1), cells=1)
 
 
+def keyboard_glove_step_checks(page):
+    width, height = state(page)['player_size']
+    for case in ('release', 'ledge', 'jump'):
+        elevated = case != 'release'
+        row = 9 if elevated else 10
+        crates = [[4, row, 0]]
+        if elevated:
+            crates.extend([[3, 10, 0], [4, 10, 0]])
+        board = set_bonus_board(page, {'hands': 'gloves'}, crates=crates, grounded=True,
+                                player=[4 - width - .14, row + 1 - height], facing=1)
+        target = next(c['id'] for c in board['visible_crates'] if c['x'] == 4 and c['y'] == row)
+
+        def crate_x(snapshot):
+            return next(c['x'] for c in snapshot['visible_crates'] if c['id'] == target)
+
+        with hold_grab(page, False):
+            mid = animation_step(page, GLOVE_CELL_TICKS // 2)
+            assert 3.4 < crate_x(mid) < 3.6 and mid['gloves_charges'] == 6
+            if case == 'jump':
+                page.keyboard.down('ArrowLeft')
+                try:
+                    page.keyboard.press('Space')
+                    jumping = animation_step(page, 2)
+                    assert not jumping['grounded'] and jumping['player_velocity'][1] < 0
+                    assert crate_x(jumping) < crate_x(mid)
+                    mid = jumping
+                finally:
+                    page.keyboard.up('ArrowLeft')
+            elif case == 'ledge':
+                mid = animation_step(page, 14)
+                assert not mid['grounded'] and 3 < crate_x(mid) < 3.3
+        previous = crate_x(mid)
+        for ticks in (1, 3, 4, 6, 6, 2 * GLOVE_CELL_TICKS):
+            frame = animation_step(page, ticks)
+            x = crate_x(frame)
+            assert 3 <= x <= previous and previous - x <= ticks * 3.1 / 120 + .0001, (case, previous, x)
+            assert frame['gloves_charges'] == (5 if x == 3 else 6) and not frame['pull_held']
+            previous = x
+        assert previous == 3 and not frame['pull_in_progress']
+        assert [hit['crate_id'] for hit in frame['gloves_pulls']] == [target]
+
+
 def gloves_checks(browser):
     portrait, landscape = (390, 844), (844, 390)
     shots, errors = [], []
@@ -2600,6 +2644,10 @@ def gloves_checks(browser):
     check_glove_grip(restarted)
     assert not restarted['gloves_pulls']
     check_touch_control_layout(restarted)
+    context.close()
+
+    context, page = open_boots_game(browser, landscape, errors)
+    keyboard_glove_step_checks(page)
     context.close()
 
     for dimensions in ((320, 568), (568, 320), (360, 360)):
@@ -3423,7 +3471,7 @@ def key_hint_checks(browser):
         snapshot = animation_request(page, 'ground_board', **ground)
         views.append(snapshot['viewport'])
         check_hint_layout(page, keys, f'key-hints-{dimensions[0]}x{dimensions[1]}.png')
-        check_touch_control_layout(snapshot)
+        check_touch_control_layout(snapshot, touch=False)
     assert views[1][0] >= 500 > views[2][0], views
 
     page.keyboard.press('KeyE')
@@ -3943,7 +3991,7 @@ try:
             assert rotated['ticks'] == paused['ticks']
             assert rotated['player'] == paused['player'] and rotated['score'] == paused['score']
             assert rotated['columns'] == 10 and rotated['rows'] == 11
-            check_touch_control_layout(rotated)
+            check_touch_control_layout(rotated, touch=touch)
             button(page, 'resume', touch)
             wait_screen(page, 'playing')
             before_restart = state(page)['session']
