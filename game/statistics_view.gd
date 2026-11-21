@@ -7,22 +7,22 @@ const ROW_HEIGHT := 57
 const EXPANDED_HEIGHT := 84
 const ACTION_HEIGHT := 48
 const ROW_GAP := 5
-const CRUSHED := "Придавило ящиком"
-const OVERFLOW := "Склад переполнен"
+const CRUSHED := "Crushed by a crate"
+const OVERFLOW := "Warehouse full"
 
 
 static func loss_description(reason: String) -> String:
 	match reason:
 		"crushed":
-			return CRUSHED
+			return TranslationServer.translate(CRUSHED)
 		"overflow":
-			return OVERFLOW
+			return TranslationServer.translate(OVERFLOW)
 		"metal_crushed":
-			return "Придавило железом"
+			return TranslationServer.translate("Crushed by iron")
 		"trap":
-			return "Попался в капкан"
+			return TranslationServer.translate("Caught in a trap")
 		"mechanic":
-			return "Сбит падением мастера"
+			return TranslationServer.translate("Hit by a falling mechanic")
 	return ""
 
 
@@ -32,21 +32,21 @@ static func build(content: VBoxContainer, available: Vector2, stats: Dictionary,
 	var compact := available.y < 430
 	var gap := 5 if compact else 10
 	content.add_theme_constant_override("separation", gap)
-	var title := _label(text, content, "Статистика", "statistics_heading", 23 if compact else 28, GOLD)
+	var title := _label(text, content, TranslationServer.translate("Statistics"), "statistics_heading", 23 if compact else 28, GOLD)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var summary_height := _summary(content, available.x, compact, stats, text)
 
 	var heading := HBoxContainer.new()
 	content.add_child(heading)
-	var history_title := _label(text, heading, "История матчей", "history_heading", 15, GOLD)
+	var history_title := _label(text, heading, TranslationServer.translate("Match history"), "history_heading", 15, GOLD)
 	history_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var history_range := _label(text, heading, "", "history_range", 12, MINT)
 	history_range.hide()
 	var total := matches.size() + legacy.size()
 	if total == 0:
-		var empty := _label(text, content, "Партий пока нет", "empty_history", 14, MINT)
+		var empty := _label(text, content, TranslationServer.translate("No matches yet"), "empty_history", 14, MINT)
 		empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		button.call(content, "Назад", "back", back)
+		button.call(content, TranslationServer.translate("Back"), "back", back)
 		return
 
 	var expanded := expanded_match >= 0 and expanded_match < total
@@ -101,13 +101,13 @@ static func _summary(parent: Control, width: float, compact: bool, stats: Dictio
 	var played: int = stats.get("played", 0)
 	var time := "%s / %s" % [_duration(stats.get("average_duration_ms", 0)), _duration(stats.get("max_duration_ms", 0))]
 	var metrics := [
-		["played", "Сыграно", str(played)],
-		["best_score", "Лучший счёт", str(stats.get("best_score", 0))],
-		["lines_crates", "Ряды / Ящики", "%s / %s" % [stats.get("total_lines", 0), stats.get("total_crates", 0)]],
-		["max_lines", "Макс. рядов", str(stats.get("max_lines", 0))],
-		["best_combo", "Лучшее комбо", "x%d" % stats.get("best_combo", 0)],
-		["duration", "Время: ср. / макс.", time if played > 0 else "— / —"],
-		["broken_crates", "Учтено сломанных", str(stats.get("total_broken_crates", "—"))],
+		["played", TranslationServer.translate("Matches played"), str(played)],
+		["best_score", TranslationServer.translate("High score"), str(stats.get("best_score", 0))],
+		["lines_crates", TranslationServer.translate("Rows / Crates"), "%s / %s" % [stats.get("total_lines", 0), stats.get("total_crates", 0)]],
+		["max_lines", TranslationServer.translate("Most rows"), str(stats.get("max_lines", 0))],
+		["best_combo", TranslationServer.translate("Best combo"), "x%d" % stats.get("best_combo", 0)],
+		["duration", TranslationServer.translate("Time: avg / max"), time if played > 0 else "— / —"],
+		["broken_crates", TranslationServer.translate("Crates broken"), str(stats.get("total_broken_crates", "—"))],
 	]
 	var row_height := 0.0
 	for metric in metrics:
@@ -124,10 +124,10 @@ static func _summary(parent: Control, width: float, compact: bool, stats: Dictio
 	var losses := HBoxContainer.new()
 	losses.add_theme_constant_override("separation", 12)
 	column.add_child(losses)
-	var crushed := _label(text, losses, "%s %d" % [CRUSHED, stats.get("crushed", 0)], "crushed", 11 if compact else 12, CREAM)
+	var crushed := _label(text, losses, "%s %d" % [TranslationServer.translate(CRUSHED), stats.get("crushed", 0)], "crushed", 11 if compact else 12, CREAM)
 	crushed.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_fit(crushed, (width - style.get_minimum_size().x) * 0.44)
-	var overflow := _label(text, losses, "%s %d" % [OVERFLOW, stats.get("overflow", 0)], "overflow", 11 if compact else 12, CREAM)
+	var overflow := _label(text, losses, "%s %d" % [TranslationServer.translate(OVERFLOW), stats.get("overflow", 0)], "overflow", 11 if compact else 12, CREAM)
 	_fit(overflow, (width - style.get_minimum_size().x) * 0.50)
 	var rows := ceili(float(metrics.size()) / grid.columns)
 	return style.get_minimum_size().y + rows * row_height + (rows - 1) * row_gap + section_gap + maxf(_line_height(crushed), _line_height(overflow))
@@ -140,12 +140,12 @@ static func _history_row(parent: Control, width: float, entry: Dictionary, index
 	row.custom_minimum_size.y = EXPANDED_HEIGHT if is_open else ROW_HEIGHT
 	var date := str(entry.date) if old else _local_date(str(entry.ended_at), is_open)
 	if date.is_empty():
-		date = "Дата не сохранена"
+		date = TranslationServer.translate("Date unavailable")
 	var score := str(entry.score)
 	var reason := loss_description(str(entry.get("reason", "")))
 	var duration := _duration(entry.get("duration_ms", 0))
-	row.accessibility_name = "%s, счёт %s, %s" % [date, score, "Старый рекорд" if old else reason]
-	row.accessibility_description = "Свернуть" if is_open else "Показать подробности"
+	row.accessibility_name = TranslationServer.translate("%s, score %s, %s") % [date, score, TranslationServer.translate("Old record") if old else reason]
+	row.accessibility_description = TranslationServer.translate("Collapse") if is_open else TranslationServer.translate("Show details")
 
 	var margin := MarginContainer.new()
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -166,19 +166,19 @@ static func _history_row(parent: Control, width: float, entry: Dictionary, index
 	_fit(score_label, (width - 66) * 0.38)
 	_label(text, header, "-" if is_open else "+", id + "_toggle", 14, MINT)
 	if old:
-		_label(text, body, "Старый рекорд", id + "_legacy", 12, MINT)
+		_label(text, body, TranslationServer.translate("Old record"), id + "_legacy", 12, MINT)
 		if is_open:
-			_label(text, body, "Сохранены дата и счёт", id + "_legacy_details", 12, CREAM)
+			_label(text, body, TranslationServer.translate("Date and score saved"), id + "_legacy_details", 12, CREAM)
 		return
 	if not is_open:
 		_pair(text, body, width, reason, id + "_status", duration, id + "_short_duration")
-		var preview := "Ряды %s · Ящики %s · x%s" % [entry.lines, entry.crates, entry.best_combo]
+		var preview := TranslationServer.translate("Rows %s · Crates %s · x%s") % [entry.lines, entry.crates, entry.best_combo]
 		_fit(_label(text, body, preview, id + "_preview", 11, MINT), width - 32)
 		return
-	_pair(text, body, width, "Длительность " + duration, id + "_duration", reason, id + "_reason")
-	_pair(text, body, width, "Ряды %s" % entry.lines, id + "_lines", "Ящики %s" % entry.crates, id + "_crates")
-	_pair(text, body, width, "Лучшее комбо x%s" % entry.best_combo, id + "_combo",
-		"Сломано %s" % entry.get("broken_crates", "—"), id + "_broken_crates")
+	_pair(text, body, width, TranslationServer.translate("Duration %s") % duration, id + "_duration", reason, id + "_reason")
+	_pair(text, body, width, TranslationServer.translate("Rows %s") % entry.lines, id + "_lines", TranslationServer.translate("Crates %s") % entry.crates, id + "_crates")
+	_pair(text, body, width, TranslationServer.translate("Best combo x%s") % entry.best_combo, id + "_combo",
+		TranslationServer.translate("Broken %s") % entry.get("broken_crates", "—"), id + "_broken_crates")
 
 
 static func _pair(text: Callable, parent: Control, width: float, left: String, left_id: String,
@@ -193,23 +193,23 @@ static func _pair(text: Callable, parent: Control, width: float, left: String, l
 static func _navigation(parent: Control, start: int, end: int, total: int, page_size: int,
 		button: Callable, change: Callable, back: Callable) -> void:
 	if end - start == total:
-		button.call(parent, "Назад", "back", back)
+		button.call(parent, TranslationServer.translate("Back"), "back", back)
 		return
 	var line := _line(parent)
 	var previous: Control
 	if start > 0:
 		previous = button.call(line, "«", "history_previous", change.bind(maxi(0, start - page_size), -1))
-		previous.accessibility_name = "Предыдущая страница"
+		previous.accessibility_name = TranslationServer.translate("Previous page")
 	else:
 		previous = Control.new()
 		line.add_child(previous)
 	previous.size_flags_horizontal = Control.SIZE_FILL
 	previous.custom_minimum_size.x = ACTION_HEIGHT
-	button.call(line, "Назад", "back", back)
+	button.call(line, TranslationServer.translate("Back"), "back", back)
 	var next: Control
 	if end < total:
 		next = button.call(line, "»", "history_next", change.bind(end, -1))
-		next.accessibility_name = "Следующая страница"
+		next.accessibility_name = TranslationServer.translate("Next page")
 	else:
 		next = Control.new()
 		line.add_child(next)

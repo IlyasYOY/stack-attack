@@ -2,6 +2,7 @@ class_name StackProfile
 extends RefCounted
 const SAVE_PATH := "user://stack-attack-profile-v1.json"
 const SAVE_VERSION := 3
+const LANGUAGES := ["system", "en", "ru", "es"]
 const MATCH_METRICS := ["duration_ms", "score", "lines", "crates", "best_combo"]
 const MAX_EXACT_JSON_INTEGER := 9007199254740991
 const DAYS_IN_MONTH := [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
@@ -9,6 +10,7 @@ static var _timestamp_pattern := RegEx.create_from_string(
 	r"\A([0-9]{4})-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\z")
 var music := 0.45
 var effects := 0.75
+var language := "system"
 var vibration := true
 var records: Array[Dictionary] = []
 var matches: Array[Dictionary] = []
@@ -19,6 +21,12 @@ var path: String
 func _init(save_path: String = SAVE_PATH) -> void:
 	path = save_path
 	load_profile()
+
+
+static func resolve_locale(preference: String, system_locale: String) -> String:
+	var locale := system_locale if preference == "system" else preference
+	var language_code := locale.strip_edges().to_lower().replace("-", "_").get_slice("_", 0)
+	return language_code if language_code in ["ru", "es"] else "en"
 
 
 func _volume(value: Variant, fallback: float) -> float:
@@ -70,13 +78,14 @@ func load_profile() -> void:
 		return
 	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
-		last_error = "Не удалось прочитать сохранение"
+		last_error = "Could not read save data"
 		return
 	var parser := JSON.new()
 	if parser.parse(file.get_as_text()) != OK or not parser.data is Dictionary:
-		last_error = "Сохранение повреждено. Использованы начальные настройки."
+		last_error = "Save damaged. Using defaults."
 		return
 	var data: Dictionary = parser.data
+	language = data.language if data.get("language") in LANGUAGES else "system"
 	music = _volume(data.get("music"), music)
 	effects = _volume(data.get("effects"), effects)
 	if data.get("vibration") is bool:
@@ -108,17 +117,17 @@ func save_profile() -> bool:
 	var temporary := path + ".tmp"
 	var file := FileAccess.open(temporary, FileAccess.WRITE)
 	if file == null:
-		last_error = "Не удалось сохранить данные"
+		last_error = "Could not save data"
 		return false
 	var contents := JSON.stringify({"version": SAVE_VERSION, "music": music,
-		"effects": effects, "vibration": vibration, "records": records, "matches": matches}, "", true, true).to_utf8_buffer()
+		"language": language, "effects": effects, "vibration": vibration, "records": records, "matches": matches}, "", true, true).to_utf8_buffer()
 	var stored := file.store_buffer(contents)
 	file.flush()
 	file.close()
 	# Godot's flush does not report errors. Check the complete temporary file before replacing the save.
 	if not stored or FileAccess.get_file_as_bytes(temporary) != contents or DirAccess.rename_absolute(temporary, path) != OK:
 		DirAccess.remove_absolute(temporary)
-		last_error = "Не удалось сохранить данные"
+		last_error = "Could not save data"
 		return false
 	return true
 

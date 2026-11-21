@@ -1,0 +1,215 @@
+msgid ""
+msgstr ""
+"Language: ru\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : 2);\n"
+
+msgid "Play"
+msgstr "Играть"
+
+msgid "Statistics"
+msgstr "Статистика"
+
+msgid "Settings"
+msgstr "Настройки"
+
+msgid "Pause"
+msgstr "Пауза"
+
+msgid "Resume"
+msgstr "Продолжить"
+
+msgid "Restart"
+msgstr "Начать заново"
+
+msgid "Main menu"
+msgstr "Главное меню"
+
+msgid "Shift over"
+msgstr "Смена окончена"
+
+msgid "Play again"
+msgstr "Играть снова"
+
+msgid "Music"
+msgstr "Музыка"
+
+msgid "Sound"
+msgstr "Звуки"
+
+msgid "Back"
+msgstr "Назад"
+
+msgid "Score: %d"
+msgstr "Счёт: %d"
+
+msgid "Vibration: On"
+msgstr "Виброотклик: Вкл"
+
+msgid "Vibration: Off"
+msgstr "Виброотклик: Выкл"
+
+msgid "Swap"
+msgstr "Обменять"
+
+msgid "Pick up"
+msgstr "Подобрать"
+
+msgid "Head"
+msgstr "Голова"
+
+msgid "Hands"
+msgstr "Руки"
+
+msgid "Feet"
+msgstr "Ноги"
+
+msgid "Rocket boots"
+msgstr "Ботинки-ракеты"
+
+msgid "Hard hat"
+msgstr "Каска"
+
+msgid "Work gloves"
+msgstr "Рабочие перчатки"
+
+msgid "Mallet"
+msgstr "Киянка"
+
+msgid "Strong arms"
+msgstr "Накачанные руки"
+
+msgid "Speed boots"
+msgstr "Сапоги-скороходы"
+
+msgid "Headlamp"
+msgstr "Каска с фонарём"
+
+msgid "Spring boots"
+msgstr "Пружинные ботинки"
+
+msgid "Watchmaker's cap"
+msgstr "Колпак часовщика"
+
+msgid "Hunting boots"
+msgstr "Охотничьи сапоги"
+
+msgid "Engineer's goggles"
+msgstr "Очки инженера"
+
+msgid "Slingshot"
+msgstr "Рогатка"
+
+msgid "Crushed by a crate"
+msgstr "Придавило ящиком"
+
+msgid "Warehouse full"
+msgstr "Склад переполнен"
+
+msgid "Crushed by iron"
+msgstr "Придавило железом"
+
+msgid "Caught in a trap"
+msgstr "Попался в капкан"
+
+msgid "Hit by a falling mechanic"
+msgstr "Сбит падением мастера"
+
+msgid "Match history"
+msgstr "История матчей"
+
+msgid "No matches yet"
+msgstr "Партий пока нет"
+
+msgid "Matches played"
+msgstr "Сыграно"
+
+msgid "High score"
+msgstr "Лучший счёт"
+
+msgid "Rows / Crates"
+msgstr "Ряды / Ящики"
+
+msgid "Most rows"
+msgstr "Макс. рядов"
+
+msgid "Best combo"
+msgstr "Лучшее комбо"
+
+msgid "Time: avg / max"
+msgstr "Время: ср. / макс."
+
+msgid "Crates broken"
+msgstr "Учтено сломанных"
+
+msgid "Date unavailable"
+msgstr "Дата не сохранена"
+
+msgid "%s, score %s, %s"
+msgstr "%s, счёт %s, %s"
+
+msgid "Old record"
+msgstr "Старый рекорд"
+
+msgid "Collapse"
+msgstr "Свернуть"
+
+msgid "Show details"
+msgstr "Показать подробности"
+
+msgid "Date and score saved"
+msgstr "Сохранены дата и счёт"
+
+msgid "Rows %s · Crates %s · x%s"
+msgstr "Ряды %s · Ящики %s · x%s"
+
+msgid "Duration %s"
+msgstr "Длительность %s"
+
+msgid "Rows %s"
+msgstr "Ряды %s"
+
+msgid "Crates %s"
+msgstr "Ящики %s"
+
+msgid "Best combo x%s"
+msgstr "Лучшее комбо x%s"
+
+msgid "Broken %s"
+msgstr "Сломано %s"
+
+msgid "Previous page"
+msgstr "Предыдущая страница"
+
+msgid "Next page"
+msgstr "Следующая страница"
+
+msgid "Could not read save data"
+msgstr "Не удалось прочитать сохранение"
+
+msgid "Save damaged. Using defaults."
+msgstr "Сохранение повреждено. Использованы начальные настройки."
+
+msgid "Could not save data"
+msgstr "Не удалось сохранить данные"
+
+msgid "Language"
+msgstr "Язык"
+
+msgid "Language · %s"
+msgstr "Язык · %s"
+
+msgid "System default"
+msgstr "Как в системе"
+
+msgid "CHAIN · %d ROW"
+msgid_plural "CHAIN · %d ROWS"
+msgstr[0] "ЦЕПОЧКА · %d РЯД"
+msgstr[1] "ЦЕПОЧКА · %d РЯДА"
+msgstr[2] "ЦЕПОЧКА · %d РЯДОВ"
+
+msgid "Space"
+msgstr "Пробел"
+
+msgid "Shift"
+msgstr "Shift"

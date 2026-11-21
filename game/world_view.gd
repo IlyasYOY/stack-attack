@@ -386,7 +386,7 @@ func helmet_hit(event: Dictionary, lamp: bool = false) -> void:
 
 func line_effect(chain: int) -> void:
 	caption_life = 1.4
-	line_caption = "+%d" % model.tuning.points_per_line if chain == 1 else "ЦЕПОЧКА · %d РЯДА" % chain
+	line_caption = "+%d" % model.tuning.points_per_line if chain == 1 else tr_n("CHAIN · %d ROW", "CHAIN · %d ROWS", chain) % chain
 
 func clear_animation_phase() -> String:
 	if model == null or model.state != "clearing":
@@ -406,9 +406,10 @@ func _draw() -> void:
 		_draw_controls()
 	if caption_life > 0.0 and active and model.state != "over":
 		var width := FONT.get_string_size(line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22).x
-		var at := Vector2(field.get_center().x - width * 0.5, field.position.y + field.size.y * 0.3)
-		draw_string_outline(FONT, at, line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, 3, INK)
-		draw_string(FONT, at, line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, CREAM)
+		var font_size := clampi(floori(22 * (field.size.x - 8) / maxf(width, 1)), 10, 22)
+		var at := Vector2(field.position.x, field.position.y + field.size.y * 0.3)
+		draw_string_outline(FONT, at, line_caption, HORIZONTAL_ALIGNMENT_CENTER, field.size.x, font_size, 3, INK)
+		draw_string(FONT, at, line_caption, HORIZONTAL_ALIGNMENT_CENTER, field.size.x, font_size, CREAM)
 
 func _workshop_overload_light() -> float:
 	if model == null:

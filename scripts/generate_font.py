@@ -46,6 +46,11 @@ patterns={
 ' ':'00000/00000/00000/00000/00000/00000/00000',
 }
 for c,latin in zip('АВСЕКМНОРТХ','ABCEKMHOPTX'): patterns[c]=patterns[latin]
+# The spare two pixels above the cap height carry Spanish accents.
+accents = dict.fromkeys('ÁÉÍÓÚ', ('00010', '00100'))
+accents.update(Ñ=('01001', '10110'), Ü=('01010', '00000'))
+for letter, base in zip('ÁÉÍÓÚÑÜ', 'AEIOUNU'):
+ patterns[letter] = patterns[base]
 for c in list(patterns):
  if c.isalpha(): patterns[c.lower()]=patterns[c]
 patterns['—']=patterns['-'];patterns['–']=patterns['-']
@@ -56,6 +61,9 @@ for i,c in enumerate(chars):
  for row,bits in enumerate(patterns[c].split('/')):
   for col,bit in enumerate(bits):
    if bit=='1':d.point((x+col+1,y+row+2),fill='white')
+ for row,bits in enumerate(accents.get(c.upper(), ())):
+  for col,bit in enumerate(bits):
+   if bit=='1':d.point((x+col+1,y+row),fill='white')
  records.append(f'char id={ord(c)} x={x} y={y} width=7 height=9 xoffset=0 yoffset=1 xadvance={4 if c==" " else 7} page=0 chnl=15')
 image.save(root/'workshop_font.png')
 (root/'workshop_font.fnt').write_text('info face="Stack Workshop" size=10 bold=0 italic=0 charset="" unicode=1 stretchH=100 smooth=0 aa=1 padding=0,0,0,0 spacing=1,1\n'+f'common lineHeight=12 base=9 scaleW={image.width} scaleH={image.height} pages=1 packed=0\npage id=0 file="workshop_font.png"\nchars count={len(chars)}\n'+'\n'.join(records)+'\nkernings count=0\n')
