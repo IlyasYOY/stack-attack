@@ -9,7 +9,7 @@ import sys
 
 from version import STABLE, parts, version_code
 
-DEMO = "https://stack-attack-ilyasyoy.ilyasyoy.chatgpt.site"
+DEMO = "https://ilyasyoy.github.io/stack-attack/"
 
 
 def api(endpoint, *args, payload=None):

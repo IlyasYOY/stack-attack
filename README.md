@@ -1,5 +1,7 @@
 # Stack Attack
 
+[Play Stack Attack in your browser](https://ilyasyoy.github.io/stack-attack/).
+
 An original 2D arcade game built with **Godot 4.7.2 + GDScript** for Android and Web. Two crane claws travel along rails delivering crates. Jump, push wooden crates and fill the bottom row. The game includes local statistics, match history, settings, and original sprites and sounds.
 
 Use the left and right arrow keys to move and Space or the up arrow to jump. Press E or tap the circular arrows to pick up or swap an item. F activates the head slot and G activates the hand slot. With either the keyboard or on-screen buttons, you can move, hold down the watchmaker’s cap control and fire the slingshot at the same time.
@@ -58,7 +60,7 @@ In a prepared Cockpit environment, run `source /workspace/setup-stack/env.sh` in
 
 ## Download builds
 
-On each PR and push to `main`, the `headless` job checks the game and exports it for Android and Web. A failed test or export fails the job.
+On each PR and push to `main`, the `headless` job checks the game and exports it for Android and Web. A failed test or export fails the job. On a game or build change to `main`, CI boots the Web release in Chromium and publishes it to GitHub Pages. To bootstrap or republish, run `gh workflow run check.yml --ref main -f publish_pages=true`. The live site's `source-commit.txt` identifies its build.
 
 To get a build archive, use an account with write access and select **Actions → Godot headless checks → Run workflow**. Choose `main` or another branch of this repository that contains the workflow. The CLI equivalent is `gh workflow run check.yml --ref main`. A manual run repeats the checks and exports for the selected revision, then packages and uploads the files. After a successful upload, the archive is available under **Artifacts** for 14 days. If the storage quota is exhausted, the upload step reports an error. To download, sign in to GitHub with read access to the repository. The archive contains the test APK, Web ZIP, commit ID, SHA-256 checksums and Android reports. CI creates a temporary key for each run.
 
