@@ -1,33 +1,33 @@
-# Визуальный прототип мастерской
+# Workshop visual prototype
 
-После принятия базового прототипа PR #2 (`c0937e19cf26655043f44fde32d3b31807d0a6f1`) Илья разрешил новый отдельный draft PR с художественным срезом. Это проверяемое направление, художественная приёмка остаётся за Ильёй.
+After accepting the base prototype in PR #2 (`c0937e19cf26655043f44fde32d3b31807d0a6f1`), Ilya authorized a separate draft PR to show the proposed art in the game. Ilya will review the result and decide whether to accept the art direction.
 
-## Референс и доступ
+## Art reference and access
 
-Художественный бриф задаёт палитру, характер освещения и силуэт механика. Исходное изображение хранится отдельно от репозитория.
+The art brief sets the palette, lighting and mechanic’s silhouette. The reference image is stored separately from the repository.
 
-Из референса взяты художественные признаки: холодная фабрика с янтарными окнами, тёплая лампа, деревянная рама с металлическими уголками, латунный рельс, клетчатое бирюзовое поле, объёмные ящики, механик с очками и заметным красным U-магнитом. Рабочий стол, кружка, чертёж и ключ — фон, без взаимодействия.
+The reference provided a cool-toned factory with amber windows, a warm lamp, a wooden frame with metal corner brackets, a brass rail, a checkered teal playfield, solid-looking crates and a mechanic with goggles and a prominent red U-shaped magnet. The workbench, mug, blueprint and wrench are background scenery.
 
-## Что реализовано
+## What the prototype includes
 
-- Десять собственных деревянных рисунков 48×48 в одном атласе. Различаются оттенки древесины, направление планок и распорки, сучки и следы износа. Контур и четыре угловых крепления объединяют рисунки. Ящик сохраняет рисунок при падении, толкании, тяге, очистке и в демо. Щипцы передают свой рисунок грузу при сбросе. Служебная метка `color` не определяет рисунок.
-- Механик 32×48: кепка с очками, большой читаемый силуэт головы, рубаха, шарф и ремень. Стойка, шаг, прыжок и толкание используют тот же холст с надетыми ботинками-ракетами и с обычной обувью. Руки свободны.
-- Рама поля, болты, тёплый рельс и краны, лампа с дешёвым прозрачным световым конусом; фабричные балки, окна, шестерни и верстак. Нет нового физического света, 3D или дорогого постпроцессинга; Compatibility/WebGL 2 сохранён.
-- Собственный bitmap-шрифт small caps с кириллицей/латиницей, общие компактные кнопки с небольшими креплениями и металлической границей, кремовые пиктограммы управления, аккуратная табличка счёта. Меню сохраняют название и прежние пункты, без подзаголовков/футеров/прокрутки. Живой AI-фон сохранён.
+- Ten original 48×48 wooden crate designs share one atlas. They vary in wood tone, plank and brace direction, knots and wear. Each has the same outline and four corner fasteners. A crate keeps its design when falling, being pushed or pulled, clearing and appearing in the demo. A claw passes its design to the load when it drops it. The internal `color` tag is independent of the design.
+- The 32×48 mechanic has a cap with goggles, a large, recognizable head silhouette, a shirt, scarf and belt. The idle, walking, jumping and pushing poses use the same canvas with either rocket boots or ordinary shoes. The mechanic’s hands are free.
+- The playfield has a frame with bolts, a warm-toned rail and cranes, and a lamp with an inexpensive translucent light cone. Factory beams, windows, gears and a workbench fill the background. The scene retains Compatibility/WebGL 2 and needs no new physical lighting, 3D or expensive post-processing.
+- An original small-caps bitmap font supports Cyrillic and Latin. Compact buttons share small fasteners and metal borders, controls have cream-colored icons, and the score has its own small plaque. The menus retain their title and existing entries without subtitles, footers or scrolling. The live AI background remains.
 
-Ассеты воспроизводятся `python3 scripts/generate_art.py` и `python3 scripts/generate_font.py` с Pillow. Они нарисованы примитивами/матрицами проекта, не вырезаны из референса и не заимствованы из других игр. SVG-иконка также собственная.
+The assets for this visual prototype can be reproduced with Pillow using `python3 scripts/generate_art.py` and `python3 scripts/generate_font.py`. The scripts draw them from project-defined primitives and matrices. They use no cutouts from the reference or assets from other games. The SVG icon is also original.
 
-## Граница механики
+## Gameplay boundaries
 
-`simulation.gd`, `tuning.gd`, `prototype.tres`, `demo.gd`, `profile.gd`, `sound.gd` не меняются. Поле 10×11, коллизии, скорости, сбросы, очистки, поражения, очки, управление и сохранение прежние. Размеры и позиции touch-областей прежние. Новый счёт подгоняет шрифт внутри таблички, без изменения значения.
+This visual pass leaves `simulation.gd`, `tuning.gd`, `prototype.tres`, `demo.gd`, `profile.gd` and `sound.gd` as they were. It keeps the 10×11 field, collisions, speeds, drops, clears, losses, scoring, controls and saves. Touch targets keep their size and position. The new score display fits the font inside the plaque while preserving the score value.
 
-Внутреннее `application/config/name` остаётся «Stack Attack · Ночная смена»: оно участвует в выборе каталога `user://`. Это защищено регрессией, чтобы графическая доработка не создавала новый namespace профиля. Видимый заголовок главного меню остаётся Stack Attack.
+The internal `application/config/name` stays “Stack Attack · Ночная смена” (“Stack Attack · Night Shift”) because it helps determine the `user://` directory. A regression test protects the profile namespace when the art changes. The visible main menu title remains Stack Attack.
 
-Ботинки-ракеты используют действующие правила снаряжения из [описания прототипа](prototype.md#снаряжение). Выхлоп появляется только на отдельном прыжке в воздухе. Debug Web fixture `hero_pose` принимает `boots: true` для сравнения вариантов. Стойка и направление определяются чтением текущего состояния.
+Rocket boots follow the [prototype equipment rules](prototype.md#equipment). Exhaust appears only on the extra jump in midair. The debug Web fixture `hero_pose` accepts `boots: true` to compare the two variants. It reads the pose and direction from the current state.
 
-Полный sprite canvas не обрезается при отражении. При выводе 16×24 и offset (-1,-2) ось туловища остаётся на прежнем x=7 относительно player, маленький выступ кепки и рук косметический. Картинка не меняет коллизию. Проверяется реальный цветовой ориентир на шарфе, а не центр alpha-силуэта, который меняется в области ног из-за снаряжения.
+Flipping the sprite preserves the full canvas. At a display size of 16×24 and an offset of (-1,-2), the torso axis stays at x=7 relative to the player. The cap and hands protrude slightly as a visual detail. The sprite uses the existing collision shape. The test tracks a colored point on the scarf because equipment changes the leg area and shifts the center of the opaque silhouette.
 
-## Проверка и показ
+## Verification and preview
 
 ```bash
 source /workspace/setup-stack/env.sh
@@ -39,10 +39,10 @@ python3 scripts/package_builds.py
 python3 scripts/package_showcase.py
 ```
 
-`uv run --locked --group web python scripts/check_web.py --crates-only` сравнивает десять рисунков по пикселям из Web-сборки, проверяет передачу рисунка от щипцов падающему ящику и сверяет кадры после смены служебных меток `color`.
+`uv run --locked --group web python scripts/check_web.py --crates-only` compares all ten designs pixel by pixel in the Web build, checks that a falling crate inherits the claw’s design and compares frames after changing the internal `color` tags.
 
-Полный Web-набор включает `--workshop-only` и `--sprites-only`: портрет/альбом/Fold, отсутствие магнита в игровом масштабе, позы с ботинками-ракетами и с обычной обувью, обе стороны при одной позиции, центр туловища, alpha-поля, покрытие шрифта, меню и обычную партию. Поза толкания берётся из близости к реальному ящику; в игре это только анимация.
+The full Web suite includes `--workshop-only` and `--sprites-only`. It checks portrait, landscape and Fold layouts, the absence of a magnet at gameplay scale, poses in rocket boots and ordinary shoes, both directions at the same position, torso alignment, transparent margins, font coverage, menus and a normal game. Proximity to a real crate selects the pushing pose. In the game this only affects animation.
 
-Для Library заранее выбран **один** небольшой PNG-лист из нескольких реальных кадров (один файл, fast path до 50 MiB), а не batch отдельных картинок через ранее недоступный upload helper. Исходные PNG сохраняются отдельно в `build/screenshots/`. Лист содержит подписи вне игрового UI и целочисленно увеличенный фрагмент реального кадра. Ничего не публикуется публично. Успех сохранения и Library ID сообщаются только после подтверждения инструмента.
+For Library, the chosen format is **one** small PNG sheet made from several actual frames, using the single-file fast path for files up to 50 MiB. This avoids batching separate images through the previously unavailable upload helper. The source PNGs are kept separately in `build/screenshots/`. Captions sit outside the game UI, and a detail from an actual frame is enlarged by an integer scale factor. The sheet is kept private. Report a successful save and the Library ID only after the tool confirms it.
 
-Архив APK и Web можно получить [ручным запуском workflow](../README.md#готовые-сборки). CI использует временную debug-подпись каждого run; при установке вместо предыдущего теста может понадобиться удаление старого APK с его данными. Физический Android, сила вибрации, вырезы экрана и производительность на телефоне агентом не проверяются. Fold в браузере — размер viewport. Оценка выразительности, масштаба героя и деталей остаётся за Ильёй.
+The APK and Web archive is available through a [manual workflow run](../README.md#download-builds). CI uses a temporary debug signature for each run. Installing over a previous test may require uninstalling the old APK and its data. The agent’s checks do not cover a physical Android device, vibration strength, display cutouts or phone performance. The browser’s Fold check uses a viewport size. Ilya will judge the visual impact, character scale and detail.
