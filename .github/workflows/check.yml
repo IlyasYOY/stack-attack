@@ -2,18 +2,45 @@ name: Godot headless checks
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish_pages:
+        description: Publish the checked Web release to GitHub Pages (main only)
+        type: boolean
+        default: false
   push:
     branches: [main, 'codex/**']
+concurrency:
+  group: check-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
+  queue: max
 permissions:
   contents: read
 jobs:
   headless:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    outputs:
+      publish_pages: ${{ steps.pages.outputs.publish }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Select Pages publication
+        id: pages
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish_pages)
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # An old rerun must not roll back newer game changes. Docs can safely advance main.
+          paths=(. ':(exclude)docs/**' ':(exclude)README.md' ':(exclude)AGENTS.md')
+          if ! git diff --quiet HEAD origin/main -- "${paths[@]}"; then
+            echo "A newer main changes the build. Skipping Pages."
+          elif [[ -n "$BEFORE" ]] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null &&
+               git diff --quiet "$BEFORE" HEAD -- "${paths[@]}"; then
+            echo "Documentation-only push. Skipping Pages."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Download the pinned official Godot binary
         shell: bash
         run: bash scripts/release/setup.sh editor
@@ -64,8 +91,21 @@ jobs:
           python3 scripts/release/test_publish.py
           bash scripts/release/check_build.sh 1.2.3 "$(git rev-parse HEAD)"
           bash scripts/release/test_signing.sh 1.2.3
+      - name: Build and smoke-test the Pages Web release
+        if: github.event_name == 'pull_request' || steps.pages.outputs.publish == 'true'
+        env:
+          CHROMIUM_BIN: /usr/bin/google-chrome
+          XDG_DATA_HOME: ${{ runner.temp }}/stack-attack-data
+          XDG_CONFIG_HOME: ${{ runner.temp }}/stack-attack-config
+          XDG_CACHE_HOME: ${{ runner.temp }}/stack-attack-cache
+        run: bash scripts/build_pages.sh
+      - name: Upload the checked Web release
+        if: steps.pages.outputs.publish == 'true'
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: build/pages
       - name: Package downloads
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish_pages
         shell: bash
         run: |
           mkdir -p build/delivery
@@ -89,7 +129,7 @@ jobs:
           The signing key and password are NOT included. No release has been published.
           TXT
       - name: Upload downloads
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish_pages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: stack-attack-prototype-${{ github.sha }}
@@ -97,3 +137,34 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+  deploy-pages:
+    if: github.ref == 'refs/heads/main' && needs.headless.outputs.publish_pages == 'true'
+    needs: headless
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy the checked Web release to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
+  verify-pages:
+    needs: deploy-pages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Play the published build anonymously
+        env:
+          PAGES_URL: ${{ needs.deploy-pages.outputs.page_url }}
+          CHROMIUM_BIN: /usr/bin/google-chrome
+        run: bash scripts/with_playwright.sh scripts/check_pages.py "$PAGES_URL" "$GITHUB_SHA"
