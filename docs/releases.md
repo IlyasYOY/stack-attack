@@ -1,13 +1,19 @@
 # Publishing Stack Attack
 
-In GitHub Actions, choose **Publish Stack Attack → Run workflow**, select branch
+Each push to `main` runs the game and export checks. Once they pass, including
+live verification when Pages is deployed, the same run releases its exact commit.
+This includes documentation-only pushes. Automatic releases increment the patch
+of the highest stable `vMAJOR.MINOR.PATCH` tag. At the Android patch limit (999)
+the owner or a release maintainer must choose a higher minor or major version.
+
+To select a version manually for an unreleased commit, choose **Publish Stack Attack → Run workflow**, select branch
 `main` and enter a stable SemVer such as `1.2.3`. The owner can dispatch by
 default. To delegate releases, grant the maintainer repository write access and
 add their exact GitHub login to the optional repository variable
 `RELEASE_MAINTAINERS`, a JSON array such as `["maintainer-login"]`. The original
 actor and the person rerunning a job must both be authorized.
 
-Android and Web use the full main commit captured at dispatch. The published
+Android and Web use the full main commit captured by the push or manual dispatch. The published
 `v1.2.3` tag points to that commit. The release includes a signed ARM64 APK,
 a complete Web ZIP, SHA256SUMS.txt, source SHA, Android versionCode and signing
 certificate SHA-256. Extract the whole ZIP, run `python3 -m http.server 8765`
@@ -52,9 +58,10 @@ existing stable version tags and releases. Preserve release tags and releases,
 including the highest allocated version. Distribute this Android ID through this
 workflow to keep that ordering.
 
-Release runs are serialized. A superseded pending dispatch can be dispatched
-again. Repeating a published version and SHA checks the tag and asset checksums
-and exits. A tag for another SHA, an unrelated tag or draft, or a version below a
+Automatic and manual releases share a queue. Version selection happens inside
+the queue. A rerun for a released commit verifies its existing tag and asset
+checksums and exits. A second version for that commit is rejected. A new release
+must descend from the highest stable tag, including when an older run is retried. A tag for another SHA, an unrelated tag or draft, or a version below a
 higher reservation stops the run. The publisher stages three assets on a draft,
 compares their GitHub digests, and binds the tag before making it public.
 
@@ -63,5 +70,5 @@ while its artifacts are retained (seven days). The job reuses matching draft ass
 and fills in missing ones. A different build, unexpected asset or failed upload
 with a mismatching asset stops for inspection. An administrator can inspect the
 unpublished draft and remove a failed partial upload before retrying. For expired
-artifacts or conflicting state, inspect the old draft/tag and choose a fresh higher
-version. A retry never replaces published files or moves an existing tag.
+artifacts or conflicting state, inspect the old draft/tag before retrying.
+Resolve any incomplete reservation for that commit first. A retry never replaces published files or moves an existing tag.
