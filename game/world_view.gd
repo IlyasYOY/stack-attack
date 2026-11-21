@@ -81,6 +81,7 @@ const CRANE_LIGHT := [Color("a7c7bc"), Color("f6d18e")]
 const CRANE_METAL := [Color("355762"), Color("785132")]
 const CRANE_TOP := -52.0
 const HUD_CLEARANCE_Y := 60.0
+const TOUCH_BOTTOM_MARGIN := 32.0
 const WAREHOUSE_FRAME := 13.0
 const BADGE_WIDTH := 46.0
 const BADGE_HEIGHT := 26.0
@@ -194,7 +195,24 @@ func _layout() -> void:
 		var body_size := Vector2(body_width, body_width * 1.5)
 		equipment_body = Rect2(Vector2(field.end.x + frame + BADGE_WIDTH + 4,
 			clampf(field.get_center().y - body_size.y * 0.5, HUD_CLEARANCE_Y + 8, bottom - body_size.y - 55)).round(), body_size)
+	# The stage uses the original row position. Move only the touch hitboxes
+	# (also used for drawing), leaving room for the frame and equipment HUD.
+	if OS.has_feature("android") or (OS.has_feature("web") and DisplayServer.is_touchscreen_available()):
+		var hud_bottom := equipment_strip.end.y if strip_below else field.end.y + frame
+		var lift := clampf(_touch_bottom_margin(margin) - margin, 0.0, maxf(0.0, bottom - hud_bottom - 2.0))
+		for action in controls:
+			controls[action].position.y -= lift
 	_layout_rail(left, top, world_size, scale_to_view)
+
+func _touch_bottom_margin(margin: float) -> float:
+	if OS.has_feature("android"):
+		var safe_area := DisplayServer.get_display_safe_area()
+		var window_height := DisplayServer.window_get_size().y
+		if safe_area.has_area() and window_height > 0:
+			# Compare with the app window so a system bar outside it costs no extra space.
+			var inset := maxf(0, window_height - safe_area.end.y) * size.y / window_height
+			return maxf(TOUCH_BOTTOM_MARGIN, inset + margin)
+	return TOUCH_BOTTOM_MARGIN
 
 func _layout_rail(left: float, top: float, world_size: Vector2, scale_to_view: float) -> void:
 	var rail_margin := clampf(10.0 * scale_to_view, 0.0, maxf(0.0, left - 3.0))

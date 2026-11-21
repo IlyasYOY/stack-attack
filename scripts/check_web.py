@@ -140,9 +140,21 @@ def check_touch_control_layout(snapshot, *, touch=True):
     if not touch:
         expected = {'left', 'right', 'jump'}
     assert snapshot['controls'].keys() == expected
+    row_y = snapshot['controls']['jump'][1]
+    hud_rects = [snapshot['equipment_body']]
+    hud_rects.extend(hud['rect'] for name, hud in snapshot.items() if name.endswith('_hud') and hud)
+    if 'pickup' in snapshot['buttons']:
+        hud_rects.append(snapshot['buttons']['pickup'])
+    assert all(y + h <= row_y for _, y, _, h in hud_rects), ('Controls overlap the HUD', hud_rects, row_y)
     checked = []
     for action, rect in snapshot['controls'].items():
         x, y, w, h = rect
+        gap = height - y - h
+        assert y == row_y, ('Action is off the control row', action, rect)
+        if touch:
+            assert gap >= (32 if height >= 2 * width else 16), ('Bottom gesture clearance', action, gap)
+        else:
+            assert abs(gap - 12) < .01, ('Desktop control moved', action, gap)
         assert 0 <= x and 0 <= y and x + w <= width + 1 and y + h <= height + 1, (
             'Touch control is outside the viewport', action, rect, snapshot['viewport'])
         assert x + w <= field_x or x >= field_x + field_width or y + h <= field_y or y >= field_y + field_height, (
@@ -1731,7 +1743,7 @@ def use_air_jump(page, touch, shots, *, held=False, capture=False):
             assert_frozen_animation(airborne, rotated)
             assert rotated['player_velocity'] == airborne['player_velocity']
             assert_boots(rotated, True, 0)
-            check_touch_control_layout(rotated, touch=touch)
+            check_touch_control_layout(rotated)  # The viewport supports touch even for keyboard jumps.
             check_boots_hud(rotated, 0)
             shot = boots_shot(page, phase, shots)
             check_boots_exhaust(Image.open(ROOT / shot).convert('RGB'), rotated, True)
