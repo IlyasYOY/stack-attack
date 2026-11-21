@@ -2,6 +2,8 @@
 
 An original 2D arcade game built with **Godot 4.7.2 + GDScript** for Android and Web. Two crane claws travel along rails delivering crates. Jump, push wooden crates and fill the bottom row. The game includes local statistics, match history, settings, and original sprites and sounds.
 
+![Stack Attack main menu with Play, Statistics and Settings buttons above a mechanic standing between stacks of wooden crates.](.github/images/main-menu.webp)
+
 Use the left and right arrow keys to move and Space or the up arrow to jump. Press E or tap the circular arrows to pick up or swap an item. F activates the head slot and G activates the hand slot. With either the keyboard or on-screen buttons, you can move, hold down the watchmaker’s cap control and fire the slingshot at the same time.
 
 Each destroyed wooden crate has a 10% chance of dropping an item (any of the 12 items is equally likely) and a 3% chance of dropping a trap. Otherwise the crate is empty. Iron crates make up 10% of new loads. You can move them with Strong Arms, and they drop into the receiver when the bottom row is full. See the [game rules](docs/prototype.md) for equipment and collisions.
