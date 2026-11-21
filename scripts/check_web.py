@@ -27,6 +27,7 @@ group.add_argument('--menu-idle-only', action='store_true', help='Check the real
 group.add_argument('--ui-only', action='store_true', help='Run demo isolation and vibration UI regressions only')
 group.add_argument('--game-over-only', action='store_true', help='Run score-only result screen regressions and capture screenshots')
 group.add_argument('--statistics-only', action='store_true', help='Check Statistics and capture its rendered overview and history')
+group.add_argument('--overload-only', action='store_true', help='Record the four crane overload phases in the Web game')
 group.add_argument('--cranes-only', action='store_true', help='Check crane passes and capture both playing layouts')
 group.add_argument('--crates-only', action='store_true', help='Check ten rendered wooden crate appearances and their lifetime')
 group.add_argument('--animations-only', action='store_true', help='Check row clear and crush transitions and capture their rendered phases')
@@ -1837,6 +1838,84 @@ def start_game_video(page):
 def save_game_video(page, name):
     video = page.evaluate('window.finishGameVideo()')
     (SHOTS / name).write_bytes(base64.b64decode(video))
+
+
+def check_workshop_overload_light(page, record):
+    initial = animation_request(page, 'cranes', overload_preview=True, animation_hold=True)
+    width, height = initial['viewport']
+
+    def sample(expected, save=False):
+        assert state(page)['overload_phase'] == expected
+        png = page.locator('canvas').screenshot()
+        shot = Image.open(io.BytesIO(png)).convert('RGB')
+        if save:
+            (SHOTS / 'crane-overload.png').write_bytes(png)
+        # Sample existing scenery in logical viewport coordinates.
+        def pixel(x, y):
+            return shot.getpixel((round(x * shot.width / width), round(y * shot.height / height)))
+        return pixel(width * .12, height * .32), pixel(24, height * .74 + 6), pixel(4, 4)
+
+    ordinary = sample('NORMAL')
+    animation_step(page, 180)
+    animation_step(page, 180)
+    warning = sample('WARNING')
+    for frames in (180, 180, 144):
+        animation_step(page, frames)
+    active = sample('ACTIVE', save=record)
+    for _ in range(48):
+        if animation_step(page, 24)['overload_phase'] == 'FADING':
+            break
+    early_fade = sample('FADING')
+    animation_step(page, 24)
+    late_fade = sample('FADING')
+    animation_step(page, 60)
+    assert sample('NORMAL') == ordinary, 'Scenery did not return to its original palette'
+    for index in (0, 1):  # Gear hub and window pane
+        assert ordinary[index][1] < warning[index][1] < active[index][1], (ordinary, warning, active)
+        assert ordinary[index][1] <= late_fade[index][1] < early_fade[index][1] <= active[index][1]
+    assert all(colors[2] == ordinary[2] for colors in (warning, active, early_fade, late_fade)), 'Sky flashed'
+
+
+def overload_checks(browser, record=False):
+    errors = []
+    context = browser.new_context(viewport={'width': 960, 'height': 600}, device_scale_factor=1)
+    try:
+        page = context.new_page()
+        page.on('pageerror', lambda err: errors.append(str(err)))
+        page.on('console', lambda msg: errors.append(msg.text) if msg.type == 'error' else None)
+        assert page.goto(URL).status == 200
+        wait_screen(page, 'menu')
+        button(page, 'play')
+        wait_screen(page, 'playing')
+        initial = animation_request(page, 'cranes', overload_preview=True, animation_hold=True)
+        assert initial['overload_phase'] == 'NORMAL' and initial['animation_held']
+        if record:
+            start_game_video(page)
+        animation_step(page, 0, animation_hold=False)
+        for phase in ['WARNING', 'ACTIVE', 'FADING', 'NORMAL']:
+            page.wait_for_function("""phase => window.stackAttackState.screen === 'playing'
+                && window.stackAttackState.overload_phase === phase""", arg=phase, timeout=40000)
+            if phase == 'ACTIVE':
+                page.wait_for_function("""() => {
+                    const [a, b] = window.stackAttackState.cranes;
+                    return [a, b].every(c => !c.waiting && c.x > 1 && c.x < 9) && Math.abs(a.x - b.x) > 2;
+                }""")
+                png = page.locator('canvas').screenshot()
+                shot = Image.open(io.BytesIO(png)).convert('RGB')
+                rail = state(page)['crane_rail']
+                viewport = state(page)['viewport']
+                sx, sy = shot.width / viewport[0], shot.height / viewport[1]
+                x, y, w, h = rail
+                colors = shot.crop((int(x*sx), int(y*sy), int((x+w)*sx), int((y+h)*sy))).get_flattened_data()
+                assert (128, 219, 255) in colors, 'Blue discharge missing from the rails during overload'
+        assert not errors, errors
+        if record:
+            page.wait_for_timeout(400)
+            save_game_video(page, 'crane-overload.webm')
+        check_workshop_overload_light(page, record)
+        print('OVERLOAD_PASS: normal, warning, active, fading and return to normal', flush=True)
+    finally:
+        context.close()
 
 
 def ground_checks(browser, record=False):
@@ -3786,6 +3865,11 @@ try:
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         full_check = not any(vars(args).values())
+        if full_check or args.overload_only:
+            overload_checks(browser, record=args.overload_only)
+        if args.overload_only:
+            browser.close()
+            raise SystemExit(0)
         if full_check or args.key_hints_only:
             print('KEY_HINTS_PASS', key_hint_checks(browser), flush=True)
         if args.key_hints_only:

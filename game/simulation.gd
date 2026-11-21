@@ -72,6 +72,7 @@ var frame_world_delta := 0.0
 var hunting_boots_charges := 0
 var engineer_goggles_charges := 0
 var slingshot_charges := 0
+var overload := StackCraneOverload.new()
 var repair := StackCraneRepair.new()
 var _caught_trap: Dictionary = {}
 var _goggles_pending := false
@@ -164,6 +165,7 @@ func reset(seed_value: int) -> void:
 	_loot_rng.seed = seed_value
 	_material_rng.seed = seed_value
 	repair.reset(seed_value)
+	overload.reset(seed_value)
 	traps.clear()
 	_caught_trap = {}
 	trap_hold_time = 0.0
@@ -226,7 +228,7 @@ func time_to_crane_release(crane: Dictionary) -> float:
 			or (index >= 0 and repair.workers[index].broken):
 		return INF
 	var distance := (float(crane.release_column) + 0.5 - float(crane.x)) * int(crane.direction)
-	return maxf(0.0, distance) / tuning.crane_speed
+	return maxf(0.0, distance) / (tuning.crane_speed * overload.rate())
 
 
 func is_clearing_crate(crate_id: int) -> bool:
@@ -670,6 +672,7 @@ func _tick(axis: float, pull_held: bool, jump_held: bool, speed_held: bool) -> v
 		_advance_clear()
 		return
 	elapsed += STEP
+	overload.advance(elapsed)
 	_jump_buffer = maxf(0.0, _jump_buffer - STEP)
 	_coyote = 0.085 if grounded else maxf(0.0, _coyote - STEP)
 	_update_lamp()
@@ -1435,8 +1438,9 @@ func _enter_crane(crane: Dictionary) -> void:
 
 func _advance_crane(index: int) -> void:
 	var crane := cranes[index]
+	var travel_step := STEP * overload.rate()
 	if crane.waiting:
-		crane.wait_remaining = maxf(0.0, float(crane.wait_remaining) - STEP)
+		crane.wait_remaining = maxf(0.0, float(crane.wait_remaining) - travel_step)
 		if float(crane.wait_remaining) <= EPS:
 			_enter_crane(crane)
 		return
@@ -1444,7 +1448,7 @@ func _advance_crane(index: int) -> void:
 		return
 	var direction := int(crane.direction)
 	var exit := _crane_entrance(-direction)
-	crane.x = move_toward(float(crane.x), exit, tuning.crane_speed * STEP)
+	crane.x = move_toward(float(crane.x), exit, tuning.crane_speed * travel_step)
 	crane.open_time = maxf(0.0, float(crane.open_time) - STEP)
 	if crane.loaded:
 		_try_crane_release(index)

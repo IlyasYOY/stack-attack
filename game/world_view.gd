@@ -94,6 +94,7 @@ const CREAM := Color("f4e3ba")
 const GOLD := Color("d7a45a")
 const CLEAR_GLOW_FRACTION := 0.30
 const CLEAR_LIP_TIME := 0.08
+const RAIL_BLUE := Color("80dbff")
 const EFFECT_AMBER := Color("ffc276")
 const EFFECT_DUST := Color("e9c598")
 const BOOTS_EXHAUST_TIME := 0.20
@@ -391,7 +392,22 @@ func _draw() -> void:
 		draw_string_outline(FONT, at, line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, 3, INK)
 		draw_string(FONT, at, line_caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 22, CREAM)
 
+func _workshop_overload_light() -> float:
+	if model == null:
+		return 0.0
+	var effect := model.overload
+	var remaining := effect.phase_end - model.elapsed
+	match effect.phase:
+		StackCraneOverload.Phase.WARNING:
+			return 0.45 * (1.0 - smoothstep(0.0, effect.WARNING_TIME, remaining))
+		StackCraneOverload.Phase.ACTIVE:
+			return 1.0
+		StackCraneOverload.Phase.FADING:
+			return smoothstep(0.0, effect.FADE_TIME, remaining)
+	return 0.0
+
 func _draw_scenery() -> void:
+	var light := _workshop_overload_light()
 	for band in range(24):
 		draw_rect(Rect2(0, size.y * band / 24, size.x, size.y / 24 + 1), Color("233747").lerp(Color("102b38"), float(band) / 24))
 	# Distant factory bays, amber windows and diagonal steel trusses replace the forest.
@@ -404,7 +420,10 @@ func _draw_scenery() -> void:
 			draw_rect(Rect2(x - 5, y + 17, 67, 6), Color("142b37"))
 			draw_line(Vector2(x, y + 20), Vector2(x + 56, y + 67), Color("1b303d"), 6)
 			for window in range(3):
-				draw_rect(Rect2(x + 10 + window * 10, y + 9, 6, 12), Color(0.72, 0.40, 0.18, 0.22 if index % 3 == 0 else 0.05))
+				var tint := Color(0.72, 0.40, 0.18, 0.22 if index % 3 == 0 else 0.05)
+				if (index + layer) % 3 == 1 and window != 1:
+					tint = tint.lerp(Color("e9ba7a9c"), light)
+				draw_rect(Rect2(x + 10 + window * 10, y + 9, 6, 12), tint)
 	for side in [-1, 1]:
 		var gx := size.x * (0.12 if side == -1 else 0.88)
 		var gy := size.y * 0.32
@@ -413,7 +432,16 @@ func _draw_scenery() -> void:
 			draw_line(Vector2(gx, gy) + Vector2.from_angle(angle) * 24, Vector2(gx, gy) + Vector2.from_angle(angle) * 33, Color("294450"), 7)
 		draw_circle(Vector2(gx, gy), 25, Color("294450"))
 		draw_circle(Vector2(gx, gy), 15, Color("1b3441"))
-		draw_circle(Vector2(gx, gy), 4, Color("294450"))
+		draw_circle(Vector2(gx, gy), 4, Color("294450").lerp(Color("6e9fa8"), light))
+		if light > 0.0:
+			# Only the upper rim and tooth tips facing the rails catch the reflection.
+			var angle := -PI / 4 if side == -1 else -3 * PI / 4
+			var gleam := Color(RAIL_BLUE, 0.53 * light)
+			draw_arc(Vector2(gx, gy), 23, angle - 0.55, angle + 0.55, 7, gleam, 2)
+			for tooth in range(2):
+				var normal := Vector2.from_angle(angle + (tooth - 0.5) * TAU / 12)
+				var tip := (Vector2(gx, gy) + normal * 32).round()
+				draw_line(tip - normal.orthogonal() * 2, tip + normal.orthogonal() * 2, gleam, 2)
 	var lx := size.x * 0.5
 	var ly := minf(57, crane_rail.position.y - 24)
 	var beam := PackedVector2Array([Vector2(lx-17,ly+13),Vector2(lx+17,ly+13),Vector2(lx+61,ly+104),Vector2(lx-61,ly+104)])
@@ -422,14 +450,18 @@ func _draw_scenery() -> void:
 	draw_line(Vector2(lx,0),Vector2(lx,ly-13),Color("0b202b"),3)
 	draw_rect(Rect2(lx-6,ly-14,12,10),Color("10232c"))
 	draw_colored_polygon(PackedVector2Array([Vector2(lx-8,ly-7),Vector2(lx+8,ly-7),Vector2(lx+21,ly+11),Vector2(lx-21,ly+11)]),Color("0b1f29"))
-	draw_line(Vector2(lx-20,ly+11),Vector2(lx+20,ly+11),GOLD,2)
+	draw_line(Vector2(lx-20,ly+11),Vector2(lx+20,ly+11),GOLD.lerp(RAIL_BLUE, light * 0.55),2)
 	draw_circle(Vector2(lx,ly+12),6,Color("f9c56f"))
 	draw_circle(Vector2(lx,ly+12),4,Color("fff0be"))
 	for index in range(5):
 		var wx := 22.0 + index * maxf(70, size.x / 5)
 		var wy := size.y * 0.74 + fmod(index * 21.0, 38)
 		draw_rect(Rect2(wx-3,wy-3,31,22),Color("142a35"))
-		for pane in range(3): draw_rect(Rect2(wx+pane*9,wy,5,13),Color(0.80,0.46,0.20,0.17))
+		for pane in range(3):
+			var tint := Color(0.80, 0.46, 0.20, 0.17)
+			if index % 2 == 0 and pane != 1:
+				tint = tint.lerp(Color("9acdd8a6"), light)
+			draw_rect(Rect2(wx+pane*9,wy,5,13), tint)
 	for index in range(9):
 		var point := Vector2(lx + sin(index*7.3+clock*0.18)*48, ly + 35 + fmod(index*13.0 + clock*5, 65))
 		draw_rect(Rect2(point,Vector2.ONE),Color(0.97,0.74,0.4,0.17))
@@ -438,20 +470,9 @@ func _draw_scenery() -> void:
 	draw_rect(Rect2(0,bench,size.x,15),Color("49362c"))
 	draw_rect(Rect2(0,bench,size.x,3),Color("ae7442"))
 	draw_line(Vector2(0,bench+6),Vector2(size.x,bench+6),Color("70482e"),2)
-	var blueprint := Vector2(size.x*0.56-46,bench-24)
-	draw_rect(Rect2(blueprint,Vector2(92,27)),Color("213f53"))
-	draw_rect(Rect2(blueprint+Vector2(2,2),Vector2(88,23)),Color("6f94a0"),false,1)
-	draw_circle(blueprint+Vector2(37,13),7,Color("afbea7"),false,1)
-	draw_line(blueprint+Vector2(12,20),blueprint+Vector2(75,20),Color("a6b79f"),1)
-	draw_line(blueprint+Vector2(37,4),blueprint+Vector2(37,22),Color("a6b79f"),1)
 	draw_rect(Rect2(15,bench-16,13,16),Color("715347"))
 	draw_rect(Rect2(17,bench-14,7,12),Color("a28266"))
 	draw_rect(Rect2(28,bench-12,5,8),Color("715347"),false,2)
-	var key_at := Vector2(size.x*0.72,bench-4)
-	draw_line(key_at,key_at+Vector2(20,-9),Color("172e39"),7)
-	draw_line(key_at,key_at+Vector2(20,-9),Color("8c9b95"),4)
-	draw_line(key_at+Vector2(18,-10),key_at+Vector2(23,-16),Color("b6c2ae"),3)
-	draw_line(key_at+Vector2(20,-8),key_at+Vector2(27,-10),Color("b6c2ae"),3)
 
 func hero_frame() -> String:
 	if model.grabbed_crate_id >= 0 or model.is_pulling(): return "grab"
@@ -500,6 +521,7 @@ func _draw_cranes() -> void:
 		Vector2(crane_rail.size.x * PIXELS_PER_CELL / cell, 2.0 - CRANE_TOP))
 	for index in range(CRANE_TRACK_Y.size()):
 		_draw_crane_track(span, index)
+		_draw_rail_discharge(span, index)
 		var crane := model.cranes[index]
 		if not bool(crane.waiting):
 			_draw_crane(span, crane, index)
@@ -515,6 +537,28 @@ func _draw_crane_track(span: Rect2, index: int) -> void:
 	for x in range(5, int(model.tuning.columns * PIXELS_PER_CELL), 36):
 		draw_rect(Rect2(x - 1, y - 1.0, 3.0, 3.0), INK)
 		draw_rect(Rect2(x, y - 1.0, 1.0, 1.0), CRANE_LIGHT[index])
+
+func _draw_rail_discharge(span: Rect2, index: int) -> void:
+	var effect := model.overload
+	if effect.phase == StackCraneOverload.Phase.NORMAL:
+		return
+	var y: float = CRANE_TRACK_Y[index]
+	var frame := floori(model.elapsed * 9.0)
+	var active := effect.phase == StackCraneOverload.Phase.ACTIVE
+	var fading := effect.phase == StackCraneOverload.Phase.FADING
+	var energy := clampf((effect.phase_end - model.elapsed) / effect.FADE_TIME, 0, 1) if fading else 1.0
+	for spot in range(2):
+		var x := 8 + posmod(frame * 13 + index * 57 + spot * 109, int(span.size.x) - 24)
+		var tip := Vector2(x + roundf(span.position.x), y - 3 + posmod(frame + spot, 3))
+		if active:
+			# Stepped pixel arcs sit just above the rail, behind each trolley.
+			for offset in [Vector2(-4, 0), Vector2(-2, -1), Vector2(0, -3), Vector2(2, -2), Vector2(4, -1)]:
+				_draw_crane_rect(Rect2(tip + offset, Vector2(2, 2)), span, RAIL_BLUE)
+			_draw_crane_rect(Rect2(tip + Vector2(0, -3), Vector2(2, 1)), span, Color("e2f8ff"))
+		else:
+			var tint := EFFECT_AMBER if (frame + spot + index) % 2 == 0 else RAIL_BLUE
+			_draw_crane_rect(Rect2(tip, Vector2(2, 2)), span, Color(tint, energy))
+			_draw_crane_rect(Rect2(tip + Vector2(3, -2), Vector2.ONE), span, Color(tint, energy))
 
 func _draw_crane_end_stops(span: Rect2) -> void:
 	var width := minf(StackCraneRepair.END_STOP_WIDTH, -span.position.x)
@@ -561,6 +605,13 @@ func _draw_crane_crate(position: Vector2, span: Rect2, variant: int, material: S
 func _draw_crane(span: Rect2, crane: Dictionary, index: int) -> void:
 	var cargo := _crane_cargo_origin(crane)
 	var center := _crane_center(cargo, index)
+	if model.overload.phase == StackCraneOverload.Phase.ACTIVE \
+			and not model.repair.workers[index].broken and model.state == "playing":
+		var behind := -int(crane.direction)
+		for stripe in range(2):
+			var length := 9 - 4 * stripe
+			var start_x := center.x + behind * (11 + stripe * 2) - (length if behind < 0 else 0)
+			_draw_crane_rect(Rect2(start_x, center.y + stripe * 3 - 2, length, 1), span, RAIL_BLUE)
 	var jaw_y := cargo.y - 2.0
 	var body: Color = CRANE_BODY[index]
 	var light: Color = CRANE_LIGHT[index]

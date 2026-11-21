@@ -66,7 +66,11 @@ func run() -> void:
 	helmet_multiple_hits()
 	loss_conditions()
 	crush_beside_support()
-	crane_cycles()
+	overload_schedule()
+	overload_transitions()
+	var normal_drops := crane_cycles(false)
+	var fast_drops := crane_cycles(true)
+	check(absi(fast_drops - normal_drops * 2) <= 3, "Open-board throughput roughly doubles over multiple passes")
 	crane_contention()
 	storage()
 	broken_crate_history()
@@ -1402,10 +1406,91 @@ func crush_beside_support() -> void:
 	view.free()
 
 
-func crane_cycles() -> void:
+func overload_schedule() -> void:
+	const Phase = StackCraneOverload.Phase
+	var clock := StackCraneOverload.new()
+	clock.reset(1234)
+	var first_warning := clock.phase_end
+	check(clock.phase == Phase.NORMAL and first_warning >= 30 and first_warning <= 60,
+		"The first warning is scheduled from match start")
+	for cycle in range(3):
+		var warning := clock.phase_end
+		clock.advance(warning - Simulation.STEP)
+		check(clock.phase == Phase.NORMAL, "Normal travel lasts until the warning")
+		clock.advance(warning)
+		check(clock.phase == Phase.WARNING and clock.rate() == 1 and clock.phase_end == warning + 1.5,
+			"Warning lasts 1.5 seconds at ordinary crane speed")
+		clock.advance(clock.phase_end)
+		var end := clock.phase_end
+		check(clock.phase == Phase.ACTIVE and clock.rate() == 2 and end - warning - 1.5 >= 8 and end - warning - 1.5 <= 12,
+			"Both rails get one shared 8–12 second acceleration")
+		clock.advance(end)
+		check(clock.phase == Phase.FADING and clock.rate() == 1, "Normal speed resumes as the last sparks fade")
+		clock.advance(clock.phase_end)
+		check(clock.phase == Phase.NORMAL and clock.phase_end >= end + 30 and clock.phase_end <= end + 60,
+			"The next interval starts at the end of acceleration, including the fade")
+	clock.reset(1234)
+	check(clock.phase_end == first_warning, "The schedule is reproducible from its match seed")
+	clock.reset(4321)
+	check(clock.phase_end != first_warning, "Another match seed chooses a fresh interval")
+
+
+func overload_transitions() -> void:
 	var game := empty()
 	game.cranes_enabled = true
+	var moving := game.cranes[0]
+	var waiting := game.cranes[1]
+	moving.x = 4.3
+	moving.release_column = 4
+	waiting.waiting = true
+	waiting.loaded = false
+	waiting.wait_remaining = 0.8
 	var stride := game.tuning.crane_speed * Simulation.STEP
+	game.overload.phase = StackCraneOverload.Phase.WARNING
+	game.overload.phase_end = Simulation.STEP
+	game.watch_cap_time = 5.0
+	var cap := {"watch_held": true}
+	# Two real ticks under the cap buy one tick of world time.
+	game.advance(Simulation.STEP, 0, false, false, false, cap)
+	check(game.overload.phase == StackCraneOverload.Phase.WARNING and moving.x == 4.3,
+		"The watch cap slows the shared clock before acceleration")
+	game.advance(Simulation.STEP, 0, false, false, false, cap)
+	check(game.overload.phase == StackCraneOverload.Phase.ACTIVE and is_equal_approx(moving.x, 4.3 + 2 * stride)
+		and is_equal_approx(waiting.wait_remaining, 0.8 - 2 * Simulation.STEP),
+		"Entering overload preserves partial travel and wait under the cap")
+	for tick in range(4):
+		game.advance(Simulation.STEP, 0)
+	check(game.crates.size() == 1 and not moving.loaded and moving.release_column == 4 and game.crates[0].x == 4,
+		"The accelerated trip releases its original load at its original target")
+	var x := float(moving.x)
+	var wait := float(waiting.wait_remaining)
+	game.overload.phase_end = game.elapsed + Simulation.STEP
+	for column in range(game.tuning.columns):
+		game.add_crate(column, game.tuning.rows - 1)
+	check(game._begin_clear_if_full(), "A full row starts the clear")
+	var now := game.elapsed
+	game.advance(0.25, 0.0)
+	check(game.elapsed == now and game.overload.phase == StackCraneOverload.Phase.ACTIVE
+		and moving.x == x and waiting.wait_remaining == wait, "The receiver freezes the overload clock and both rails")
+	while game.state == "clearing":
+		game.advance(Simulation.STEP, 0)
+	game.advance(Simulation.STEP, 0)
+	check(game.overload.phase == StackCraneOverload.Phase.FADING and is_equal_approx(moving.x, x + stride)
+		and is_equal_approx(waiting.wait_remaining, wait - Simulation.STEP) and not moving.loaded,
+		"Leaving overload keeps the route, the spent load and the remaining wait")
+	game.reset(7481)
+	check(game.elapsed == 0 and game.overload.phase == StackCraneOverload.Phase.NORMAL and game.overload.phase_end >= 30,
+		"Restart clears overload and fading immediately")
+
+
+func crane_cycles(overloaded: bool) -> int:
+	var game := empty()
+	game.cranes_enabled = true
+	if overloaded:
+		game.overload.phase = StackCraneOverload.Phase.ACTIVE
+		game.overload.phase_end = 25.0
+	var rate := game.overload.rate()
+	var stride := game.tuning.crane_speed * Simulation.STEP * rate
 	var released := [false, false]
 	var passes := [0, 0]
 	var waits := []
@@ -1460,7 +1545,7 @@ func crane_cycles() -> void:
 				wait_length[index] = crane.wait_remaining
 			elif before.waiting and not crane.waiting:
 				var waited := (tick - int(wait_started[index])) * Simulation.STEP
-				check(crane.loaded and crane.x == entrance and absf(waited - float(wait_length[index])) <= Simulation.STEP + Simulation.EPS,
+				check(crane.loaded and crane.x == entrance and absf(waited - float(wait_length[index]) / rate) <= Simulation.STEP + Simulation.EPS,
 					"The next loaded pass starts offstage only after its own wait")
 				saw_independent_entry = saw_independent_entry or game.cranes[1 - index].waiting
 				released[index] = false
@@ -1472,6 +1557,8 @@ func crane_cycles() -> void:
 	check(stable_appearances, "A crane appearance must remain stable until the start of another loaded pass")
 	check(waits.size() >= 8 and waits.min() < waits.max() and saw_independent_entry,
 		"Return times must vary and allow one crane to re-enter while the other is still waiting")
+
+	return passes[0] + passes[1]
 
 
 func crane_contention() -> void:
@@ -1847,11 +1934,20 @@ func app_flow() -> void:
 	check(app.session == 2 and app.model.score == 0, "Restart must start a fresh party")
 	app._input(arrow_up)
 	check(app.jump_pending, "Arrow Up must queue the ordinary jump during personal play")
+	app.model.overload.phase = StackCraneOverload.Phase.ACTIVE
+	app.model.overload.phase_end = app.model.elapsed + 0.01
+	var paused_time: float = app.model.elapsed
+	var paused_cranes: Array = app.model.cranes.duplicate(true)
 	app._pause()
+	app._process(0.5)
+	check(app.model.elapsed == paused_time and app.model.overload.phase == StackCraneOverload.Phase.ACTIVE
+		and app.model.cranes == paused_cranes, "Pause freezes the active effect and both crane routes")
 	app._input(arrow_up)
 	check(not app.jump_pending, "Arrow Up must not queue a jump on the pause panel")
 	app.buttons.restart.pressed.emit()
 	await process_frame
+	check(app.model.overload.phase == StackCraneOverload.Phase.NORMAL and app.model.overload.phase_end >= 30,
+		"The restart button selects a new ordinary interval")
 	check(app.session == 3 and app.profile.matches.is_empty() and not FileAccess.file_exists(path),
 		"Restarting an unfinished match must discard it without saving")
 	app._pause()
