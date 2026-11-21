@@ -16,6 +16,9 @@ window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/handheld/orientation=6
 
+[internationalization]
+locale/translations=PackedStringArray("res://game/locale/ru.po", "res://game/locale/es.po")
+
 [input_devices]
 pointing/emulate_mouse_from_touch=true
 

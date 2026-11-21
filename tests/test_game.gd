@@ -77,6 +77,7 @@ func run() -> void:
 	random_sessions()
 	demo_scenarios()
 	demo_games()
+	locale_rules()
 	await app_flow()
 	await vibration_toggle()
 	if not failures.is_empty():
@@ -1722,6 +1723,22 @@ func demo_games() -> void:
 	print("DEMO_PASS: %d jumps, %d drops, %d lines, plus a verified loss and restart" % [demo.jumps, demo.drops, demo.lines])
 
 
+func locale_rules() -> void:
+	for system_locale: String in ["ru-RU", "RU_ru", "es-MX", "ES_es", "en-US", "de-DE", ""]:
+		var expected := system_locale.left(2).to_lower()
+		if expected not in ["es", "ru"]:
+			expected = "en"
+		check(Profile.resolve_locale("system", system_locale) == expected, "Resolve system locale " + system_locale)
+	check(Profile.resolve_locale("en", "ru_RU") == "en", "An explicit choice overrides the device")
+	var saved_locale := TranslationServer.get_locale()
+	TranslationServer.set_locale("ru")
+	for count: int in [2, 5, 11, 21, 22, 25]:
+		var ending := "РЯД" if count == 21 else ("РЯДА" if count in [2, 22] else "РЯДОВ")
+		check(TranslationServer.translate_plural("CHAIN · %d ROW", "CHAIN · %d ROWS", count)
+			== "ЦЕПОЧКА · %d " + ending, "Russian chain caption for %d rows" % count)
+	TranslationServer.set_locale(saved_locale)
+
+
 func vibration_toggle() -> void:
 	var path := "user://test-vibration-profile.json"
 	var app = load("res://game/main.tscn").instantiate()
@@ -1740,14 +1757,14 @@ func vibration_toggle() -> void:
 	var toggle: Button = app.buttons.vibration
 	toggle.grab_focus()
 	toggle.button_pressed = true
-	check(app.profile.vibration and toggle.text.ends_with("Вкл") and toggle.button_pressed, "Enabled vibration must immediately show a clear on state")
+	check(app.profile.vibration and toggle.text == TranslationServer.translate("Vibration: On") and toggle.button_pressed, "Enabled vibration must immediately show a clear on state")
 	check(probe.pulses == [60], "Enabling vibration must request one short preview pulse")
 	for state in ["normal", "hover", "pressed", "hover_pressed", "focus", "disabled"]:
 		var style: StyleBoxFlat = toggle.get_theme_stylebox(state)
 		check(is_zero_approx(style.bg_color.a) if state == "focus" else style.bg_color.a >= 0.7 and style.bg_color.a <= 0.9, "Vibration must use the shared translucent action styles without a black fallback: " + state)
 		check(style == app.theme.get_stylebox(state, "Button"), "Vibration must share every action state: " + state)
 	toggle.button_pressed = false
-	check(not app.profile.vibration and toggle.text.ends_with("Выкл") and probe.pulses == [60], "Disabling vibration must update the state without a pulse")
+	check(not app.profile.vibration and toggle.text == TranslationServer.translate("Vibration: Off") and probe.pulses == [60], "Disabling vibration must update the state without a pulse")
 	app.profile.vibration = true
 	probe.unlocked = true
 	probe.effect("jump", false)
@@ -1831,7 +1848,7 @@ func app_flow() -> void:
 	for dimensions in [Vector2i(320, 568), Vector2i(568, 320), Vector2i(390, 844), Vector2i(844, 390),
 			Vector2i(344, 882), Vector2i(882, 344), Vector2i(768, 1004), Vector2i(1004, 768), Vector2i(360, 360)]:
 		root.size = dimensions
-		for menu in ["menu", "settings", "statistics", "paused", "over"]:
+		for menu in ["menu", "settings", "language", "statistics", "paused", "over"]:
 			app._show_screen(menu)
 			if menu == "settings" and not OS.has_feature("android"):
 				# Include the real Android-only row when checking the smallest layouts.
@@ -1862,7 +1879,7 @@ func app_flow() -> void:
 		var labels: Array[String] = []
 		for label in app.panel.find_children("*", "Label", true, false):
 			labels.append(label.text)
-		check(labels == ["Смена окончена", "Счёт: 200"], "Game over must display only its unchanged title and final score for either loss")
+		check(labels == [str(TranslationServer.translate("Shift over")), TranslationServer.translate("Score: %d") % 200], "Game over must display only its unchanged title and final score for either loss")
 		check(app.model.loss_reason == reason and app.model.lines == 2, "Hiding result details must preserve the model's reason and line count")
 	for dimensions in [Vector2i(390, 844), Vector2i(844, 390), Vector2i(768, 1004)]:
 		root.size = dimensions

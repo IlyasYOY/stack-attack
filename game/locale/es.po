@@ -1,0 +1,214 @@
+msgid ""
+msgstr ""
+"Language: es\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Play"
+msgstr "Jugar"
+
+msgid "Statistics"
+msgstr "Estadísticas"
+
+msgid "Settings"
+msgstr "Ajustes"
+
+msgid "Pause"
+msgstr "Pausa"
+
+msgid "Resume"
+msgstr "Continuar"
+
+msgid "Restart"
+msgstr "Reiniciar"
+
+msgid "Main menu"
+msgstr "Menú principal"
+
+msgid "Shift over"
+msgstr "Fin del turno"
+
+msgid "Play again"
+msgstr "Volver a jugar"
+
+msgid "Music"
+msgstr "Música"
+
+msgid "Sound"
+msgstr "Sonido"
+
+msgid "Back"
+msgstr "Volver"
+
+msgid "Score: %d"
+msgstr "Puntos: %d"
+
+msgid "Vibration: On"
+msgstr "Vibración: Sí"
+
+msgid "Vibration: Off"
+msgstr "Vibración: No"
+
+msgid "Swap"
+msgstr "Cambiar"
+
+msgid "Pick up"
+msgstr "Recoger"
+
+msgid "Head"
+msgstr "Cabeza"
+
+msgid "Hands"
+msgstr "Manos"
+
+msgid "Feet"
+msgstr "Pies"
+
+msgid "Rocket boots"
+msgstr "Botas cohete"
+
+msgid "Hard hat"
+msgstr "Casco"
+
+msgid "Work gloves"
+msgstr "Guantes de trabajo"
+
+msgid "Mallet"
+msgstr "Mazo"
+
+msgid "Strong arms"
+msgstr "Brazos fuertes"
+
+msgid "Speed boots"
+msgstr "Botas veloces"
+
+msgid "Headlamp"
+msgstr "Casco con luz"
+
+msgid "Spring boots"
+msgstr "Botas con muelles"
+
+msgid "Watchmaker's cap"
+msgstr "Gorro de relojero"
+
+msgid "Hunting boots"
+msgstr "Botas de caza"
+
+msgid "Engineer's goggles"
+msgstr "Gafas de ingeniero"
+
+msgid "Slingshot"
+msgstr "Tirachinas"
+
+msgid "Crushed by a crate"
+msgstr "Aplastado por una caja"
+
+msgid "Warehouse full"
+msgstr "Almacén lleno"
+
+msgid "Crushed by iron"
+msgstr "Aplastado por hierro"
+
+msgid "Caught in a trap"
+msgstr "Atrapado en un cepo"
+
+msgid "Hit by a falling mechanic"
+msgstr "Golpeado al caer el mecánico"
+
+msgid "Match history"
+msgstr "Historial de partidas"
+
+msgid "No matches yet"
+msgstr "Aún no hay partidas"
+
+msgid "Matches played"
+msgstr "Partidas jugadas"
+
+msgid "High score"
+msgstr "Récord"
+
+msgid "Rows / Crates"
+msgstr "Filas / Cajas"
+
+msgid "Most rows"
+msgstr "Máx. filas"
+
+msgid "Best combo"
+msgstr "Mejor combo"
+
+msgid "Time: avg / max"
+msgstr "Tiempo: medio / máx."
+
+msgid "Crates broken"
+msgstr "Cajas rotas"
+
+msgid "Date unavailable"
+msgstr "Fecha desconocida"
+
+msgid "%s, score %s, %s"
+msgstr "%s, puntos %s, %s"
+
+msgid "Old record"
+msgstr "Récord anterior"
+
+msgid "Collapse"
+msgstr "Ocultar detalles"
+
+msgid "Show details"
+msgstr "Ver detalles"
+
+msgid "Date and score saved"
+msgstr "Fecha y puntos guardados"
+
+msgid "Rows %s · Crates %s · x%s"
+msgstr "Filas %s · Cajas %s · x%s"
+
+msgid "Duration %s"
+msgstr "Duración %s"
+
+msgid "Rows %s"
+msgstr "Filas %s"
+
+msgid "Crates %s"
+msgstr "Cajas %s"
+
+msgid "Best combo x%s"
+msgstr "Mejor combo x%s"
+
+msgid "Broken %s"
+msgstr "Rotas %s"
+
+msgid "Previous page"
+msgstr "Página anterior"
+
+msgid "Next page"
+msgstr "Página siguiente"
+
+msgid "Could not read save data"
+msgstr "No se pudo leer la partida"
+
+msgid "Save damaged. Using defaults."
+msgstr "Datos dañados. Se usan los ajustes iniciales."
+
+msgid "Could not save data"
+msgstr "No se pudieron guardar los datos"
+
+msgid "Language"
+msgstr "Idioma"
+
+msgid "Language · %s"
+msgstr "Idioma · %s"
+
+msgid "System default"
+msgstr "Del sistema"
+
+msgid "CHAIN · %d ROW"
+msgid_plural "CHAIN · %d ROWS"
+msgstr[0] "CADENA · %d FILA"
+msgstr[1] "CADENA · %d FILAS"
+
+msgid "Space"
+msgstr "Espacio"
+
+msgid "Shift"
+msgstr "Mayús"

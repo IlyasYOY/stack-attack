@@ -41,6 +41,7 @@ group.add_argument('--mallet-only', action='store_true', help='Check wooden mall
 group.add_argument('--gloves-only', action='store_true', help='Check hold-to-pull controls, charges and rewards')
 group.add_argument('--release-only', action='store_true', help='Check the new equipment controls in Chromium')
 group.add_argument('--release-video', action='store_true', help='Record workshop release scenarios from the game canvas')
+group.add_argument('--locales-only', action='store_true', help='Check system locales and saved language choices')
 args = parser.parse_args()
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -449,7 +450,7 @@ def score_only_result(page):
     snapshot = state(page)
     assert snapshot['screen'] == 'over'
     labels = [item['text'] for item in snapshot['panel']['items'] if item['kind'] == 'Label']
-    assert labels == ['Смена окончена', f"Счёт: {snapshot['score']}"], ('Unexpected game-over details', labels)
+    assert labels == ['Shift over', f"Score: {snapshot['score']}"], ('Unexpected game-over details', labels)
     assert {'again','home'} <= snapshot['buttons'].keys()
     label = next(item for item in snapshot['panel']['items'] if item['name'] == 'result_score')
     assert label['alignment'] == 1
@@ -743,7 +744,7 @@ def ui_batch_checks(browser):
     assert enabled['vibration_styles']['focus'] == 0
     assert all(.7 <= value <= .9 for key,value in enabled['vibration_styles'].items() if key != 'focus')
     toggle = next(item for item in enabled['panel']['items'] if item['name'] == 'vibration')
-    assert toggle['text'] == 'Виброотклик: Вкл'
+    assert toggle['text'] == 'Vibration: On'
     on = page.screenshot()
     x,y,w,h = enabled['buttons']['vibration']
     a,b = point(page,[x+2,y+8,1,1]),point(page,[x+6,y+h-8,1,1])
@@ -770,6 +771,51 @@ def ui_batch_checks(browser):
 def personal_statistics(snapshot):
     profile = snapshot['profile']
     return {name: profile[name] for name in ('matches', 'statistics', 'records')}
+
+
+def locale_checks(browser):
+    cases = [('en-US', 'en', 'Play'), ('ru-RU', 'ru', 'Играть'),
+             ('es-MX', 'es', 'Jugar'), ('de-DE', 'en', 'Play')]
+    for system, expected, play in cases:
+        with browser.new_context(locale=system, viewport={'width': 320, 'height': 568}, has_touch=True) as context:
+            page = context.new_page()
+            page.goto(URL)
+            wait_screen(page, 'menu')
+            assert state(page)['profile']['language'] == 'system'
+            assert page.locator('html').get_attribute('lang') == expected
+            assert statistics_items(page)['play'] == play
+            button(page, 'settings', True)
+            wait_screen(page, 'settings')
+            fixed_panel(page)
+            button(page, 'language', True)
+            wait_screen(page, 'language')
+            choices = statistics_items(page)
+            assert [choices[key] for key in ('en', 'ru', 'es')] == ['English', 'Русский', 'Español']
+            assert state(page)['missing_menu_glyphs'] == ''
+            assert choices['system'] == {'en': 'System default', 'ru': 'Как в системе', 'es': 'Del sistema'}[expected]
+            fixed_panel(page)
+            if system != 'ru-RU':
+                continue
+            button(page, 'es', True)
+            wait_screen(page, 'settings')
+            assert statistics_items(page)['language'] == 'Idioma · Español'
+            page.wait_for_timeout(2800)  # Allow user:// to finish syncing to IndexedDB.
+            page.reload()
+            wait_screen(page, 'menu')
+            assert statistics_items(page)['play'] == 'Jugar'
+            assert state(page)['profile']['language'] == 'es'
+            button(page, 'settings', True)
+            wait_screen(page, 'settings')
+            button(page, 'language', True)
+            wait_screen(page, 'language')
+            button(page, 'system', True)
+            wait_screen(page, 'settings')
+            assert statistics_items(page)['language'] == 'Язык · Как в системе'
+            page.wait_for_timeout(2800)  # Allow user:// to finish syncing to IndexedDB.
+            page.reload()
+            wait_screen(page, 'menu')
+            assert statistics_items(page)['play'] == play
+    print('LOCALES_PASS: system, fallback, manual selection, reload and narrow touch layout', flush=True)
 
 
 def statistics_items(page):
@@ -856,7 +902,7 @@ def statistics_preview(browser):
     button(page, 'statistics', True)
     wait_screen(page, 'statistics')
     assert not state(page)['statistics_view']['preview']
-    assert statistics_items(page)['empty_history'] == 'Партий пока нет'
+    assert statistics_items(page)['empty_history'] == 'No matches yet'
     assert personal_statistics(state(page)) == original
     assert not errors, errors
     context.close()
@@ -876,12 +922,12 @@ def check_match_details(page, index, match):
     ended_at = datetime.fromisoformat(match['ended_at'])
     assert ended_at.strftime('%d.%m.%Y %H:%M:%S') in items[prefix+'date']
     assert str(match['score']) in items[prefix+'score']
-    assert items[prefix+'duration'] == f"Длительность {match_duration(match['duration_ms'])}"
-    assert items[prefix+'reason'] == {'crushed':'Придавило ящиком', 'overflow':'Склад переполнен'}[match['reason']]
-    assert items[prefix+'lines'] == f"Ряды {match['lines']}"
-    assert items[prefix+'crates'] == f"Ящики {match['crates']}"
-    assert items[prefix+'combo'] == f"Лучшее комбо x{match['best_combo']}"
-    assert items[prefix+'broken_crates'] == f"Сломано {match.get('broken_crates', '—')}"
+    assert items[prefix+'duration'] == f"Duration {match_duration(match['duration_ms'])}"
+    assert items[prefix+'reason'] == {'crushed':'Crushed by a crate', 'overflow':'Warehouse full'}[match['reason']]
+    assert items[prefix+'lines'] == f"Rows {match['lines']}"
+    assert items[prefix+'crates'] == f"Crates {match['crates']}"
+    assert items[prefix+'combo'] == f"Best combo x{match['best_combo']}"
+    assert items[prefix+'broken_crates'] == f"Broken {match.get('broken_crates', '—')}"
 
 
 def statistics_match_flow(browser):
@@ -963,16 +1009,16 @@ def statistics_match_flow(browser):
     assert not state(page)['statistics_view']['preview']
     items = statistics_items(page)
     assert items['match_0_score'] == '0' and items['match_1_score'] == '200'
-    assert items['match_0_status'] == 'Склад переполнен' and items['match_1_status'] == 'Придавило ящиком'
+    assert items['match_0_status'] == 'Warehouse full' and items['match_1_status'] == 'Crushed by a crate'
     stats = saved_statistics['statistics']
     expected_items = {
-        'played':'Сыграно', 'played_value':'2', 'best_score_value':'200', 'lines_crates_value':'2 / 20',
+        'played':'Matches played', 'played_value':'2', 'best_score_value':'200', 'lines_crates_value':'2 / 20',
         'broken_crates_value':'0',
-        'max_lines_value':'2', 'best_combo_value':'x2', 'crushed':'Придавило ящиком 1', 'overflow':'Склад переполнен 1',
+        'max_lines_value':'2', 'best_combo_value':'x2', 'crushed':'Crushed by a crate 1', 'overflow':'Warehouse full 1',
         'duration_value':f"{match_duration(stats['average_duration_ms'])} / {match_duration(stats['max_duration_ms'])}",
     }
     assert {name:items[name] for name in expected_items} == expected_items
-    assert all('поражения' not in label.lower() for label in items.values())
+    assert all('defeats' not in label.lower() for label in items.values())
     button(page, 'match_0', True)
     wait_expanded_match(page, 0)
     check_match_details(page, 0, overflow)
@@ -1078,8 +1124,8 @@ def statistics_legacy_profile(browser):
     wait_expanded_match(page, 1)
     items = statistics_items(page)
     assert items['match_1_date'] == old_records[0]['date'] and items['match_1_score'] == '1800'
-    assert items['match_1_legacy'] == 'Старый рекорд'
-    assert 'Сохранены дата и счёт' in items['match_1_legacy_details']
+    assert items['match_1_legacy'] == 'Old record'
+    assert 'Date and score saved' in items['match_1_legacy_details']
     assert not {'match_1_duration', 'match_1_reason', 'match_1_lines', 'match_1_crates', 'match_1_combo'} & items.keys()
     assert not errors, errors
     context.close()
@@ -3877,6 +3923,11 @@ try:
             headless=True, args=['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
                                  '--autoplay-policy=no-user-gesture-required'])
         full_check = not any(vars(args).values())
+        if full_check or args.locales_only:
+            locale_checks(browser)
+        if args.locales_only:
+            browser.close()
+            raise SystemExit(0)
         if full_check or args.overload_only:
             overload_checks(browser, record=args.overload_only)
         if args.overload_only:

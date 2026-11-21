@@ -15,11 +15,11 @@ const ICONS := {
 	"slingshot": preload("res://art/slingshot.png"),
 }
 const SLOTS := StackSimulation.SLOTS
-const NAMES := {"boots": "Ботинки-ракеты", "helmet": "Каска", "gloves": "Рабочие перчатки",
-	"mallet": "Киянка", "strong_arms": "Накачанные руки", "speed_boots": "Сапоги-скороходы",
-	"lamp_helmet": "Каска с фонарём", "spring_boots": "Пружинные ботинки",
-	"watch_cap": "Колпак часовщика", "hunting_boots": "Охотничьи сапоги",
-	"engineer_goggles": "Очки инженера", "slingshot": "Рогатка"}
+const NAMES := {"boots": "Rocket boots", "helmet": "Hard hat", "gloves": "Work gloves",
+	"mallet": "Mallet", "strong_arms": "Strong arms", "speed_boots": "Speed boots",
+	"lamp_helmet": "Headlamp", "spring_boots": "Spring boots",
+	"watch_cap": "Watchmaker's cap", "hunting_boots": "Hunting boots",
+	"engineer_goggles": "Engineer's goggles", "slingshot": "Slingshot"}
 const ACTION_KEYS := {
 	"lamp_helmet": "F", "engineer_goggles": "F", "watch_cap": "F",
 	"gloves": "G", "mallet": "G", "slingshot": "G",
@@ -79,9 +79,9 @@ static func build_pause(panel: PanelContainer, content: VBoxContainer, compact: 
 	var head := _equipped_item("head", charges)
 	var hands := _equipped_item("hands", charges)
 	var feet := _equipped_item("feet", charges)
-	_equipment_slot(text, slots, "Голова", "slot_head", head, charges[head], model.watch_cap_time)
-	_equipment_slot(text, slots, "Руки", "slot_hands", hands, charges[hands])
-	_equipment_slot(text, slots, "Ноги", "slot_feet", feet, charges[feet])
+	_equipment_slot(text, slots, TranslationServer.translate("Head"), "slot_head", head, charges[head], model.watch_cap_time)
+	_equipment_slot(text, slots, TranslationServer.translate("Hands"), "slot_hands", hands, charges[hands])
+	_equipment_slot(text, slots, TranslationServer.translate("Feet"), "slot_feet", feet, charges[feet])
 
 
 static func _equipment_slot(text: Callable, slots: GridContainer, title: String, id: String,
@@ -96,7 +96,7 @@ static func _equipment_slot(text: Callable, slots: GridContainer, title: String,
 	_picture(details, ICONS[item], Vector2.ONE * 24)
 	var remaining := _watch_time_text(watch_time) if item == "watch_cap" else str(charges)
 	var label := _label(text, details, "%s / %d" % [remaining, CAPACITIES[item]], id, 15, GOLD)
-	label.accessibility_name = "%s · %s" % [NAMES[item], label.text]
+	label.accessibility_name = "%s · %s" % [TranslationServer.translate(NAMES[item]), label.text]
 
 
 # Draw outside the badge's content box so the counter, meter and timer keep their space.
@@ -177,7 +177,8 @@ static func update_hud(badges: Dictionary, world: StackWorldView, spring_peak: i
 		plate.visible = charge_count >= 0
 		if plate.visible:
 			plate.position = world.badge_position(item, plate.size)
-			set_action_key(plate, ACTION_KEYS.get(item, "") if world.keyboard_hints and charge_count > 0 else "")
+			var key: String = ACTION_KEYS.get(item, "") if world.keyboard_hints and charge_count > 0 else ""
+			set_action_key(plate, TranslationServer.translate(key) if not key.is_empty() else "")
 			var remaining := str(charge_count)
 			if item == "watch_cap":
 				remaining = _watch_time_text(model.watch_cap_time)
@@ -187,7 +188,7 @@ static func update_hud(badges: Dictionary, world: StackWorldView, spring_peak: i
 					plate.queue_redraw()
 			if count.text != remaining:
 				count.text = remaining
-				count.accessibility_name = "%s · %s" % [NAMES[item], remaining]
+				count.accessibility_name = "%s · %s" % [TranslationServer.translate(NAMES[item]), remaining]
 	var spring: Label = badges.spring_boots
 	var meter := spring.get_parent().get_node("spring_charge_meter") as Control
 	var stages := maxi(model.spring_charge_stages, spring_peak)
@@ -239,7 +240,7 @@ static func _draw_swap(button: Button) -> void:
 
 
 static func _watch_time_text(time: float) -> String:
-	return ("%.1f" % (ceilf(time * 10.0) / 10.0)).replace(".", ",")
+	return TextServerManager.get_primary_interface().format_number("%.1f" % (ceilf(time * 10.0) / 10.0), TranslationServer.get_locale())
 
 
 static func _draw_watch_reserve(plate: PanelContainer) -> void:

@@ -81,6 +81,7 @@ func _ready() -> void:
 		qa_enabled = bool(JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('qa') === '1'"))
 	var profile_path := StackProfile.SAVE_PATH + ".qa" if qa_enabled else StackProfile.SAVE_PATH
 	profile = StackProfile.new(profile_path)
+	_apply_language()
 	model = StackSimulation.new(TUNING, 1)
 	demo = StackDemo.new(TUNING)
 	sound = StackSound.new()
@@ -182,13 +183,14 @@ func _clear_ui() -> void:
 	gear_counts.clear()
 
 
-func _show_screen(value: String) -> void:
+func _show_screen(value: String, focus_name := "") -> void:
 	if value != "over":
 		qa_result_demo = false
 	if value != "statistics":
 		qa_statistics_preview = null
 	var previous_focus := get_viewport().gui_get_focus_owner()
-	var focus_name := str(previous_focus.name) if previous_focus != null else ""
+	if focus_name.is_empty() and previous_focus != null:
+		focus_name = str(previous_focus.name)
 	if value != screen:
 		menu_last_input_ms = Time.get_ticks_msec()
 		menu_opacity = 1.0
@@ -213,25 +215,25 @@ func _show_screen(value: String) -> void:
 	match screen:
 		"menu":
 			_heading(content, "Stack Attack", 32)
-			_button(content, "Играть", "play", _start_game)
-			_button(content, "Статистика", "statistics", _open_statistics)
-			_button(content, "Настройки", "settings", func(): _show_screen("settings"))
+			_button(content, tr("Play"), "play", _start_game)
+			_button(content, tr("Statistics"), "statistics", _open_statistics)
+			_button(content, tr("Settings"), "settings", func(): _show_screen("settings"))
 			_apply_menu_opacity()
 		"paused":
-			_heading(content, "Пауза")
+			_heading(content, tr("Pause"))
 			EQUIPMENT_VIEW.build_pause(panel, content, _compact_panel(), model, _text)
-			_button(content, "Продолжить", "resume", func(): _show_screen("playing"))
-			_button(content, "Начать заново", "restart", _start_game)
-			_button(content, "Главное меню", "home", func(): _show_screen("menu"))
+			_button(content, tr("Resume"), "resume", func(): _show_screen("playing"))
+			_button(content, tr("Restart"), "restart", _start_game)
+			_button(content, tr("Main menu"), "home", func(): _show_screen("menu"))
 		"over":
-			_heading(content, "Смена окончена")
+			_heading(content, tr("Shift over"))
 			_result_score(content)
 			if model.loss_reason in ["metal_crushed", "trap", "mechanic"]:
 				_text(content, STATISTICS_VIEW.loss_description(model.loss_reason), 14, MINT)
-			_button(content, "Играть снова", "again", _start_game)
-			_button(content, "Главное меню", "home", func(): _show_screen("menu"))
+			_button(content, tr("Play again"), "again", _start_game)
+			_button(content, tr("Main menu"), "home", func(): _show_screen("menu"))
 			if not profile.last_error.is_empty():
-				_text(content, profile.last_error, 12)
+				_text(content, tr(profile.last_error), 12)
 		"statistics":
 			var display_profile := qa_statistics_preview if qa_statistics_preview != null else profile
 			var margins := panel.get_theme_stylebox("panel").get_minimum_size()
@@ -240,20 +242,66 @@ func _show_screen(value: String) -> void:
 				display_profile.records, first_match, expanded_match, _button, _text, _change_statistics,
 				func(): _show_screen("menu"))
 		"settings":
-			_heading(content, "Настройки")
+			_heading(content, tr("Settings"))
 			if _compact_panel():
 				var row := HBoxContainer.new()
 				content.add_child(row)
-				_slider(_column(row), "Музыка", "music", profile.music)
-				_slider(_column(row), "Звуки", "effects", profile.effects)
+				_slider(_column(row), tr("Music"), "music", profile.music)
+				_slider(_column(row), tr("Sound"), "effects", profile.effects)
 			else:
-				_slider(content, "Музыка", "music", profile.music)
-				_slider(content, "Звуки", "effects", profile.effects)
+				_slider(content, tr("Music"), "music", profile.music)
+				_slider(content, tr("Sound"), "effects", profile.effects)
+			_language_option(content)
 			if OS.has_feature("android") or (qa_enabled and qa_android_settings):
 				_vibration_option(content)
-			_button(content, "Назад", "back", func(): _show_screen("menu"))
+			_button(content, tr("Back"), "back", func(): _show_screen("menu"))
+		"language":
+			_heading(content, tr("Language"))
+			for code: String in StackProfile.LANGUAGES:
+				var option := _button(content, _language_name(code), code, _select_language.bind(code))
+				option.toggle_mode = true
+				option.set_pressed_no_signal(code == profile.language)
+			_button(content, tr("Back"), "back", func(): _show_screen("settings", "language"))
 	_position_panel()
 	_focus_panel.call_deferred(panel, focus_name)
+
+
+func _apply_language() -> void:
+	var locale := OS.get_locale()
+	if OS.has_feature("web"):
+		locale = str(JavaScriptBridge.get_interface("navigator").language)
+	TranslationServer.set_locale(StackProfile.resolve_locale(profile.language, locale))
+	if OS.has_feature("web"):
+		var document := JavaScriptBridge.get_interface("document")
+		document.documentElement.lang = TranslationServer.get_locale()
+		document.title = "Stack Attack"
+
+
+func _language_option(content: Control) -> void:
+	var language := _button(content, tr("Language · %s") % _language_name(profile.language),
+		"language", func(): _show_screen("language", profile.language))
+	var room := _panel_width() - panel.get_theme_stylebox("panel").get_minimum_size().x
+	room -= language.get_theme_stylebox("normal").get_minimum_size().x
+	var font_size := language.get_theme_font_size("font_size")
+	while font_size > 12 and theme.default_font.get_string_size(language.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > room:
+		font_size -= 1
+	language.add_theme_font_size_override("font_size", font_size)
+
+
+func _language_name(code: String) -> String:
+	match code:
+		"en": return "English"
+		"ru": return "Русский"
+		"es": return "Español"
+	return tr("System default")
+
+
+func _select_language(code: String) -> void:
+	profile.language = code
+	if profile.save_profile() and OS.has_feature("web"):
+		JavaScriptBridge.force_fs_sync()
+	_apply_language()
+	_show_screen("settings", "language")
 
 
 func _open_statistics() -> void:
@@ -314,7 +362,7 @@ func _panel_width() -> float:
 
 
 func _result_score(parent: Control) -> void:
-	var label := _text(parent, "Счёт: %d" % model.score, 32 if _compact_panel() else 44, GOLD)
+	var label := _text(parent, tr("Score: %d") % model.score, 32 if _compact_panel() else 44, GOLD)
 	label.name = "result_score"
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.autowrap_mode = TextServer.AUTOWRAP_OFF
@@ -401,6 +449,7 @@ func _slider(parent: Control, title: String, id: String, value: float) -> void:
 	var label := _text(parent, "%s · %d%%" % [title, roundi(value * 100)], 16)
 	var slider := HSlider.new()
 	slider.name = id
+	slider.accessibility_name = title
 	slider.min_value = 0
 	slider.max_value = 1
 	slider.step = 0.05
@@ -424,10 +473,10 @@ func _vibration_option(parent: Control) -> void:
 	vibration.toggle_mode = true
 	vibration.custom_minimum_size.y = 48
 	vibration.set_pressed_no_signal(profile.vibration)
-	vibration.text = "Виброотклик: Вкл" if profile.vibration else "Виброотклик: Выкл"
+	vibration.text = tr("Vibration: On") if profile.vibration else tr("Vibration: Off")
 	vibration.toggled.connect(func(enabled: bool):
 		profile.vibration = enabled
-		vibration.text = "Виброотклик: Вкл" if enabled else "Виброотклик: Выкл"
+		vibration.text = tr("Vibration: On") if enabled else tr("Vibration: Off")
 		profile.save_profile()
 		if enabled:
 			sound.preview_vibration())
@@ -462,6 +511,7 @@ func _build_hud() -> void:
 		_update_pickup()
 	var pause := _button(ui, "II", "pause", _pause)
 	pause.text = ""
+	pause.accessibility_name = tr("Pause")
 	pause.icon = preload("res://art/pause_icon.png")
 	pause.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	pause.expand_icon = true
@@ -505,9 +555,9 @@ func _update_pickup() -> void:
 		pickup_button.set_meta("kind", kind)
 		pickup_button.set_meta("charges", item.charges)
 		pickup_button.queue_redraw()
-		found_label.text = EQUIPMENT_VIEW.NAMES[kind]
+		found_label.text = tr(EQUIPMENT_VIEW.NAMES[kind])
 	var equipped := model.equipped_in_slot(kind)
-	var action := "Обменять" if not equipped.is_empty() else "Подобрать"
+	var action := tr("Swap") if not equipped.is_empty() else tr("Pick up")
 	pickup_button.tooltip_text = "%s%s · %s · %d" % [action, " (E)" if show_key else "", found_label.text, item.charges]
 	pickup_button.accessibility_name = pickup_button.tooltip_text
 
@@ -517,6 +567,7 @@ func _update_hud_score() -> void:
 	if score_label.text == value:
 		return
 	score_label.text = value
+	score_label.accessibility_name = tr("Score: %d") % model.score
 	var font_size := 25
 	while font_size > 12 and theme.default_font.get_string_size(score_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > 100:
 		font_size -= 1
@@ -1035,7 +1086,7 @@ func _mallet_effect(event: Dictionary) -> void:
 
 
 func _background_demo() -> bool:
-	return screen in ["menu", "settings", "statistics"] or (qa_enabled and qa_result_demo and screen == "over")
+	return screen in ["menu", "settings", "language", "statistics"] or (qa_enabled and qa_result_demo and screen == "over")
 
 
 func _advance_demo(delta: float) -> bool:
@@ -1222,7 +1273,7 @@ func _publish_qa() -> void:
 			"player": [demo.model.player.x, demo.model.player.y], "facing": demo.model.facing,
 			"state": demo.model.state, "helmet": demo.model.helmet_charges,
 			"separate_model": demo.model != model},
-		"profile": {"music": profile.music, "effects": profile.effects,
+		"profile": {"language": profile.language, "locale": TranslationServer.get_locale(), "music": profile.music, "effects": profile.effects,
 			"matches": profile.matches, "statistics": profile.statistics(), "records": profile.records,
 			"vibration": profile.vibration, "vibration_visible": buttons.has("vibration")},
 		"statistics_view": {"first_match": first_match, "expanded_match": expanded_match,
@@ -1261,12 +1312,13 @@ func _gear_hud_snapshot(count: Label) -> Dictionary:
 
 func _missing_menu_glyphs() -> String:
 	var missing := ""
-	if screen in ["menu", "statistics", "paused"]:
-		for label in ui.find_children("*", "Label", true, false):
-			var font: Font = label.get_theme_font("font")
-			for character in label.text:
-				if character.unicode_at(0) > 32 and not font.has_char(character.unicode_at(0)) and not missing.contains(character):
-					missing += character
+	if panel != null:
+		for control in panel.find_children("*", "Control", true, false):
+			if control is Label or control is Button:
+				var font: Font = control.get_theme_font("font")
+				for character in control.text:
+					if character.unicode_at(0) > 32 and not font.has_char(character.unicode_at(0)) and not missing.contains(character):
+						missing += character
 	return missing
 
 
