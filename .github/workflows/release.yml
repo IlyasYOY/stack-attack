@@ -91,7 +91,9 @@ jobs:
   sign:
     needs: build
     runs-on: ubuntu-24.04
-    environment: android-release
+    environment:
+      name: android-release
+      deployment: false
     permissions:
       contents: read
     outputs:
