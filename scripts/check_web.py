@@ -311,10 +311,10 @@ def sprite_comparison(browser, check):
     width, height = check['viewport']
     source = json.loads((BUILD/'web/build-source.json').read_text())
     commit = html.escape(source['commit'][:12])
-    revision = f'commit {commit}' if source['source_clean'] else f'рабочие изменения поверх {commit}'
+    revision = f'commit {commit}' if source['source_clean'] else f'working tree changes since {commit}'
     cells = []
-    for pose, label in [('idle','Покой'), ('walk_stride','Шаг'), ('walk_recover','Возврат'), ('jump','Прыжок'), ('push','Толкание')]:
-        for facing, direction in [(1,'Вправо'), (-1,'Влево')]:
+    for pose, label in [('idle','Idle'), ('walk_stride','Stride'), ('walk_recover','Recovery'), ('jump','Jump'), ('push','Push')]:
+        for facing, direction in [(1,'Right'), (-1,'Left')]:
             sample = next(p for p in check['poses'] if p['pose'] == pose and p['facing'] == facing and p['boots_equipped'])
             left, top, right, bottom = sample['crop_bounds']
             raw = (ROOT/sample['screenshot']).read_bytes()
@@ -322,14 +322,14 @@ def sprite_comparison(browser, check):
             cells.append(f'<section><h2>{label} · {direction}</h2><div class="crop" style="width:{(right-left)*4}px;height:{(bottom-top)*4}px">'
                          f'<img src="{src}" style="width:{width*4}px;height:{height*4}px;left:{-left*4}px;top:{-top*4}px"></div></section>')
     page = browser.new_page(viewport={'width':700,'height':400}, device_scale_factor=1)
-    page.set_content('<html lang="ru"><meta charset="utf-8"><style>'
+    page.set_content('<html lang="en"><meta charset="utf-8"><style>'
         'body{margin:0;padding:24px;background:#172333;color:#f4e3ba;font:16px sans-serif}h1{font-size:23px;margin:0 0 10px}'
         'p{color:#9eafa5;font-size:13px;margin:6px 0}main{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:18px}'
         'h2{font-size:16px;margin:0 0 8px}section{min-width:0}.crop{position:relative;overflow:hidden;outline:1px solid #617b7b}'
         'img{position:absolute;max-width:none;image-rendering:pixelated}</style>'
-        f'<h1>Ботинки-ракеты · {width}×{height}</h1><p>Web / Chromium · реальные кадры, увеличение 4×</p>'
-        f'<p>Позиция коллизии: (4.3, 10.12) · {revision}</p>'
-        '<p>Одинаковая область кадра для всех направлений и фаз.</p><main>'+''.join(cells)+'</main></html>')
+        f'<h1>Rocket boots · {width}×{height}</h1><p>Web / Chromium · actual frames at 4× scale</p>'
+        f'<p>Collision position: (4.3, 10.12) · {revision}</p>'
+        '<p>Same crop for both directions and all animation phases.</p><main>'+''.join(cells)+'</main></html>')
     page.wait_for_function('Array.from(document.images).every(image => image.complete && image.naturalWidth > 0)')
     path = SHOTS/f'hero-comparison-{width}x{height}.png'
     page.screenshot(path=str(path), full_page=True)

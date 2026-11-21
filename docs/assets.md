@@ -1,25 +1,25 @@
-# Происхождение игровых материалов
+# Game asset credits and sources
 
-| Материал | Источник в проекте | Что проверено |
+| Asset | Project source | Verification |
 | --- | --- | --- |
-| Пиксельные спрайты мастерской | [generate_art.py](../scripts/generate_art.py) | Генератор рисует спрайты и атласы из примитивов. В чистом каталоге вместе с генератором шрифта воспроизводятся пиксели 28 PNG. |
-| Кириллический и латинский bitmap-шрифт | [generate_font.py](../scripts/generate_font.py) | Матрицы глифов заданы в скрипте. Из них получаются атлас и описание `workshop_font.fnt`. |
-| Музыка и эффекты | [generate_audio.py](../scripts/generate_audio.py) | Процедурный синтез. Все 36 WAV в текущей версии воспроизводятся побайтно. |
-| Иконка игры | [icon.svg](../art/icon.svg) | В репозитории есть векторный исходник. Иконка описана как собственная в [художественном брифе](workshop-visual.md). |
+| Workshop pixel sprites | [generate_art.py](../scripts/generate_art.py) | The generator draws sprites and atlases from primitives. Running it and the font generator in a clean directory reproduces 28 PNGs pixel for pixel. |
+| Cyrillic and Latin bitmap font | [generate_font.py](../scripts/generate_font.py) | The script defines the glyph matrices and uses them to produce the atlas and the `workshop_font.fnt` descriptor. |
+| Music and sound effects | [generate_audio.py](../scripts/generate_audio.py) | Procedural synthesis reproduces all 36 WAV files in this version byte for byte. |
+| Game icon | [icon.svg](../art/icon.svg) | The repository includes the vector source. The [art brief](workshop-visual.md) identifies the icon as original work. |
 
-## Восемь PNG с неподтверждёнными условиями распространения
+## Eight additional project PNGs
 
-Следующие файлы из `art/` добавлены в коммите `bd56a63` отдельно от генератора:
+The following files in `art/` were added in commit `bd56a63` separately from the generator. Ilya confirmed that all eight belong to the project.
 
 - `crane_mechanic.png`, `crate_metal.png`
 - `engineer_goggles.png`, `hero_workshop_gear.png`
 - `hunting_boots.png`, `slingshot.png`
 - `traps.png`, `watch_cap.png`
 
-Перед распространением для каждого файла нужно установить автора и правообладателя, происхождение изображения, условия использования исходного материала и разрешение на раздачу PNG в исходниках и сборках. Запишите требуемый текст атрибуции, если он предусмотрен. Когда подтверждение хранится приватно, в публичном описании достаточно указывать установленное происхождение и условия использования.
+Before distribution, document each file’s creator and rights holder, the image’s source, any terms for the source material, and permission to distribute the PNG in source and build packages. Record any required attribution. When the supporting records are private, the public description only needs to state the established origin and terms of use.
 
-Stack Attack, Braid и Dead Cells упоминаются в плане как ориентиры для механик и визуального направления. Происхождение материала и разрешение на его повторное использование — отдельные вопросы. Решение о лицензии кода и игровых материалов принимает правообладатель.
+The plan cites Stack Attack, Braid and Dead Cells as references for mechanics and art direction. An asset’s origin and permission to reuse it are separate questions. The rights holder decides how to license the code and game assets.
 
-## Движок и его компоненты
+## Engine and third-party components
 
-Официальные [LICENSE.txt](https://github.com/godotengine/godot/blob/4.7.2-stable/LICENSE.txt) и [COPYRIGHT.txt](https://github.com/godotengine/godot/blob/4.7.2-stable/COPYRIGHT.txt) взяты из версии Godot, закреплённой в проекте. Копии находятся в [notices](../notices/) и входят в сборку. При обновлении версии движка сверяйте оба файла с соответствующим тегом. [Рекомендации Godot по распространению лицензий](https://docs.godotengine.org/en/stable/about/complying_with_licenses.html).
+The official [LICENSE.txt](https://github.com/godotengine/godot/blob/4.7.2-stable/LICENSE.txt) and [COPYRIGHT.txt](https://github.com/godotengine/godot/blob/4.7.2-stable/COPYRIGHT.txt) come from the Godot version pinned by the project. Copies are in [notices](../notices/) and are included in the build. When updating the engine, compare both files with the corresponding tag. See [Godot’s license distribution guidance](https://docs.godotengine.org/en/stable/about/complying_with_licenses.html).

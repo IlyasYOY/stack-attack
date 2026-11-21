@@ -1,23 +1,23 @@
 # Stack Attack
 
-Самостоятельная 2D-аркада на **Godot 4.7.2 + GDScript** для Android и Web. Два щипца на рельсах привозят ящики. Игрок прыгает, толкает деревянные ящики и заполняет нижний ряд. В игре есть локальная статистика, история матчей, настройки, авторские спрайты и звуки.
+An original 2D arcade game built with **Godot 4.7.2 + GDScript** for Android and Web. Two crane claws travel along rails delivering crates. Jump, push wooden crates and fill the bottom row. The game includes local statistics, match history, settings, and original sprites and sounds.
 
-Стрелки влево и вправо двигают героя, пробел и стрелка вверх — прыжок. Нажмите E или кнопку с круговыми стрелками, чтобы подобрать или обменять вещь. F включает действие слота головы, G — слота рук. Клавиатура и экранные кнопки позволяют одновременно двигаться, удерживать колпак часовщика и стрелять из рогатки.
+Use the left and right arrow keys to move and Space or the up arrow to jump. Press E or tap the circular arrows to pick up or swap an item. F activates the head slot and G activates the hand slot. With either the keyboard or on-screen buttons, you can move, hold down the watchmaker’s cap control and fire the slingshot at the same time.
 
-Каждый уничтоженный деревянный ящик с вероятностью 10% оставляет одну из 12 равновероятных вещей, с вероятностью 3% — капкан. В остальных случаях ящик пуст. Железные ящики составляют 10% новых грузов, двигаются с сильными руками и уходят в приёмник вместе с полным нижним рядом. Правила снаряжения и столкновений собраны в [описании игры](docs/prototype.md).
+Each destroyed wooden crate has a 10% chance of dropping an item (any of the 12 items is equally likely) and a 3% chance of dropping a trap. Otherwise the crate is empty. Iron crates make up 10% of new loads. You can move them with Strong Arms, and they drop into the receiver when the bottom row is full. See the [game rules](docs/prototype.md) for equipment and collisions.
 
-## Запуск Web из исходников
+## Run the Web version from source
 
-Команды выполняются из корня репозитория. Для Linux и macOS нужны обычная сборка Godot 4.7.2 (GDScript), Bash, Git, Make, GNU `timeout`, `curl`, `unzip`, `shasum`, Python 3.13 и `uv`. Сверьте вывод `godot --version` с [.godot-version](.godot-version). Если пакетный менеджер предлагает другую версию, возьмите редактор из [архива Godot 4.7.2](https://godotengine.org/download/archive/4.7.2-stable/).
+Run the commands from the repository root. On Linux and macOS you need the standard Godot 4.7.2 build (GDScript), Bash, Git, Make, GNU `timeout`, `curl`, `unzip`, `shasum`, Python 3.13 and `uv`. Compare the output of `godot --version` with [.godot-version](.godot-version). If your package manager offers a different version, get the editor from the [Godot 4.7.2 archive](https://godotengine.org/download/archive/4.7.2-stable/).
 
-На macOS инструменты командной строки можно установить через Homebrew:
+On macOS you can install the command-line tools with Homebrew.
 
 ```bash
 brew install coreutils python@3.13 uv
 export PATH="$(brew --prefix coreutils)/libexec/gnubin:$PATH"
 ```
 
-Подготовьте окружение Python и шаблоны Web, затем запустите игру:
+Set up the Python environment and Web templates, then start the game.
 
 ```bash
 uv sync --locked --group web --python 3.13
@@ -25,22 +25,22 @@ bash scripts/install_web_templates.sh
 make web
 ```
 
-Скрипт сверяет SHA-512 официального архива шаблонов. `make web` собирает игру и открывает `http://127.0.0.1:8765/`. Нужен браузер с WebGL 2. Чтобы выбрать другой порт, выполните `make web PORT=8766`. Чтобы остановить сервер, нажмите Ctrl+C. Статистика и сохранения привязаны к адресу и порту.
+The script verifies the SHA-512 checksum of the official template archive. `make web` builds the game and opens `http://127.0.0.1:8765/`. Use a browser with WebGL 2 support. To choose another port, run `make web PORT=8766`. Press Ctrl+C to stop the server. Statistics and saves are tied to the address and port.
 
-Для работы в редакторе выполните `godot --editor --path .`. Для проверки импорта, игровых правил и запуска сцены используйте `bash scripts/check.sh`. Браузерный тест запускается отдельно:
+Run `godot --editor --path .` to work in the editor. Run `bash scripts/check.sh` to check imports, game rules and scene startup. Run the browser test separately.
 
 ```bash
 bash scripts/export.sh web
 uv run --locked --group web python scripts/check_web.py
 ```
 
-На Linux тест ищет Chromium в `/usr/bin/chromium`, на macOS — Google Chrome. Другой установленный браузер можно указать через `CHROMIUM_BIN`.
+The test looks for Chromium at `/usr/bin/chromium` on Linux and for Google Chrome on macOS. Set `CHROMIUM_BIN` to use a different installed browser.
 
-## Сборка тестового APK на Linux
+## Build a test APK on Linux
 
-Установите JDK 17 с `keytool`, Android SDK Command-line Tools, Platform Tools, SDK Platform 36 и Build Tools 36.1.0. Установите полные **export templates 4.7.2.stable** через менеджер шаблонов Godot. Скрипт из раздела Web извлекает только Web-шаблоны. В этом проекте APK собирается из готового шаблона без Gradle.
+Install JDK 17 with `keytool`, Android SDK Command-line Tools, Platform Tools, SDK Platform 36 and Build Tools 36.1.0. Install the full **export templates 4.7.2.stable** through Godot’s template manager. The script in the Web section extracts only the Web templates. This project builds the APK from a prebuilt template without Gradle.
 
-Укажите `JAVA_HOME` и `ANDROID_HOME`, добавьте `$JAVA_HOME/bin` в `PATH`. В Godot откройте **Editor Settings → Export → Android**, укажите Java SDK Path и Android SDK Path. Подготовьте ключ для тестовых сборок в каталоге вне репозитория:
+Set `JAVA_HOME` and `ANDROID_HOME` and add `$JAVA_HOME/bin` to `PATH`. In Godot, open **Editor Settings → Export → Android** and set Java SDK Path and Android SDK Path. Prepare a test build key in a directory outside the repository.
 
 ```bash
 python3 scripts/create_debug_key.py "$HOME/.local/share/stack-attack/debug-signing"
@@ -48,29 +48,29 @@ source "$HOME/.local/share/stack-attack/debug-signing/debug-signing.env"
 bash scripts/export.sh android
 ```
 
-При необходимости укажите созданный файл keystore в поле **Debug Keystore** редактора. Команда проверяет подпись и выравнивание APK. Результат — `build/android/stack-attack-prototype-debug.apk`, ARM64, Android API 24+. Для обновления тестовой установки нужен тот же ключ. Удаление старой установки с другой подписью удалит и её локальные данные.
+If needed, select the keystore you created in the editor’s **Debug Keystore** field. The export command verifies the APK signature and alignment. It writes `build/android/stack-attack-prototype-debug.apk` for ARM64, Android API 24+. Updating a test installation requires the same key. Uninstalling an older build with a different signature also deletes its local data.
 
-## Работа в Cockpit
+## Work in Cockpit
 
-В подготовленном окружении Cockpit команда `source /workspace/setup-stack/env.sh` в новом shell выбирает Godot, JDK, Android SDK и Chromium. Эти инструменты и существующий каталог debug-подписи находятся за пределами checkout. После активации перейдите в свой checkout и используйте те же команды проверки и экспорта. Вне Cockpit настройте инструменты по разделам выше.
+In a prepared Cockpit environment, run `source /workspace/setup-stack/env.sh` in each new shell to select Godot, the JDK, the Android SDK and Chromium. These tools and the existing debug signing directory live outside the checkout. After activation, switch to your checkout and use the same check and export commands. Outside Cockpit, set up the tools as described above.
 
-## Готовые сборки
+## Download builds
 
-На каждом PR и при push в `main` задание `headless` проверяет игру и экспортирует Android и Web. Эти проверки завершаются ошибкой при сбое тестов или экспорта.
+On each PR and push to `main`, the `headless` job checks the game and exports it for Android and Web. A failed test or export fails the job.
 
-Для получения архива нужен ручной запуск с правом записи: **Actions → Godot headless checks → Run workflow**. Выберите `main` или нужную ветку этого репозитория с данным workflow. Эквивалент в CLI — `gh workflow run check.yml --ref main`. Ручной запуск повторяет проверки и экспорт для выбранной ревизии, упаковывает файлы и загружает их. После успешной загрузки в разделе **Artifacts** доступен архив на 14 дней. Если исчерпана квота хранения, ручной запуск покажет ошибку на шаге загрузки. Для скачивания нужен вход в GitHub и доступ на чтение репозитория. Архив содержит тестовый APK, Web ZIP, идентификатор коммита, SHA-256 и отчёты Android. CI создаёт временный ключ на каждый запуск.
+To get a build archive, use an account with write access and select **Actions → Godot headless checks → Run workflow**. Choose `main` or another branch of this repository that contains the workflow. The CLI equivalent is `gh workflow run check.yml --ref main`. A manual run repeats the checks and exports for the selected revision, then packages and uploads the files. After a successful upload, the archive is available under **Artifacts** for 14 days. If the storage quota is exhausted, the upload step reports an error. To download, sign in to GitHub with read access to the repository. The archive contains the test APK, Web ZIP, commit ID, SHA-256 checksums and Android reports. CI creates a temporary key for each run.
 
-Распакуйте Web ZIP, запустите сервер из каталога с папкой `web/` и откройте адрес в браузере:
+Extract the Web ZIP and start a server from the directory containing `web/`. Then open the game in your browser.
 
 ```bash
 python3 -m http.server 8765 --bind 127.0.0.1 --directory web
 ```
 
-Адрес игры — `http://127.0.0.1:8765/`. Рядом с `index.html` лежат `GODOT_LICENSE.txt` и `GODOT_COPYRIGHT.txt`. Их можно открыть через тот же HTTP-сервер. Для локальной упаковки чистого коммита после `bash scripts/export.sh all` и полной браузерной проверки используйте `python3 scripts/package_builds.py`.
+The game is at `http://127.0.0.1:8765/`. You can read `GODOT_LICENSE.txt` and `GODOT_COPYRIGHT.txt` alongside `index.html` through the same HTTP server. To package a clean commit locally, run `python3 scripts/package_builds.py` after `bash scripts/export.sh all` and the full browser check.
 
-## Материалы и лицензии
+## Resources and licenses
 
-- [Правила игры и управление](docs/prototype.md)
-- [Происхождение спрайтов, шрифта и звука](docs/assets.md)
-- [Лицензия Godot](notices/GODOT_LICENSE.txt) и [уведомления о компонентах](notices/GODOT_COPYRIGHT.txt). В APK их можно прочитать, открыв его как ZIP и перейдя в `assets/notices/`.
-- Отдельная лицензия для кода и игровых материалов проекта пока не выбрана.
+- [Game rules and controls](docs/prototype.md)
+- [Sprite, font and audio credits](docs/assets.md)
+- [Godot license](notices/GODOT_LICENSE.txt) and [third-party notices](notices/GODOT_COPYRIGHT.txt). To read them in the APK, open it as a ZIP and look in `assets/notices/`.
+- The project has yet to select a separate license for its code and game assets.

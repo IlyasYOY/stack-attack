@@ -1,203 +1,212 @@
-Рабочий документ для обсуждения и постепенной разработки игры по мотивам Stack Attack для Android и Web. Сначала определяем желаемую игру и технические решения, затем проверяем первый играбельный этап и уточняем дальнейшее развитие.
+Working document for discussing and developing a game inspired by Stack Attack for Android and Web. First we define the game we want and the technical choices, then test the first playable milestone and use what we learn to plan further development.
 
-**Сейчас:** базовая партия принята ранее. Для выпуска 19 ноября согласованы железные ящики, капканы, колпак часовщика, охотничьи сапоги, очки инженера, рогатка и ремонт щипцов. Действующие правила выпуска собраны в [описании игры](prototype.md). Ниже сохранены первоначальный план и журнал его изменений.
+**Current status.** The base game was accepted earlier. The November 19 release adds the agreed iron crates, traps, watchmaker’s cap, hunting boots, engineer’s goggles, slingshot and claw repairs. The [game rules](prototype.md) describe that release. The original plan and its decision log follow.
 
-# Что уже решили
+# Decisions so far
 
-- Поддерживаемые платформы — Android и Web. Веб-версия — полноценная платформа игры, не только тестовый просмотр.
+- Android and Web are both supported platforms. The Web version is a full game in its own right.
 
-- Стек — Godot 4 stable + GDScript. Текущая целевая версия — Godot 4.7.2 stable и export templates 4.7.2.stable; точная сборка закреплена в `.godot-version`.
+- The stack is Godot 4 stable + GDScript. The current target is Godot 4.7.2 stable with export templates 4.7.2.stable. `.godot-version` pins the exact build.
 
-- Базовый репозиторий на GitHub будет приватным. Его подготовку начнём после согласования основы.
+- The initial GitHub repository will be private. We’ll start preparing it once we agree on the basics.
 
-- Приватный репозиторий и опубликованное облачное окружение подготовлены; первая техническая часть разрешена отдельно.
+- The private repository and published cloud environment are ready. The first technical milestone has separate approval.
 
-- Решения, открытые вопросы и прогресс обсуждения фиксируем здесь. Предложения не считаем принятыми до обсуждения.
+- Record decisions, open questions and discussion progress here. Proposals need discussion before acceptance.
 
-# Этапы обсуждения
+# Discussion stages
 
-| Этап | Статус | Что хотим получить |
+| Stage | Status | Intended outcome |
 | --- | --- | --- |
-| 1. Желаемая игра | Основа согласована | Аркада с одним персонажем без сюжета; собственный пиксельный стиль с ориентирами Braid и Dead Cells |
-| 2. Стек и процесс разработки | Основа согласована | Godot 4.7.2 + GDScript, Android и Web; технический APK проверен на телефоне, новый прототип и его художественная подача ещё на приёмку |
-| 3. Управление и экраны | Основа согласована | Кнопки и клавиатура, две компоновки, игровое поле, пауза, окончание партии, главное меню, статистика и настройки |
-| 4. Игровой цикл | Основные правила согласованы | Падение и перемещение ящиков, нижняя линия, счёт и два условия проигрыша; оставшиеся ситуации уточнить, численные параметры настроить в прототипе |
-| 5. Первый прототип | Объём согласован | Все обсуждённые базовые механики и экраны на Android и Web; критерии готовности ниже |
-| 6. План реализации | Порядок согласован | Проверяемые части прототипа; дальнейший план уточним после игры и обратной связи |
+| 1. Game concept | Fundamentals agreed | A story-free arcade game with one character and its own pixel art, with Braid and Dead Cells as visual references |
+| 2. Stack and development process | Fundamentals agreed | Godot 4.7.2 + GDScript, Android and Web. The technical APK passed its phone test. The new prototype and its art still await acceptance. |
+| 3. Controls and screens | Fundamentals agreed | Buttons and keyboard, two layouts, playfield, pause, game over, main menu, statistics and settings |
+| 4. Game loop | Core rules agreed | Falling and moving crates, bottom-row clears, scoring and two loss conditions. Clarify remaining cases and tune the numbers in the prototype. |
+| 5. First prototype | Scope agreed | All the core mechanics and screens discussed for Android and Web. Readiness criteria are listed below. |
+| 6. Implementation plan | Sequence agreed | Work in testable increments. Refine the next steps after playtesting and feedback. |
 
-# 1. Желаемая игра
+# 1. Game concept
 
-**Видение согласовано:** современная аркада на основе механик Stack Attack, с собственным визуальным стилем.
+**Agreed vision.** A modern arcade game based on Stack Attack’s mechanics, with its own visual style.
 
-- **Референсы:** версии Stack Attack изучены как источники механик. Выбор единственной редакции Siemens не блокирует проект: правила нашей игры фиксируем отдельно.
+- **References.** We studied versions of Stack Attack for their mechanics. We can define our own rules without choosing a single Siemens edition.
 
-- **Выбранная основа:** падающие ящики, которые игрок двигает и составляет в нижнюю горизонтальную линию. Заполненная нижняя линия исчезает независимо от цвета ящиков; ящики и персонаж над ней плавно опускаются на ряд ниже. На первом этапе ящики не ломаем; прыжок остаётся способом перемещения.
+- **Core idea.** The player moves falling crates into a horizontal line at the bottom. A full bottom row disappears regardless of crate color, and the crates and character above it settle smoothly by one row. The first milestone excludes breaking crates. Jumping remains a movement option.
 
-- **Сначала:** базовые механики и один персонаж. **Возможное развитие позже:** новые механики, персонажи и способности, например перемещение двух ящиков. Сейчас эти расширения не реализуем.
+- **Initial scope.** Start with the core mechanics and one character. Additional mechanics, characters and abilities, such as moving two crates, are possibilities for later.
 
-- **Формат первого шага:** чистая аркада с двумя щипцами, постоянной скоростью и независимыми паузами между проходами. История и сюжет пока не нужны; возможность вернуться к ним позже остаётся. Логические уровни с новыми механиками возможны в будущем, но не входят в первый прототип. Скорость и диапазон пауз проверяем по пробным партиям.
+- **First milestone.** A pure arcade game with two claws, a constant speed and independent pauses between passes. Story can be revisited later. Puzzle levels with new mechanics are a future possibility outside the first prototype. Playtest the speed and range of pause lengths.
 
-- **Визуальное направление:** пиксель-арт с атмосферой Braid; Dead Cells — дополнительный визуальный ориентир. Создаём собственные стиль и мир, не копируем эти игры; визуальные отсылки к Siemens необязательны. Выбор между пиксельной и живописной подачей закрыт в пользу пиксель-арта. **Техническое пожелание:** более плавная игра и высокая частота кадров; конкретное значение FPS ещё не выбрано.
+- **Art direction.** Pixel art with the atmosphere of Braid and Dead Cells as an additional visual reference. Create an original style and world without copying either game. Visual references to Siemens are optional. We chose pixel art over a painterly approach. **Technical goal.** Smoother play and a high frame rate. The target FPS is still open.
 
-**Граница первого шага:** базовая аркада с одним персонажем и встречным движением двух щипцов. Основные правила согласованы; оставшиеся ситуации перечислены в разделе игрового цикла, численные параметры подберём по прототипу. Логические уровни, новые механики и способности остаются идеями на будущее.
+**First milestone boundary.** A basic arcade game with one character and two claws moving in opposite directions. The core rules are agreed. The game loop section lists the remaining cases. We’ll tune the numbers in the prototype. Puzzle levels, new mechanics and abilities remain ideas for later.
 
-## Обзор версий Stack Attack
+## Survey of Stack Attack versions
 
-Это результаты исследования референсов, а не список выбранных функций нашей игры.
+These findings describe the reference games. Our own feature choices follow the survey.
 
-- **Классическая версия:** падающие и перемещаемые ящики, составление и исчезновение линий. [Обзор Cybersport](https://www.cybersport.ru/tags/games/10-igr-dlya-knopochnykh-telefonov-v-kotorye-vse-zalipali-v-detstve).
+- **Classic version.** Crates fall and can be moved into lines that disappear. [Cybersport overview](https://www.cybersport.ru/tags/games/10-igr-dlya-knopochnykh-telefonov-v-kotorye-vse-zalipali-v-detstve).
 
-- **Цветная 2D версия со способностями:** упоминается в том же [обзоре](https://www.cybersport.ru/tags/games/10-igr-dlya-knopochnykh-telefonov-v-kotorye-vse-zalipali-v-detstve), но название редакции не подтверждено.
+- **Color 2D version with abilities.** The same [overview](https://www.cybersport.ru/tags/games/10-igr-dlya-knopochnykh-telefonov-v-kotorye-vse-zalipali-v-detstve) mentions it. The edition name is unconfirmed.
 
-- **Stack Attack Advanced:** изометрическое представление описано в [обзоре Siemens C65](https://mobile-review.com/review/siemens-c65.shtml); цветовые комбинации упомянуты в [карточке игры uVeJuegos](https://uvejuegos.com/juego/Stack-Attack-Advanced-Mov/Mov/17143).
+- **Stack Attack Advanced.** The [Siemens C65 review](https://mobile-review.com/review/siemens-c65.shtml) describes the isometric view, and the [uVeJuegos listing](https://uvejuegos.com/juego/Stack-Attack-Advanced-Mov/Mov/17143) mentions color combinations.
 
-- **Stack Attack 2:** альтернативные комбинации и бонусы описаны в [карточке игры](https://java2phone.ru/games3/170).
+- **Stack Attack 2.** The [game listing](https://java2phone.ru/games3/170) describes alternative combinations and bonuses.
 
-**Итог обзора:** для нашей игры выбраны нижняя заполненная горизонтальная линия независимо от цвета и плавное перемещение ящиков. Изометрия, цветовые комбинации, бонусы и специальные способности не входят в первый прототип. Подробные действующие правила приведены в разделе игрового цикла.
+**Outcome.** For our game we chose smooth crate movement and a full horizontal bottom row that clears regardless of color. Isometric graphics, color combinations, bonuses and special abilities are outside the first prototype. The game loop section gives the detailed rules.
 
-# 2. Стек и процесс разработки
+# 2. Stack and development process
 
-**Принятый стек:** Godot 4 stable + GDScript для Android и Web. Текущая целевая версия — Godot 4.7.2 stable и соответствующие export templates 4.7.2.stable, чтобы локальная и облачная сборки использовали одинаковый набор инструментов. Обновление с 4.6.3 согласовано 14 ноября 2026 ради установки редактора через Homebrew и быстрой локальной проверки Web. Обновление опубликованного cloud-окружения выполняется отдельным агентом.
+**Agreed stack.** Godot 4 stable + GDScript for Android and Web. The current target is Godot 4.7.2 stable with matching export templates 4.7.2.stable so that local and cloud builds use the same tools. The upgrade from 4.6.3 was agreed on November 14, 2026, to allow editor installation through Homebrew and quick local Web checks. A separate agent is updating the published cloud environment.
 
-**Облачная разработка:** headless-проверки игровой логики и сборок без графического интерфейса. Внешний вид и управление проверяем отдельно на устройствах и в браузере; возможность графического запуска в облачной среде ещё не проверена.
+**Cloud development.** Run headless checks for game logic and builds. Check appearance and controls separately on devices and in the browser. Graphical startup in the cloud environment still needs verification.
 
-**Первый технический шаг после планирования:** минимальный проект с тестом и проверкой сборок для обеих платформ. Compatibility — первоначальная рекомендация по рендереру; нужные графические эффекты и их работу на Android и Web сначала проверим, а не будем считать гарантированными.
+**First technical step after planning.** Prepare a minimal project with a test and build checks for both platforms. Compatibility is the initial renderer recommendation. Verify the required graphics effects on Android and Web before relying on them.
 
-# 3. Управление и экраны
+# 3. Controls and screens
 
-**Управление для проверки:** простые экранные кнопки «влево», «вправо» и «прыжок» вместо жестов. Для Web и Android с подключённой клавиатурой также поддерживаем стрелки влево/вправо для движения и пробел для прыжка; сенсорные кнопки сохраняются. Толкание ящика движением в его сторону берём за основу и проверяем в прототипе. **Адаптивная компоновка:** поддерживаем портретный и альбомный режимы. В портретном режиме кнопки находятся снизу, в альбомном — по бокам. Удобство на разных размерах экрана проверим отдельно. Основной состав экранов и переходов согласован по обсуждённым схемам; визуальные мокапы ещё предстоит подготовить. Выбран пиксель-арт с атмосферой Braid и дополнительным визуальным ориентиром Dead Cells. Стиль и мир будут собственными, без копирования этих игр и без обязательных отсылок к Siemens. Палитру и конкретные визуальные решения ещё подберём, не подменяя дизайном проверку управления.
+**Controls to test.** Use simple on-screen buttons for “влево” (left), “вправо” (right) and “прыжок” (jump) in place of gestures. On Web and on Android with a keyboard connected, also support the left/right arrow keys to move and Space to jump, keeping touch buttons available. Start by pushing crates when the player moves into them and test this in the prototype. **Adaptive layout.** Support portrait with controls at the bottom and landscape with controls at the sides. Test comfort at different screen sizes separately. We agreed on the core screens and transitions using the layouts discussed. Visual mockups are still to come. The chosen style is pixel art with the atmosphere of Braid and Dead Cells as an additional reference. The game will have its own world and style, without copying either reference or requiring Siemens motifs. Choose the palette and specific visual details later, while continuing to test the controls on their own merits.
 
-**Минимум игрового экрана:** счёт и кнопка паузы. Движение щипцов над полем даёт игроку ориентир перед сбросом.
+**Minimum game HUD.** Show the score and a pause button. The claws moving above the field give the player a cue before each drop.
 
-**Меню паузы:** вернуться в текущую игру, начать заново или выйти в общее главное меню.
+**Pause menu.** Resume the current game, start over or return to the main menu.
 
-**Главное меню:** «Играть», «Рекорды» и «Настройки».
+**Main menu.** “Играть” (Play), “Рекорды” (High Scores) and “Настройки” (Settings).
 
-**Настройки:** отдельные уровни громкости музыки и звуков. На Android есть виброотклик с возможностью отключения; в Web переключатель виброотклика скрыт. События, на которых срабатывает вибрация, ещё не утверждены.
+**Settings.** Separate volume controls for music and sound effects. Android has optional vibration. Web hides the vibration toggle. The events that trigger vibration have yet to be approved.
 
-**Статистика:** отдельный экран локальной статистики с итогами и историей завершённых матчей. Он доступен из главного меню. Старые рекорды сохраняются с известными датами и счётом. [Правила подсчёта](prototype.md#сохранение).
+**Statistics.** A separate local statistics screen shows totals and completed match history. Open it from the main menu. Old high scores retain their known dates and scores. See the [counting rules](prototype.md#saving).
 
-**Экран окончания партии:** итоговый счёт и кнопки «Играть снова» и «Главное меню».
+**Game over screen.** Show the final score and the buttons “Играть снова” (Play Again) and “Главное меню” (Main Menu).
 
-**Итог этапа:** понятная схема взаимодействия и согласованный набор экранов.
+**Stage outcome.** A clear interaction flow and an agreed set of screens.
 
-# 4. Игровой цикл
+# 4. Game loop
 
-Над полем два щипца едут навстречу по рельсам с постоянной скоростью. Каждый везёт один ящик, сбрасывает его над выбранной колонкой и уходит за край. После независимой случайной паузы заданного диапазона щипцы возвращаются в начало своего маршрута с новым ящиком. Игрок двигает ящики и составляет нижнюю горизонтальную линию, которая исчезает независимо от цвета. Ящики падают и перемещаются плавно, оставаясь ровными, без вращения и заваливания набок; позиции по ширине поля понятны игроку. Косметическую подачу можно доработать позже. Персонаж может сдвинуть падающий ящик при контакте с ним. Ящик без опоры падает: если сдвинуть нижний ящик из-под верхнего, верхний может упасть на персонажа и убить его. После исчезновения нижнего ряда ящики и персонаж над ним падают вместе, опускаясь на ряд ниже. Если новый нижний ряд заполнен, он очищается следом. Цепочку очисток можно визуально подчеркнуть надписью, например «Вау!». Точная надпись и множитель очков не утверждены. Разбивание ящиков на первом этапе исключено; прыжок для перемещения сохраняется. В первой версии у персонажа одна жизнь: падение ящика на него завершает партию. Второе условие поражения — переполнение склада: хотя бы одна башня ящиков достигает полной высоты поля. Переполнение проверяется, когда ящик уже опирается на стопку у верхней границы. Очки начисляются за очищенные линии, без очков за время. Последовательная очистка рядов допускается и может быть визуально отмечена как комбо; множитель очков не утверждён. Число очков за линию, скорость щипцов и паузы проверяем по прототипу. Точные скорости падения и движения, параметры столкновений и ощущения управления подберём и проверим в прототипе. Физика рассчитывается собственным fixed-step AABB в GDScript.
+Two claws travel toward each other on rails above the field at a constant speed. Each carries one crate, drops it over the chosen column and moves off the edge. After an independently randomized pause within the specified range, each claw returns to the start of its route with a new crate.
 
-## Исследование правил оригинала Черновик
+The player moves crates to fill the bottom row, which disappears regardless of color. Crates fall and move smoothly, staying upright without rotating or tipping. Their horizontal positions should be clear to the player. Visual polish can come later.
 
-Ниже — сведения из описаний и реконструкции игры, а не утверждённые правила нашего прототипа.
+The character can move a falling crate on contact. An unsupported crate falls, so pushing a lower crate out from under an upper one can drop it onto the character and kill them.
 
-- В описаниях встречаются краны, сбрасывающие ящики, ходьба персонажа, толкание одного ящика и прыжок. Также описано разбивание падающего ящика прыжком. Источники: [обзор Cybersport](https://www.cybersport.ru/tags/games/10-igr-dlya-knopochnykh-telefonov-v-kotorye-vse-zalipali-v-detstve), [реконструкция stktk](https://github.com/eaun01re/stktk).
+When the bottom row disappears, the crates and character above it fall together by one row. If the new bottom row is full, it clears next. A chain of clears could trigger a visual cue such as “Вау!” (“Wow!”). The exact wording and any score multiplier have yet to be approved.
 
-- Реконструкция [stktk](https://github.com/eaun01re/stktk) описывает очистку заполненного нижнего ряда, оседание ящиков и добавление кранов. Это вторичный и неполный источник, не окончательная спецификация оригинала.
+The first milestone excludes breaking crates and retains jumping for movement. In the first version the character has one life. A crate falling onto the character ends the game. The other loss condition is warehouse overflow, when at least one stack reaches the full height of the field. Check for overflow once a crate is resting on the stack at the top boundary.
 
-- Точное число жизней и формула начисления очков не подтверждены. Руководства A50/A52 не дают подробных правил игры; [страница руководства A50](https://manualsdump.com/en/manuals/siemens-a50/222049/41) не разрешает эти вопросы.
+Award points for lines cleared, with no time-based points. Consecutive clears are allowed and may be marked visually as a combo. A score multiplier has yet to be approved. Playtest points per line, claw speed and pauses. Use the prototype to tune fall and movement speeds, collision parameters and the feel of the controls. The game uses custom fixed-step AABB physics in GDScript.
 
-**Состояние правил:** решения нашей игры приведены в начале этого раздела; сведения об оригинале не отменяют их. Настройки скорости, диапазона пауз и управления оцениваются в пробных партиях. Текущие значения записаны в [описании прототипа](prototype.md#параметры-для-проверки-игрой).
+## Research notes on the original rules (draft)
 
-**Уточнение к прежней схеме рядов:** при условии, что в устойчивом поле нет пустот под ящиками, заполненный верхний ряд подразумевает заполненные ряды под ним. Поэтому выбор «нижний или любой ряд» не рассматриваем как отдельную открытую задачу. Для нашей игры уже выбраны падение без опоры и очистка нижней линии.
+These notes come from descriptions and a reconstruction of the original game. The prototype has its own agreed rules.
 
-**Следующий шаг:** завершить первую техническую часть, включая проверку APK на телефоне, затем перейти к следующей согласованной части работ. Числа и технические детали не блокируют планирование: зафиксируем стартовые параметры при реализации и проверим их в игре.
+- Descriptions mention cranes that drop crates, walking, pushing one crate and jumping. They also describe jumping to break a falling crate. See the [Cybersport overview](https://www.cybersport.ru/tags/games/10-igr-dlya-knopochnykh-telefonov-v-kotorye-vse-zalipali-v-detstve) and the [stktk reconstruction](https://github.com/eaun01re/stktk).
 
-# 5. Первый прототип
+- The [stktk reconstruction](https://github.com/eaun01re/stktk) describes clearing a full bottom row, crates settling and the addition of cranes. It is a secondary, incomplete account of the original.
 
-Илья считает весь обсуждённый набор подходящим для первого этапа. Цель — законченная играбельная аркада на Android и Web, по которой можно проверить удовольствие от управления, понятность физики и ритм сбросов. Объём и порядок работ согласованы 11 ноября 2026. После проверки технической основы разрешён весь первый прототип одним draft PR.
+- The exact number of lives and scoring formula remain unconfirmed. The A50/A52 manuals give little detail about the game. The [A50 manual page](https://manualsdump.com/en/manuals/siemens-a50/222049/41) leaves these questions open.
 
-## Объём первого этапа
+**Rules status.** The decisions at the start of this section govern our game. Playtest speed, the pause range and controls. See the [prototype playtest parameters](prototype.md#playtest-parameters) for current values.
 
-- **Партия:** один персонаж, движение и прыжок, толкание в том числе падающего ящика при контакте; ровные ящики без вращения, плавное падение без опоры и опасность верхнего ящика.
+**Clarification of the earlier row diagram.** If a stable field has no gaps under crates, a full upper row implies that every row below it is full. This resolves the earlier question “нижний или любой ряд” (“bottom row or any row”). Our game already specifies that unsupported crates fall and that the bottom row clears.
 
-- **Правила:** очистка нижнего ряда с опусканием ящиков и персонажа, последовательные очистки с возможной визуальной отметкой; одна жизнь и конец партии при гибели либо башне высотой с поле.
+**Next step.** Finish the first technical milestone, including a phone test of the APK, then move on to the next agreed work item. Planning can proceed while the numbers and technical details are open. Set initial values during implementation and test them in play.
 
-- **Темп и счёт:** до одного ящика за проход каждого щипца, постоянная скорость и независимые паузы. Очки за линии, без множителя за цепочку.
+# 5. First prototype
 
-- **Обе платформы и ввод:** Android и Web как полноценные версии, экранные кнопки и клавиатура; портретная компоновка с кнопками снизу, альбомная с кнопками по бокам.
+Ilya considers the full set discussed suitable for the first milestone. The goal is a complete, playable arcade game on Android and Web for assessing how enjoyable the controls are, how clearly the physics read and how the drops are paced. The scope and work sequence were agreed on November 11, 2026. After verification of the technical foundation, the full first prototype was authorized as one draft PR.
 
-- **Экраны:** главное меню, партия со счётом и паузой, пауза с тремя действиями, результат с повтором или выходом, локальная статистика и настройки.
+## First milestone scope
 
-- **Настройки и обратная связь:** отдельная громкость музыки и звуков, отключаемая вибрация на Android без переключателя в Web. Конкретные звуки, события вибрации и надпись для цепочки подбираем отдельно.
+- **Gameplay.** One character, movement and jumping, and pushing crates, including falling crates on contact. Crates stay upright without rotating, fall smoothly when unsupported and can endanger the player when an upper crate falls.
 
-- **Визуальное направление:** собственный цветной пиксель-арт с атмосферой Braid и ориентиром Dead Cells. Направление остаётся частью проекта; степень художественной завершённости первого этапа ещё нужно согласовать.
+- **Rules.** The bottom row clears and the crates and character above it settle. Consecutive clears may have a visual cue. The player has one life. Death or a stack reaching the full field height ends the game.
 
-За пределами первого этапа остаются сюжет, логические уровни, новые персонажи и способности, разбивание ящиков, аккаунты и онлайн-таблицы рекордов.
+- **Pace and scoring.** Each claw delivers up to one crate per pass, at a constant speed with independent pauses. Award points for lines with no chain multiplier.
 
-## Промежуточная графика
+- **Platforms and input.** Android and Web are both full versions with on-screen buttons and keyboard support. Portrait places the buttons at the bottom and landscape places them at the sides.
 
-Для ранней проверки механики предложены простые временные изображения. Илья отдельно не утверждал этот подход. Если используем их, явно обозначаем такие сборки как технические, а не как финальный стиль; согласованный пиксель-арт не исключаем из плана молча.
+- **Screens.** Main menu, game with score and pause, pause menu with three actions, results with restart or exit, local statistics and settings.
 
-## Предлагаемые критерии готовности
+- **Settings and feedback.** Separate volume controls for music and effects. Android vibration can be disabled. Web omits the toggle. Choose specific sounds, vibration events and the chain message separately.
 
-- Из одной зафиксированной версии проекта получаются запускаемый Android APK и рабочая Web-сборка.
+- **Art direction.** Original colorful pixel art with the atmosphere of Braid and Dead Cells as a reference. This direction is part of the project. The degree of art polish for the first milestone still requires agreement.
 
-- На обеих платформах можно пройти полный цикл: меню → партия → пауза или проигрыш → повтор либо меню.
+Story, puzzle levels, new characters and abilities, crate breaking, accounts and online leaderboards are outside the first milestone.
 
-- В тестовых ситуациях воспроизводятся толкание в полёте, падение без опоры, опасное падение верхнего ящика, очистка ряда с опусканием и цепочка очисток. Ящики не вращаются, а результат не зависит от частоты отрисовки кадров.
+## Temporary art
 
-- Оба условия поражения завершают партию один раз; счёт соответствует очищенным линиям. Обычное совместное опускание после очистки не должно убивать героя из-за технического порядка обработки столкновений.
+Simple placeholder images were proposed for early mechanics testing. Ilya has not specifically approved this approach. If we use placeholders, label the builds as technical tests and keep the agreed pixel art in the plan.
 
-- Два щипца движутся навстречу с постоянной скоростью, сбрасывают по одному ящику за проход и возвращаются независимо. Разжим читается, встречи и выходы за край не дают заметных скачков.
+## Proposed readiness criteria
 
-- Кнопки и клавиатура работают; поле, счёт и меню доступны в двух компоновках без перекрытия управления.
+- A single pinned project revision produces a runnable Android APK and working Web build.
 
-- Статистика и настройки сохраняются локально между запусками приложения или перезагрузками страницы в обычном режиме браузера. Синхронизации Android и Web нет; ограничения браузерного хранения описаны.
+- On both platforms the player can complete the full cycle from menu to game, pause or game over, then restart or return to the menu.
 
-- Громкость проверяется на слышимом звуке, Android-вибрация отключается, в Web её переключателя нет.
+- Tests reproduce midair pushing, unsupported falls, a dangerous upper crate falling, a row clearing and settling, and a chain of clears. Crates remain upright and outcomes are independent of rendering frame rate.
 
-- Автоматические проверки правил проходят; Илья проверяет управление и плавность на телефоне и в браузере. Найденные ошибки исправлены либо явно записаны и согласованы как ограничения.
+- Each loss condition ends the game exactly once. The score matches the lines cleared. The order of collision processing must allow the character and crates to settle together safely after a normal clear.
 
-- Внешний вид первого этапа отдельно просмотрен Ильёй; временная графика, если она останется, не выдаётся за принятый художественный результат.
+- Two claws move toward each other at a constant speed, drop one crate per pass and return independently. The jaws visibly open, and there are no noticeable jumps when the claws meet or leave the field.
 
-После пробных партий записываем впечатления, ошибки и изменения параметров. Размеры поля, скорости, диапазон пауз и очки задаём как настраиваемые параметры. Переполнение, безопасный сброс и повторные проходы щипцов проверяем тестами.
+- Buttons and keyboard work. The field, score and menus are accessible in both layouts without controls overlapping them.
 
-# 6. План реализации
+- Statistics and settings persist locally across application launches or page reloads in normal browser mode. Android and Web saves are independent. Browser storage limitations are documented.
 
-## Предлагаемый порядок первого этапа
+- Volume changes are verified with audible sound. Android vibration can be disabled, and Web omits its toggle.
 
-Первоначально части планировались отдельными PR. 11 ноября 2026 Илья разрешил подготовить весь прототип одним новым draft PR; дальнейшие правки после его пробных партий можно выпускать отдельно. Перечисленные ниже части остаются структурой работ и проверок, а не требованием создать семь PR.
+- Automated rule checks pass. Ilya tests control and smoothness on a phone and in a browser. Fix any bugs found or explicitly document and agree on them as limitations.
 
-1. **Основа проекта и две сборки.** Закрепить Godot и шаблоны экспорта, подготовить минимальную сцену, простой автоматический тест и инструкцию облачного окружения. Проверка: APK запускается на телефоне, Web открывается в браузере, тест проходит. Это ещё не игровая версия.
+- Ilya reviews the first milestone’s appearance separately. If temporary art remains, identify it as such until the art is accepted.
 
-2. **Поле, персонаж и ввод.** Движение, прыжок, клавиатура и экранные кнопки, две компоновки. Проверка: можно управлять героем на обеих платформах, элементы не перекрываются. Графический запуск облака и выбранный рендерер проверить здесь.
+After playtesting, record impressions, bugs and parameter changes. Keep field size, speeds, pause range and point values configurable. Test overflow, safe drops and repeated claw passes.
 
-3. **Ящики и физические взаимодействия.** Плавное падение, толкание, контакт в полёте, отсутствие опоры и опасность верхнего ящика. Проверка: отдельные воспроизводимые сцены для каждого случая; скорость отрисовки не меняет правила.
+# 6. Implementation plan
 
-4. **Полная аркадная партия.** Очистка и оседание рядов, цепочки, счёт, два условия поражения, двое щипцов с постоянной скоростью и независимыми паузами. Проверка: законченная партия и автоматические сценарии правил.
+## Proposed sequence for the first milestone
 
-5. **Меню и локальные данные.** Главное меню, пауза, повтор, результат, рекорды, настройки и сохранение. Проверка: все согласованные переходы и сохранение после нового запуска. Звуковые и вибрационные настройки проверяются на реальной обратной связи.
+The original plan called for separate PRs. On November 11, 2026, Ilya authorized preparing the entire prototype in one new draft PR. Follow-up changes after his playtests can be released separately. The seven items below organize the work and its checks. They can all go in the agreed PR.
 
-6. **Визуальная и звуковая подача.** Мокапы собственного пиксельного стиля, выбранные изображения, читаемые эффекты очистки, звук и Android-вибрация. Проверка: Илья оценивает вид и понятность на Android и Web; дальнейший объём полировки согласуем, не подменяя его временными материалами. Мокапы можно готовить параллельно ранним частям.
+1. **Project foundation and two builds.** Pin Godot and the export templates. Prepare a minimal scene, a simple automated test and cloud environment instructions. Verify that the APK launches on a phone, the Web build opens in a browser and the test passes. This milestone is a technical build only.
 
-7. **Проверка целого и баланс.** Пробные партии на телефоне и в браузере, проверка двух компоновок, настройка параметров, исправление ошибок. Проверка: критерии первого этапа выполнены, ограничения записаны, Илья подтверждает, что основа работает и её стоит развивать.
+2. **Playfield, character and input.** Implement movement, jumping, keyboard and on-screen buttons, and both layouts. Verify that the character is controllable on both platforms and that elements do not overlap. Test graphical startup in the cloud and the chosen renderer here.
 
-## После первого этапа
+3. **Crates and physical interactions.** Implement smooth falling, pushing, contact in midair, loss of support and the danger from an upper crate. Verify each case with a separate reproducible scene and check that rendering speed has no effect on the rules.
 
-По результатам игры уточним план художественной полировки и дальнейших механик. Логические уровни, персонажи и способности получат отдельное обсуждение и свои части работы; сейчас они не входят в реализацию.
+4. **Complete arcade game.** Implement row clearing and settling, chains, scoring, both loss conditions and two claws with constant speed and independent pauses. Play through a complete game and run automated rule scenarios.
 
-**Статус:** план первого этапа согласован. Репозиторий и опубликованное облачное окружение подготовлены. Техническая основа и её APK проверены. Играбельный прототип подготовлен в отдельной ветке для одного draft PR; его телефонная и художественная приёмка остаются за Ильёй.
+5. **Menus and local data.** Implement the main menu, pause, restart, results, high scores, settings and saving. Verify all agreed transitions and persistence after relaunch. Test the sound and vibration settings with actual feedback.
 
-# Журнал решений
+6. **Art and sound.** Prepare mockups of the original pixel art style, selected images, readable clear effects, sound and Android vibration. Ilya assesses appearance and clarity on Android and Web. Agree on further polish separately and identify any temporary assets. Mockups can be prepared in parallel with earlier work.
 
-- **11 ноября 2026:** согласованы порядок обсуждения и единый документ. Илья выбрал основу с падающими и перемещаемыми ящиками и исчезающими линиями, сначала с одним персонажем. Визуальное направление — красочный современный 2D pixel art; нужна более плавная работа, без выбранного значения FPS. Расширения и способности оставлены на потом. Обзор оригинальных версий завершён; собственные правила партии уточнены последующими решениями и собраны в разделе игрового цикла.
+7. **End-to-end testing and balance.** Play on a phone and in the browser, test both layouts, tune parameters and fix bugs. Verify that the first milestone meets its criteria, document limitations and obtain Ilya’s confirmation that the foundation works and is worth developing further.
 
-- **11 ноября 2026:** принят стек Godot 4 stable + GDScript; Android и Web поддерживаются как платформы игры. Версию движка и export templates закрепим при подготовке окружения. Headless-проверки не заменяют проверку изображения и управления на устройствах и в браузере. Первый технический шаг после планирования — минимальный проект, тест и проверка обеих сборок.
+## After the first milestone
 
-- **11 ноября 2026:** Илья считает согласованные механики, управление и экраны подходящим объёмом первого этапа. Подготовлены черновики критериев готовности и порядка реализации. Предложение о временной графике отдельно не утверждено.
+Use playtest results to refine the plan for art polish and further mechanics. Puzzle levels, characters and abilities will have their own discussions and work items. They are outside the current implementation.
 
-После каждого обсуждения обновляем соответствующий раздел, его статус и кратко фиксируем принятое решение. Если решение меняется, сохраняем причину изменения.
+**Status.** The first milestone plan is agreed. The repository and published cloud environment are ready. The technical foundation and its APK have passed their checks. The playable prototype is ready on a separate branch for a single draft PR. Ilya still needs to test it on a phone and review the art.
 
+# Decision log
 
-- **11 ноября 2026:** после Publish окружения разрешена первая техническая часть в отдельной ветке и draft PR. Закреплены Godot/templates 4.6.3. Техническая сцена без механик проверяет запуск, ориентации и ввод; её временный вид не утверждает графику игры. Телефонная проверка APK остаётся открытой.
+- **November 11, 2026.** We agreed on the discussion sequence and a single planning document. Ilya chose falling, movable crates and disappearing lines, initially with one character. The art direction is colorful modern 2D pixel art. Smoother performance is a goal, with the target FPS still open. Extensions and abilities are deferred. The survey of original versions is complete. Later decisions refined our game rules, which are collected in the game loop section.
 
-- **11 ноября 2026:** Илья подтвердил, что технический APK работает на телефоне, и разрешил подготовить весь согласованный прототип одним отдельным PR, без автоматического merge прототипа. Реализуются только уже согласованные механики и экраны; стартовые численные параметры, выбранные события вибрации и собственная пиксельно-звуковая подача описаны в docs/prototype.md для проверки игрой.
+- **November 11, 2026.** We adopted Godot 4 stable + GDScript and both Android and Web as game platforms. We’ll pin the engine and export template versions during environment setup. Alongside headless checks we’ll check graphics and controls on devices and in the browser. The first technical step after planning is a minimal project, a test and verification of both builds.
 
-- **14 ноября 2026:** после проверки единых кнопок Илья разрешил merge PR #2. Разрешён отдельный draft PR визуального прототипа по референсу мастерской, без новых игровых правил. Подробности материалов и проверки — `docs/workshop-visual.md`.
+- **November 11, 2026.** Ilya considers the agreed mechanics, controls and screens suitable for the first milestone. Readiness criteria and an implementation sequence have been drafted. The proposal to use placeholder art has yet to receive separate approval.
 
-- **14 ноября 2026:** по просьбе Ильи в визуальном прототипе оставлен только деревянный вид ящика. Новые виды появятся вместе с отличающимися механиками после отдельного решения.
+After each discussion, update the relevant section and its status and briefly record the decision. If the decision changes, keep the reason for the change.
 
-- **14 ноября 2026:** согласовано обновление до Godot/templates 4.7.2. Системные пакеты macOS устанавливаются через Homebrew и отслеживаются в dotfiles; Playwright изолируется в проектном окружении uv. Web проверяется локально, Android — в cloud. Для обновления cloud готовится отдельный промпт; локальные результаты не означают, что опубликованное окружение уже обновлено.
+- **November 11, 2026.** After the environment was published, the first technical milestone was authorized on a separate branch and in a draft PR. Godot/templates 4.6.3 were pinned. The technical scene has no game mechanics and tests startup, orientations and input. Its temporary appearance does not constitute approval of the game art. Phone testing of the APK remains open.
 
-- **15 ноября 2026:** согласованы два щипца на рельсах, встречные маршруты, сброс в выбранной колонке и независимые паузы за краем. Для этой версии скорость и диапазон пауз постоянны.
+- **November 11, 2026.** Ilya confirmed that the technical APK works on a phone and authorized the entire agreed prototype in one separate PR, without an automatic merge. Implementation covers only the agreed mechanics and screens. The initial numeric parameters, chosen vibration events and original pixel art and sound are documented in docs/prototype.md for playtesting.
 
-- **19 ноября 2026:** согласованы два листа концепта и выпуск мастерской с железными ящиками, капканом, расширенным снаряжением и независимым ремонтом двух щипцов. Критерий приёмки этого выпуска — опубликованная Web-версия, проверка реального управления в двух ориентациях, проверка ревизии публичного сайта и видео механик из Web-экспорта. APK продолжает собираться штатно в GitHub Actions.
+- **November 14, 2026.** After testing the unified buttons, Ilya authorized merging PR #2. He authorized a separate draft PR for a visual prototype based on the workshop reference, using the existing game rules. See `docs/workshop-visual.md` for assets and verification.
+
+- **November 14, 2026.** At Ilya’s request, the visual prototype keeps only wooden crate designs. New types will arrive with distinct mechanics after a separate decision.
+
+- **November 14, 2026.** The upgrade to Godot/templates 4.7.2 was agreed. macOS system packages are installed via Homebrew and tracked in dotfiles. Playwright is isolated in the project’s uv environment. Web is tested locally and Android in the cloud. A separate prompt is being prepared for the cloud update. The local results leave the published environment update to be verified.
+
+- **November 15, 2026.** We agreed on two claws on rails, routes in opposite directions, a drop in the selected column and independent pauses off the edge. Speed and the range of pause lengths are constant for this version.
+
+- **November 19, 2026.** We agreed on two concept sheets and a workshop release with iron crates, a trap, expanded equipment and independent repairs for the two claws. Acceptance of this release requires a published Web build, verification of real controls in both orientations, a revision check of the public site and footage of the mechanics from the Web export. The APK continues to build as usual in GitHub Actions.

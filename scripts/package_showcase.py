@@ -43,16 +43,16 @@ def put(name,x,y):
     draw.rectangle((x-1,y-1,x+image.width,y+image.height),outline='#617d83')
     canvas.paste(image,(x,y))
 
-label('STACK ATTACK · МАСТЕРСКАЯ',24,18,3)
-label('WEB / CHROMIUM · QA СЦЕНА · COMMIT '+sha[:12],24,62,2,'#8dc6ac')
+label('STACK ATTACK · WORKSHOP',24,18,3)
+label('WEB / CHROMIUM · QA SCENE · COMMIT '+sha[:12],24,62,2,'#8dc6ac')
 portrait=views[(390,844)]
 fold=views[(768,1004)]
 landscape=views[(844,390)]
-label('ПОРТРЕТ',24,90);put(portrait['screenshots'][1],24,116)
+label('PORTRAIT',24,90);put(portrait['screenshots'][1],24,116)
 label('FOLD / VIEWPORT',438,90);put(fold['screenshots'][1],438,116)
-label('МЕНЮ / AI',1230,90);put(portrait['screenshots'][0],1230,116)
-label('АЛЬБОМ',24,1148);put(landscape['screenshots'][1],24,1180)
-label('ГЕРОЙ · РЕАЛЬНЫЕ КАДРЫ X4',902,1148)
+label('MENU / AI',1230,90);put(portrait['screenshots'][0],1230,116)
+label('LANDSCAPE',24,1148);put(landscape['screenshots'][1],24,1180)
+label('HERO · ACTUAL FRAMES X4',902,1148)
 poses=report['sprite_poses'][0]['poses']
 for index,equipped in enumerate([True,False]):
     pose=next(p for p in poses if p['pose']=='idle' and p['facing']==1 and p['boots_equipped']==equipped)
@@ -60,9 +60,9 @@ for index,equipped in enumerate([True,False]):
     assert hashlib.sha256(image.tobytes()).hexdigest()==pose['crop_sha256']
     image=image.resize((image.width*4,image.height*4),Image.Resampling.NEAREST)
     x=902+index*360
-    label('БОТИНКИ-РАКЕТЫ' if equipped else 'ОБЫЧНАЯ ОБУВЬ',x,1200)
+    label('ROCKET BOOTS' if equipped else 'REGULAR SHOES',x,1200)
     canvas.paste(image,(x,1236))
-label('БОТИНКИ-РАКЕТЫ · ДОПОЛНИТЕЛЬНЫЙ ПРЫЖОК В ВОЗДУХЕ',24,1596,2,'#8dc6ac')
+label('ROCKET BOOTS · EXTRA JUMP IN MIDAIR',24,1596,2,'#8dc6ac')
 out=build/'showcase'
 out.mkdir(exist_ok=True)
 path=out/f'stack-attack-workshop-{sha[:12]}.png'
