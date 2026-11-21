@@ -2,6 +2,11 @@ name: Publish Stack Attack
 run-name: Release ${{ inputs.version }} from ${{ github.sha }}
 on:
   workflow_call:
+    secrets:
+      APK_SIGNING_KEYSTORE_BASE64:
+        required: true
+      APK_SIGNING_STORE_PASSWORD:
+        required: true
   workflow_dispatch:
     inputs:
       version:

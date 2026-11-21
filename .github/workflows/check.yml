@@ -180,3 +180,6 @@ jobs:
     permissions:
       contents: write
     uses: ./.github/workflows/release.yml
+    secrets:
+      APK_SIGNING_KEYSTORE_BASE64: ${{ secrets.APK_SIGNING_KEYSTORE_BASE64 }}
+      APK_SIGNING_STORE_PASSWORD: ${{ secrets.APK_SIGNING_STORE_PASSWORD }}
